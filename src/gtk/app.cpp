@@ -644,7 +644,15 @@ bool wxApp::EventsPending()
         m_idleSourceId = 0;
         wx_add_idle_hooks();
     }
+#ifdef __WXGTK4__
+    // gtk_events_pending() was removed under GTK4 -- it was always just a
+    // thin wrapper around the default GMainContext check (GTK3 no longer
+    // needed to special-case flushing X11 events here either), so call
+    // that directly.
+    return g_main_context_pending(nullptr) != 0;
+#else
     return gtk_events_pending() != 0;
+#endif
 }
 
 void wxApp::OnAssertFailure(const wxChar *file,

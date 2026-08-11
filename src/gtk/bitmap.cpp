@@ -520,7 +520,20 @@ wxBitmap::wxBitmap(GdkPixmap* pixmap)
 
 wxBitmap::wxBitmap(const wxCursor& cursor)
 {
-#if GTK_CHECK_VERSION(2,8,0)
+#ifdef __WXGTK4__
+    // gdk_cursor_get_image() is gone under GTK4 -- a GdkCursor is now
+    // either texture-based or a named CSS cursor (see cursor.cpp's
+    // InitFromStock(), which has no backing texture at all), so this can
+    // only recover a bitmap for cursors actually built from an image
+    // (InitFromBitmap()/InitFromImage()). Not yet runtime-verified.
+    GdkTexture* texture = gdk_cursor_get_texture(cursor.GetCursor());
+    if (texture)
+    {
+        GdkPixbuf* pixbuf = gdk_pixbuf_get_from_texture(texture);
+        *this = wxBitmap(pixbuf);
+        g_object_unref(pixbuf);
+    }
+#elif GTK_CHECK_VERSION(2,8,0)
     if (wx_is_at_least_gtk2(8))
     {
         GdkPixbuf *pixbuf = gdk_cursor_get_image(cursor.GetCursor());

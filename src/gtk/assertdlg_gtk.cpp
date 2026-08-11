@@ -58,7 +58,7 @@ GtkWidget *gtk_assert_dialog_add_button_to (GtkBox *box, const gchar *label,
     /* add to the given (container) widget */
     if (box)
 #ifdef __WXGTK4__
-        gtk_box_pack_end (box, button);
+        gtk_box_append (box, button);
 #else
         gtk_box_pack_end (box, button, FALSE, TRUE, 8);
 #endif

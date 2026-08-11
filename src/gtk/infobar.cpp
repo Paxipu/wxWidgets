@@ -127,10 +127,17 @@ bool wxInfoBar::Create(wxWindow *parent, wxWindowID winid, long style)
     m_impl->m_label = gtk_label_new("");
     gtk_widget_show(m_impl->m_label);
 
+#ifdef __WXGTK4__
+    // gtk_info_bar_get_content_area()/GtkContainer are both gone under
+    // GTK4; gtk_info_bar_add_child() is the direct replacement for
+    // "add this widget to the info bar's content area".
+    gtk_info_bar_add_child(GTK_INFO_BAR(m_widget), m_impl->m_label);
+#else
     GtkWidget * const
         contentArea = gtk_info_bar_get_content_area(GTK_INFO_BAR(m_widget));
     wxCHECK_MSG( contentArea, false, "failed to get GtkInfoBar content area" );
     gtk_container_add(GTK_CONTAINER(contentArea), m_impl->m_label);
+#endif
 
     // finish creation and connect to all the signals we're interested in
     m_parent->DoAddChild(this);

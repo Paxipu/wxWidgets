@@ -754,3 +754,54 @@ would unlock exercising this session's window/input-model work (the
 Tab-order Z-order caveat, `wxGetMouseState`'s reduced fidelity, etc.)
 under `xvfb-run`, which is available in this environment (confirmed via
 `which Xvfb xvfb-run`) but has had nothing to test against so far.
+
+## Progress update 11: three more one-line-per-file fixes, same `measure()` pattern recurring
+
+Continuing to pick off small, independent errors (1-4 per file) from the
+tail of the failing-target list rather than one big file:
+
+- **`stattext.cpp`**: `gtk_label_set_line_wrap()` → `gtk_label_set_wrap()`
+  is a plain rename with an identical signature, so it got a macro shim in
+  `gtk3-compat.h` (`#define gtk_label_set_line_wrap(label, wrap)
+  gtk_label_set_wrap(label, wrap)`) instead of touching either call site
+  directly — needed an explicit `gtk3-compat.h` include, same as
+  `dockart.cpp` in update 10.
+- **`mdi.cpp`**: two independent breaks — `gtk_widget_get_preferred_height()`
+  replaced with `gtk_widget_measure(widget, GTK_ORIENTATION_VERTICAL, -1,
+  ...)` (same `measure()` unification as `win_gtk.cpp`/update 8);
+  `gtk_box_reorder_child(box, child, 0)` replaced with
+  `gtk_box_reorder_child_after(box, child, nullptr)` — GTK4 dropped the
+  position-index API in favour of a sibling reference, and a `nullptr`
+  sibling moves the child to the front, matching what position `0` did.
+- **`activityindicator.cpp`**: `DoGetBestClientSize()` calls
+  `GtkWidgetClass::get_preferred_width`/`get_preferred_height` directly
+  through the vtable (bypassing `gtk_widget_get_preferred_size()`, which
+  returns 0 for a hidden `GtkSpinner`) to get `GtkSpinner`'s real preferred
+  size — both vfunc slots are gone under GTK4, unified into the same
+  `measure()` vfunc already migrated for `wxPizza` in `win_gtk.cpp`, so
+  this is now the third file using that exact pattern.
+
+Investigated but did **not** fix, all found to be entangled in
+already-deferred subsystems rather than independently fixable:
+- `include/wx/gtk/private/gtk2-compat.h` (`gdk_device_get_window_at_position`,
+  called from `window.cpp`'s raw `GdkEventMotion*` handler — part of the
+  Phase 3 input-model rewrite, which the Phase 3 design doc deliberately
+  stopped short of implementing this session).
+- `include/wx/gtk/private/cairo.h` (`gdk_cairo_create(GdkWindow*)` — the
+  paint-event-to-snapshot redesign, Phase 4, not started).
+- `splash.cpp` (`gtk_window_set_type_hint`/`GDK_WINDOW_TYPE_HINT_SPLASHSCREEN`
+  — the same WM-hints removal already flagged for `toplevel.cpp`).
+- `dialog.cpp` and `utilsgtk.cpp`'s assert-dialog path (`gtk_grab_add`,
+  `gtk_true`, `gdk_seat_ungrab`, `gtk_dialog_run` — all part of the
+  already-deferred `gtk_dialog_run()`/modal-dialog redesign; fixing
+  `gdk_seat_ungrab` alone wouldn't get either file compiling since
+  `gtk_dialog_run()` a few lines later still blocks it).
+
+Verified via standalone compiles against real GTK4 4.14.5 and GTK3 3.24.41
+headers for each file, then a full whole-tree rebuild: **72 → 69** failing
+build targets, zero regressions. Diagnostic count: 1481 → **1474**.
+
+Session running total (diagnostic count): 1760 → 1730 → 1641 → 1629 →
+1598 → 1577 → 1569 → 1555 → 1529 → 1494 → 1481 → **1474**. Failing build
+targets (tracked from update 10 on, the more accurate metric): 78 → 72 →
+**69**.

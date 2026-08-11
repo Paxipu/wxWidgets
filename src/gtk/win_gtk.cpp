@@ -55,6 +55,35 @@ struct wxPizzaClass
 #endif
 };
 
+#ifdef __WXGTK4__
+// GTK4's size_allocate vfunc signature dropped GtkAllocation* (position is
+// no longer this widget's own concern -- only its own width/height/baseline
+// are, since it no longer owns a window to position) in favor of separate
+// width/height/baseline parameters.
+static void pizza_size_allocate(GtkWidget* widget, int width, int WXUNUSED(height), int WXUNUSED(baseline))
+{
+    wxPizza* pizza = WX_PIZZA(widget);
+    GtkBorder border;
+    pizza->get_border(border);
+    int w = width - border.left - border.right;
+    if (w < 0) w = 0;
+
+    // See the KNOWN GAP comment in pizza_realize(): BORDER_STYLES
+    // decoration rendering needs a real redesign under GTK4, since the
+    // GdkWindow-repositioning trick this used to rely on doesn't apply.
+
+    // adjust child positions
+    for (const GList* p = pizza->m_children; p; p = p->next)
+    {
+        const wxPizzaChild* child = static_cast<wxPizzaChild*>(p->data);
+        if (gtk_widget_get_visible(child->widget))
+        {
+            pizza->size_allocate_child(
+                child->widget, child->x, child->y, child->width, child->height, w);
+        }
+    }
+}
+#else
 static void pizza_size_allocate(GtkWidget* widget, GtkAllocation* alloc)
 {
     wxPizza* pizza = WX_PIZZA(widget);
@@ -63,7 +92,6 @@ static void pizza_size_allocate(GtkWidget* widget, GtkAllocation* alloc)
     int w = alloc->width - border.left - border.right;
     if (w < 0) w = 0;
 
-#ifndef __WXGTK4__
     if (gtk_widget_get_realized(widget))
     {
         int h = alloc->height - border.top - border.bottom;
@@ -92,19 +120,6 @@ static void pizza_size_allocate(GtkWidget* widget, GtkAllocation* alloc)
             }
         }
     }
-#else
-    // This whole block existed to reposition wxPizza's own inset GdkWindow
-    // (offset from its allocation by `border`, so the border decoration
-    // drawn on the parent window shows through around it) -- but wxPizza
-    // is windowless under GTK4 (see wxPizza::New()'s __WXGTK4__ branch),
-    // so there's no separate window to move any more. KNOWN GAP, not yet
-    // addressed: BORDER_STYLES (simple/raised/sunken/theme borders, e.g.
-    // on wxTextCtrl/wxListBox) relied on this parent-window-peeking-through
-    // mechanism and needs a real redesign as part of the draw->snapshot
-    // migration (docs/gtk/gtk4-phase2-window-model-design.md's painting
-    // bucket) -- border rendering is likely incomplete or missing under
-    // GTK4 until that's done. Not runtime-verified.
-#endif // __WXGTK4__/!__WXGTK4__
 
     gtk_widget_set_allocation(widget, alloc);
 
@@ -119,6 +134,7 @@ static void pizza_size_allocate(GtkWidget* widget, GtkAllocation* alloc)
         }
     }
 }
+#endif // __WXGTK4__/!__WXGTK4__
 
 static void pizza_realize(GtkWidget* widget)
 {
@@ -151,9 +167,16 @@ static void pizza_show(GtkWidget* widget)
     if (parent && (WX_PIZZA(widget)->m_windowStyle & wxPizza::BORDER_STYLES))
     {
         // invalidate whole allocation so borders will be drawn properly
+#ifdef __WXGTK4__
+        // gtk_widget_queue_draw_area() (partial-rect invalidation) doesn't
+        // exist under GTK4; queue_draw() invalidates the whole parent
+        // instead, which is correct if less targeted.
+        gtk_widget_queue_draw(parent);
+#else
         GtkAllocation a;
         gtk_widget_get_allocation(widget, &a);
         gtk_widget_queue_draw_area(parent, a.x, a.y, a.width, a.height);
+#endif
     }
 
     parent_class->show(widget);
@@ -165,14 +188,25 @@ static void pizza_hide(GtkWidget* widget)
     if (parent && (WX_PIZZA(widget)->m_windowStyle & wxPizza::BORDER_STYLES))
     {
         // invalidate whole allocation so borders will be erased properly
+#ifdef __WXGTK4__
+        gtk_widget_queue_draw(parent);
+#else
         GtkAllocation a;
         gtk_widget_get_allocation(widget, &a);
         gtk_widget_queue_draw_area(parent, a.x, a.y, a.width, a.height);
+#endif
     }
 
     parent_class->hide(widget);
 }
 
+// GtkContainer, and with it GtkContainerClass::add/remove, doesn't exist
+// under GTK4 -- nothing can call gtk_container_add()/remove() on a wxPizza
+// generically any more (the only way to add/remove a child is through
+// wxPizza's own put()/RemoveChild(), which already do this bookkeeping
+// directly), so these vfunc overrides have no GTK4 equivalent to provide,
+// not just a missing API to shim.
+#ifndef __WXGTK4__
 static void pizza_add(GtkContainer* container, GtkWidget* widget)
 {
     WX_PIZZA(container)->put(widget, 0, 0, 1, 1);
@@ -194,6 +228,7 @@ static void pizza_remove(GtkContainer* container, GtkWidget* widget)
         }
     }
 }
+#endif // !__WXGTK4__
 
 #ifdef __WXGTK3__
 // Get preferred size of children, to avoid GTK+ warnings complaining
@@ -211,6 +246,30 @@ static void children_get_preferred_size(const GList* p)
     }
 }
 
+#ifdef __WXGTK4__
+// GTK4 merged get_preferred_width/height and adjust_size_request into one
+// measure() vfunc. The GtkToolItem special case in the old
+// pizza_adjust_size_request() below is gone here because GtkToolItem
+// itself doesn't exist under GTK4 (see toolbar.cpp's deferred
+// GtkToolbar/GtkToolItem redesign in docs/gtk/gtk4-status.md) -- there is
+// currently no way for a wxPizza to be inside one, so always reporting a
+// zero minimum (the common case in the GTK3 code below) is correct as-is.
+static void pizza_measure(GtkWidget* widget, GtkOrientation orientation, int /* for_size */,
+                           int* minimum, int* natural, int* minimum_baseline, int* natural_baseline)
+{
+    children_get_preferred_size(WX_PIZZA(widget)->m_children);
+    *minimum = 0;
+    int w = -1, h = -1;
+    gtk_widget_get_size_request(widget, &w, &h);
+    *natural = orientation == GTK_ORIENTATION_HORIZONTAL ? w : h;
+    if (*natural < 0)
+        *natural = 0;
+    if (minimum_baseline)
+        *minimum_baseline = -1;
+    if (natural_baseline)
+        *natural_baseline = -1;
+}
+#else
 static void pizza_get_preferred_width(GtkWidget* widget, int* minimum, int* natural)
 {
     children_get_preferred_size(WX_PIZZA(widget)->m_children);
@@ -239,6 +298,7 @@ static void pizza_adjust_size_request(GtkWidget* widget, GtkOrientation orientat
     if (!GTK_IS_TOOL_ITEM(parent))
         *minimum = 0;
 }
+#endif // __WXGTK4__/!__WXGTK4__
 
 // GtkScrollable interface
 static void pizza_get_property(GObject*, guint property_id, GValue* value, GParamSpec*)
@@ -306,11 +366,24 @@ static void class_init(void* g_class, void*)
     widget_class->realize = pizza_realize;
     widget_class->show = pizza_show;
     widget_class->hide = pizza_hide;
+#ifndef __WXGTK4__
+    // GtkContainerClass doesn't exist under GTK4 -- see the comment above
+    // pizza_add()/pizza_remove().
     GtkContainerClass* container_class = (GtkContainerClass*)g_class;
     container_class->add = pizza_add;
     container_class->remove = pizza_remove;
+#endif
 
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    widget_class->measure = pizza_measure;
+    GObjectClass *gobject_class = G_OBJECT_CLASS(g_class);
+    gobject_class->set_property = pizza_set_property;
+    gobject_class->get_property = pizza_get_property;
+    g_object_class_override_property(gobject_class, PROP_HADJUSTMENT, "hadjustment");
+    g_object_class_override_property(gobject_class, PROP_VADJUSTMENT, "vadjustment");
+    g_object_class_override_property(gobject_class, PROP_HSCROLL_POLICY, "hscroll-policy");
+    g_object_class_override_property(gobject_class, PROP_VSCROLL_POLICY, "vscroll-policy");
+#elif defined(__WXGTK3__)
     widget_class->get_preferred_width = pizza_get_preferred_width;
     widget_class->get_preferred_height = pizza_get_preferred_height;
     widget_class->adjust_size_request = pizza_adjust_size_request;
@@ -471,14 +544,26 @@ void wxPizza::size_allocate_child(
         }
         child_alloc.x = parent_width - child_alloc.x - child_alloc.width;
     }
+#ifdef __WXGTK4__
+    // gtk_widget_size_allocate() gained a baseline parameter under GTK4;
+    // -1 means "no baseline alignment", matching the previous behavior.
+    gtk_widget_size_allocate(child, &child_alloc, -1);
+#else
     gtk_widget_size_allocate(child, &child_alloc);
+#endif
 }
 
 void wxPizza::put(GtkWidget* widget, int x, int y, int width, int height)
 {
     // Re-parenting a TLW under a child window is possible at wx level but
     // using a TLW as child at GTK+ level results in problems, so don't do it.
+#ifdef __WXGTK4__
+    // gtk_widget_is_toplevel() doesn't exist under GTK4; GTK_IS_WINDOW()
+    // is the direct equivalent for "is this a toplevel-capable widget".
+    if (!GTK_IS_WINDOW(widget))
+#else
     if (!gtk_widget_is_toplevel(GTK_WIDGET(widget)))
+#endif
     {
         gtk_fixed_put(GTK_FIXED(this), widget, 0, 0);
         gtk_widget_set_size_request(widget, -1, -1);
@@ -572,7 +657,14 @@ void wxPizza::get_border(GtkBorder& border)
             sc = gtk_widget_get_style_context(wxGTKPrivate::GetEntryWidget());
 
         gtk_style_context_set_state(sc, GTK_STATE_FLAG_NORMAL);
+#ifdef __WXGTK4__
+        // gtk_style_context_get_border() dropped the separate GtkStateFlags
+        // parameter under GTK4 -- it always queries the context's current
+        // state, which gtk_style_context_set_state() above already set.
+        gtk_style_context_get_border(sc, &border);
+#else
         gtk_style_context_get_border(sc, GTK_STATE_FLAG_NORMAL, &border);
+#endif
 #else // !__WXGTK3__
         GtkStyle* style;
         if (m_windowStyle & (wxHSCROLL | wxVSCROLL))

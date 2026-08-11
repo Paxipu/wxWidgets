@@ -884,3 +884,34 @@ known-deferred errors, as expected), zero regressions. Diagnostic count:
 Session running total (diagnostic count): 1760 → 1730 → 1641 → 1629 →
 1598 → 1577 → 1569 → 1555 → 1529 → 1494 → 1481 → 1474 → 1465 → **1455**.
 Failing build targets: 78 → 72 → 69 → 66 → **64**.
+
+## Progress update 14: `gauge.cpp`, `fontpicker.cpp`
+
+- **`gauge.cpp`**: `gtk_widget_get_preferred_width()`/`get_preferred_height()`
+  → the `measure()` vfunc, same recurring pattern. `GTK_STATE_ACTIVE` (a
+  `GtkStateType` value, entirely removed under GTK4) was being passed as
+  the `state` argument to `GetDefaultAttributesFromGTKWidget()` — that
+  parameter is already a no-op under GTK4 (see `control.cpp`, update 10:
+  GTK4 has no per-state background query at all), so any value compiles,
+  but substituted `GTK_STATE_FLAG_ACTIVE` (the surviving `GtkStateFlags`
+  equivalent) for a defensible name over a magic constant.
+- **`fontpicker.cpp`**: `gtk_font_button_get_font_name()`/`set_font_name()`
+  moved to the `GtkFontChooser` interface (which `GtkFontButton`
+  implements) as `gtk_font_chooser_get_font()`/`set_font()` — the getter
+  returns a newly-allocated string, wrapped in the existing
+  `wxGlibPtr<gchar>` RAII idiom already used elsewhere in this codebase.
+  `gtk_font_button_set_show_style()`/`set_show_size()` (whether the
+  button's own label includes style/size text) have **no discoverable
+  GTK4 replacement** — `use_font`/`use_size` (unaffected, still exist)
+  control a different thing, whether the label renders *using* the
+  selected font/size rather than whether style/size text is appended to
+  it. Left as a documented fidelity gap under `__WXGTK4__`, not guessed
+  at; not yet runtime-verified.
+
+Verified via standalone compiles against real GTK4 4.14.5 and GTK3 3.24.41
+headers, then a full whole-tree rebuild: **64 → 62** failing build
+targets, zero regressions. Diagnostic count: 1455 → **1447**.
+
+Session running total (diagnostic count): 1760 → 1730 → 1641 → 1629 →
+1598 → 1577 → 1569 → 1555 → 1529 → 1494 → 1481 → 1474 → 1465 → 1455 →
+**1447**. Failing build targets: 78 → 72 → 69 → 66 → 64 → **62**.

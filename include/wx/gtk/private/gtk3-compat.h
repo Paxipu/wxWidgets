@@ -80,6 +80,18 @@ static inline void wx_gtk_box_pack_start(GtkBox* box, GtkWidget* child,
 #define gtk_box_pack_end(box, child, expand, fill, padding) \
     wx_gtk_box_pack_start(box, child, expand, fill, padding)
 
+// The GTK_STYLE_CLASS_* string-constant macros were dropped under GTK4
+// (along with most of <gtk/deprecated/gtkstylecontext.h>'s surrounding
+// API), but the CSS class names themselves are unchanged and
+// gtk_style_context_add_class()/gtk_widget_add_css_class() still exist, so
+// just restoring the string constants is enough for existing call sites.
+#define GTK_STYLE_CLASS_BUTTON "button"
+#define GTK_STYLE_CLASS_CELL "cell"
+#define GTK_STYLE_CLASS_EXPANDER "expander"
+#define GTK_STYLE_CLASS_GRIP "grip"
+#define GTK_STYLE_CLASS_INLINE_TOOLBAR "inline-toolbar"
+#define GTK_STYLE_CLASS_PANE_SEPARATOR "pane-separator"
+
 #else // !__WXGTK4__
 
 wxGCC_WARNING_SUPPRESS(deprecated-declarations)

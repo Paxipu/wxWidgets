@@ -44,6 +44,7 @@
 #ifdef __WXGTK3__
     #include "wx/graphics.h"
     #include "wx/gtk/private.h"
+    #include "wx/gtk/private/gtk3-compat.h"
 #endif
 #endif
 

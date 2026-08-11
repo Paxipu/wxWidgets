@@ -390,8 +390,11 @@ Verified via full rebuild (`make -k -j4`, whole tree): `win_gtk.cpp` went
 from 1 remaining error to 0 (only deprecation warnings, expected — GTK4
 still ships these style/allocation APIs but flags them in favor of the
 CSS/snapshot render model that's the subject of the still-pending Phase 4
-redesign). Error count **1529 → 1528**, no new failing files (diffed the
-full failing-file list against the pre-batch build; zero regressions).
+redesign). `win_gtk.cpp` dropped off the failing-files list entirely, no
+new failing files introduced (diffed the full failing-file list against
+the pre-batch build; zero regressions). Combined with the cursor.cpp
+rewrite in update 9 below (verified in the same rebuild pass), the two
+batches together moved the count to **1529 → 1494**.
 
 **Same signature break found in 5 other files**, not fixed here because
 each is already entangled in much larger, separately-scoped rewrites and
@@ -403,8 +406,46 @@ family), `notebook.cpp` (removed `GtkContainer`, `gtk_box_set_child_packing`,
 `gtk_widget_style_get`/`gtk_widget_get_preferred_width` and friends).
 Worth revisiting once those files' broader rewrites are scoped.
 
+## Progress update 9: `cursor.cpp` rewritten for GTK4's name/texture cursor API
+
+`GdkCursorType` (the old X-cursor-font shape enum), `gdk_cursor_new_for_display()`,
+`gdk_cursor_new_from_surface()`/`from_pixbuf()`, and `gdk_cursor_get_image()`
+are all gone under GTK4 — `GdkCursor` can now only be constructed from a CSS
+cursor-name string or a `GdkTexture`, and neither constructor takes a
+`GdkDisplay*` any more (a cursor is display-independent in GTK4).
+
+- `InitFromStock()`: added a GTK4-only path mapping each `wxStockCursor` to
+  the closest standard CSS cursor keyword via
+  `gdk_cursor_new_from_name(name, fallback)`. A handful of stock cursors
+  with no CSS equivalent (paint brush/spraycan/pencil, the three
+  mouse-button cursors, "point at scrollbar arrow") fall back to
+  `"default"` — a known, minor, explicitly-documented fidelity gap, not yet
+  runtime-verified (no linkable `test_gui` yet). `wxCURSOR_SIZENWSE` and
+  `wxCURSOR_SIZENESW` now get their own correct diagonal-resize names
+  instead of both collapsing to the old 4-way "move" glyph.
+- `InitFromBitmap()`/`InitFromImage()`: build a `GdkTexture` via
+  `gdk_texture_new_for_pixbuf()`, pass it to `gdk_cursor_new_from_texture()`.
+- `GetHotSpot()`: `gdk_cursor_get_hotspot_x/y()` directly, instead of
+  digging hotspot values out of the removed `gdk_cursor_get_image()`'s
+  `GdkPixbuf` options.
+
+One self-inflicted bug caught before commit: an early edit left a trailing
+`gdk_cursor_new_from_pixbuf()` call sitting *after* the `#elif`/`#endif`
+for the GTK3-version-gated branch, with no `__WXGTK4__` guard of its own —
+unconditional C++ that compiled fine under GTK3 but broke GTK4 the moment
+the file was touched again. Caught by the standalone-compile check, not by
+inspection; a reminder that `#elif`/`#endif` chains don't imply the code
+*after* the chain is still inside a branch.
+
+Verified via standalone compile against real GTK4 4.14.5 and GTK3 3.24.41
+headers (matching the actual build's flags): zero errors or warnings under
+GTK4, zero errors under GTK3 (no regression). Confirmed via the subsequent
+full whole-tree rebuild: `cursor.cpp` also dropped off the failing-files
+list, no new failures anywhere else in the tree.
+
 Session running total: 1760 → 1730 → 1641 → 1629 → 1598 → 1577 → 1569 →
-1555 → **1528**.
+1555 → 1529 → **1494** (win_gtk.cpp + cursor.cpp combined). Distinct
+failing files: 84 → **82**.
 
 ## Progress update 7: starting the `gtk_widget_get_window` sweep
 

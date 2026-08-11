@@ -109,7 +109,15 @@ wxSize wxActivityIndicator::DoGetBestClientSize() const
 
     gint w, h;
 
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    // Same rationale as the GTK3 branch below, updated for GTK4's unified
+    // measure() vfunc (get_preferred_width/height no longer exist).
+    GtkWidgetClass* const wc = GTK_WIDGET_GET_CLASS(m_widget);
+
+    gint dummy;
+    wc->measure(m_widget, GTK_ORIENTATION_HORIZONTAL, -1, &w, &dummy, nullptr, nullptr);
+    wc->measure(m_widget, GTK_ORIENTATION_VERTICAL, -1, &h, &dummy, nullptr, nullptr);
+#elif defined(__WXGTK3__)
     // gtk_widget_get_preferred_size() seems to return the size based on the
     // current size of the widget and also always returns 0 if it is hidden,
     // so ask GtkSpinner for its preferred size directly instead of using it.

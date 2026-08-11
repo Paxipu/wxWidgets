@@ -18,6 +18,21 @@ inline GdkDevice* wx_get_gdk_device_from_display(GdkDisplay* display)
     return gdk_seat_get_pointer(seat);
 }
 
+// gtk_widget_get_toplevel() doesn't exist under GTK4; the replacement,
+// gtk_widget_get_root(), returns a GtkRoot* (an interface, implemented by
+// GtkWindow among others) rather than a GtkWidget*, and returns nullptr
+// for a widget with no root yet instead of GTK3's confusing convention of
+// returning the widget itself in that case. Every call site in this
+// codebase already treats the return value defensively (GTK_IS_WINDOW()
+// checks or an assumption it's parented under a window by this point), so
+// this is a safe, likely more-correct substitution -- not just a rename.
+static inline GtkWidget* wx_gtk_widget_get_toplevel(GtkWidget* widget)
+{
+    GtkRoot* root = gtk_widget_get_root(widget);
+    return root ? GTK_WIDGET(root) : nullptr;
+}
+#define gtk_widget_get_toplevel(widget) wx_gtk_widget_get_toplevel(widget)
+
 // gtk_box_pack_start()/pack_end() don't exist under GTK4: expand/fill/
 // padding moved from box-call parameters to per-child widget properties
 // (hexpand/vexpand, halign/valign, margins), and packing itself is just

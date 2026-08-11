@@ -339,6 +339,37 @@ site needs a quick look at whether it's destroying a toplevel
   the build entirely via `--disable-uiactionsim`, so this isn't blocking
   anything today.
 
+## Progress update 5: `gtk_box_pack_start`/`gtk_box_pack_end` via a shared shim
+
+Rather than porting each of the ~21 call sites individually,
+`include/wx/gtk/private/gtk3-compat.h` (which already shims other
+removed GTK3 APIs for GTK4 the same way) got a `wx_gtk_box_pack_start()`
+helper `#define`'d over both `gtk_box_pack_start` and `gtk_box_pack_end`.
+It maps `expand`/`fill`/`padding` to the box's actual orientation
+(`hexpand`/`vexpand`, `halign`/`valign`, margins) and calls
+`gtk_box_append()`. `gtk_box_pack_end`'s call sites in this codebase
+never use GTK3's "stack backward from the end" multi-pack_end pattern —
+each box has at most a handful of pack_end children that just need to
+land after whatever was already packed — so mapping it to the same
+`append()`, called in the original chronological order, gives the same
+visual result for every case actually present here (flagged as worth
+re-checking once `test_gui` can run). Added the header include to the 5
+files that didn't already have it; `dataview.cpp` and `toplevel.cpp`
+needed no changes at all since they already included it.
+
+Caught one real bug while verifying: a pre-existing, never-compiled
+`__WXGTK4__` branch in `assertdlg_gtk.cpp` called a 2-argument
+`gtk_box_pack_end(box, button)` that never existed in any GTK version —
+didn't match the new 5-argument macro either, producing an "undeclared"
+error that looked like it came from the shim itself. Fixed by calling
+`gtk_box_append()` directly there, since that line was already inside a
+GTK4-only branch.
+
+**1577** errors after this batch (0 fatal, no regressions — verified via
+two rebuilds, the second confirming the `assertdlg_gtk.cpp` fix cleared
+the last holdout). Session running total: 1760 → 1730 → 1641 → 1629 →
+1598 → **1577**.
+
 ## Progress update 4: `gtk_widget_destroy()`, and three more deferred subsystems
 
 Fixed the 9 files where `gtk_widget_destroy()`'s replacement was a safe,

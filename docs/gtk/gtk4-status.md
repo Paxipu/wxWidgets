@@ -248,6 +248,48 @@ as a distinct tracked category since lumping them in with the
 mechanical `GtkContainer`/`GtkBin` count understates how much design
 work (as opposed to translation work) is actually left.
 
+## Progress update 3: `button.cpp`, and the error-count trend so far
+
+Fixed `button.cpp`'s 3 unconditional `gtk_bin_get_child` calls (`m_widget`
+is always a plain `GtkButton` here — not the check/toggle/radio family,
+which is its own more complicated case, see below — so
+`gtk_button_get_child(GTK_BUTTON(m_widget))` is an unambiguous swap; one
+call site was inside an existing but never-compiled `__WXGTK4__` branch
+that still called the wrong function). Also fixed `GetDefaultSize()`,
+which used the now-fully-removed `GtkButtonBox` to compute GTK's own
+idea of the minimum default button size; simplified the GTK4 path to
+just use the button's own CSS-driven preferred size directly (flagged
+as not yet visually verified, same as other behavior-affecting — not
+just renamed — fixes this session).
+
+**1629** errors after this batch (0 fatal, 93 files, no regressions —
+button.cpp's three fixed call sites don't reappear; its remaining
+errors are different, not-yet-attempted issues: old style API,
+`gtk_widget_get_can_default`/`set_can_default`/`grab_default`, i.e. the
+default-button-highlighting mechanism, which also changed under GTK4).
+
+Running trend this session, each step verified by full rebuild with no
+regressions: 1304 (masked baseline) → 1760 (unmasked, accurate) → 1730
+(`GtkContainer`/`GtkBin` batch 1) → 1641 (`gtk_widget_add_events`/touch
+batch) → **1629** (`button.cpp`). About 130 real errors cleared since
+the accurate baseline, alongside the two design documents (window model,
+input model) and the `wxNativeContainerWindow`/`nativewin.cpp` fix.
+
+**Next mechanical candidate, not yet started**: `gtk_widget_destroy()`
+doesn't exist under GTK4 either (`gtk_window_destroy()` is the toplevel-
+specific replacement already used in a couple of fixes above; plain
+widgets are destroyed via `g_object_unref`/`gtk_widget_unparent`
+instead, since destruction is implicit once nothing references a widget
+and it's removed from its parent). ~20 files hit this
+(`assertdlg_gtk.cpp`, `clipbrd.cpp`, `overlay.cpp`, `private.cpp`,
+`utilsgtk.cpp`, `settings.cpp`, `window.cpp`, `control.cpp`,
+`filepicker.cpp`, `infobar.cpp`, `msgdlg.cpp`, `menu.cpp`,
+`radiobox.cpp`, `aboutdlg.cpp`, `toolbar.cpp`, and others) — each call
+site needs a quick look at whether it's destroying a toplevel
+(`gtk_window_destroy`) or a plain widget (`g_object_unref`/
+`gtk_widget_unparent`), same judgment call already made correctly for
+`button.cpp`'s scratch window and `settings.cpp`'s `ContainerWidget()`.
+
 ## Not yet attempted / explicitly deferred
 
 - The remainder of the mechanical `GtkContainer`/`GtkBin` occurrences not

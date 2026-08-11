@@ -200,7 +200,12 @@ void wxMDIParentFrame::DoGetClientSize(int* width, int* height) const
             if (menubar && menubar->IsShown())
             {
                 GtkRequisition req;
+#ifdef __WXGTK4__
+                gtk_widget_measure(menubar->m_widget, GTK_ORIENTATION_VERTICAL, -1,
+                    nullptr, &req.height, nullptr, nullptr);
+#else
                 gtk_widget_get_preferred_height(menubar->m_widget, nullptr, &req.height);
+#endif
                 *height -= req.height;
                 if (*height < 0) *height = 0;
             }
@@ -315,7 +320,14 @@ void wxMDIChildFrame::SetMenuBar( wxMenuBar *menu_bar )
         /* insert the invisible menu bar into the _parent_ mdi frame */
         m_menuBar->Show(false);
         gtk_box_pack_start(GTK_BOX(mdi_frame->m_mainWidget), m_menuBar->m_widget, false, false, 0);
+#ifdef __WXGTK4__
+        // gtk_box_reorder_child() is gone under GTK4; reorder_child_after()
+        // with a nullptr sibling moves the child to the front, same as
+        // position 0 did.
+        gtk_box_reorder_child_after(GTK_BOX(mdi_frame->m_mainWidget), m_menuBar->m_widget, nullptr);
+#else
         gtk_box_reorder_child(GTK_BOX(mdi_frame->m_mainWidget), m_menuBar->m_widget, 0);
+#endif
         gtk_widget_set_size_request(m_menuBar->m_widget, -1, -1);
     }
 }

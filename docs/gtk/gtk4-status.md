@@ -339,6 +339,62 @@ site needs a quick look at whether it's destroying a toplevel
   the build entirely via `--disable-uiactionsim`, so this isn't blocking
   anything today.
 
+## Progress update 7: starting the `gtk_widget_get_window` sweep
+
+Surveyed all ~51 remaining `gtk_widget_get_window` occurrences against
+the six buckets from `gtk4-phase2-window-model-design.md`. Most are the
+`GTKGetMainWindow()`/`GTKGetConnectWindow()`/`GTKFindWindow()`
+event-routing family (obsolete only once Phase 3's event controllers
+land) or paint/clip code tied to the `draw`→`snapshot` migration
+(Phase 4) — not safe to stub blind, same reasoning as this session's
+touch-event pipeline decision. Picked off the three genuinely
+independent ones:
+
+- **`cursor.cpp`**'s `SetGlobalCursor()`: the "cursor setting" bucket —
+  `gtk_widget_set_cursor()` works directly on any widget under GTK4, no
+  window needed, simpler than the GTK3 code, not just translated.
+- **`display.cpp`**'s `GetFromWindow()`: already in the file's existing
+  `__WXGTK4__` branch — `gdk_display_get_monitor_at_window()` →
+  `gdk_display_get_monitor_at_surface()` via
+  `gtk_widget_get_native()`/`gtk_native_get_surface()`.
+- **`win_gtk.cpp`**'s `pizza_size_allocate()`/`pizza_realize()`: these
+  repositioned wxPizza's own inset `GdkWindow` to make room for
+  `BORDER_STYLES` decoration drawn on the parent window — but wxPizza is
+  windowless under GTK4 (removed its `has_window` call earlier this
+  session), so there's no window left to reposition. Guarded out with an
+  explicit **known gap**: border rendering (simple/raised/sunken/theme
+  borders on `wxTextCtrl`, `wxListBox`, etc.) is likely incomplete under
+  GTK4 until this gets a real redesign as part of the painting
+  migration — not runtime-verified.
+
+**1555** errors after this batch (0 fatal, no regressions — confirmed
+the specific targeted errors are gone in all three files).
+
+**Real new scope discovered while verifying**, worth calling out since
+it changes the picture for these three files: none of them are anywhere
+near fully fixed.
+- `display.cpp`'s existing `__WXGTK4__` branch assumed
+  `gdk_display_get_n_monitors()`/`get_monitor()`/`get_monitor_at_point()`
+  would carry over from GTK3 — they didn't; GTK4 replaced indexed
+  monitor access with a `GListModel`-based `gdk_display_get_monitors()`.
+  A real, moderate-sized rewrite (~8 call sites), not attempted here.
+- `cursor.cpp` still needs `GdkCursorType` (the old X-cursor-font shape
+  enum — `GDK_LEFT_PTR`, `GDK_WATCH`, etc., all gone) replaced with
+  GTK4's named-cursor-string API (`"wait"`, `"grab"`, etc.) across
+  roughly two dozen call sites.
+- `win_gtk.cpp` needs the `measure()` vfunc migration predicted early
+  this session (`get_preferred_width`/`get_preferred_height` vfuncs are
+  gone, `GtkWidgetClass` has no `adjust_size_request` any more) *and*
+  `GtkContainerClass`'s `add`/`remove` vfunc table, which doesn't exist
+  either — wxPizza's `pizza_add()`/`pizza_remove()` need porting to
+  GTK4's generic parent/child widget API. This is core, foundational
+  code (wxPizza backs every `wxWindow`) and a legitimate next
+  significant target, distinct from anything already on the deferred
+  whole-subsystem list.
+
+Session running total: 1760 → 1730 → 1641 → 1629 → 1598 → 1577 → 1569 →
+**1555**.
+
 ## Progress update 6: `gtk_widget_get_toplevel()`, same shim pattern
 
 Same treatment as `gtk_box_pack_start`/`pack_end`: added

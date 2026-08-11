@@ -37,6 +37,7 @@
 #ifndef __WXGTK4__
 GdkWindow* wxGetTopLevelGDK();
 #endif
+GdkDisplay* wxGetTopLevelGdkDisplay();
 GtkWidget* wxGetTopLevelGTK();
 
 #if GTK_CHECK_VERSION(3,4,0)
@@ -2604,8 +2605,17 @@ static bool wxGetKeyStateGTK(wxKeyCode key)
     if (gtk_check_version(3,4,0) != nullptr)
         return false;
 
-    GdkDisplay* display = gdk_window_get_display(wxGetTopLevelGDK());
+#ifdef __WXGTK4__
+    // GdkKeymap doesn't exist any more under GTK4: query the keyboard
+    // device directly instead, it has the same caps/num/scroll lock and
+    // modifier state accessors GdkKeymap used to.
+    GdkDisplay* display = wxGetTopLevelGdkDisplay();
+    GdkSeat* seat = gdk_display_get_default_seat(display);
+    GdkDevice* keymap = gdk_seat_get_keyboard(seat);
+#else
+    GdkDisplay* display = wxGetTopLevelGdkDisplay();
     GdkKeymap* keymap = gdk_keymap_get_for_display(display);
+#endif
 
     guint mask = 0;
     switch (key)
@@ -2623,15 +2633,29 @@ static bool wxGetKeyStateGTK(wxKeyCode key)
             break;
 
         case WXK_CAPITAL:
+#ifdef __WXGTK4__
+            return gdk_device_get_caps_lock_state(keymap) != FALSE;
+#else
             return gdk_keymap_get_caps_lock_state(keymap) != FALSE;
+#endif
 
         case WXK_NUMLOCK:
+#ifdef __WXGTK4__
+            return gdk_device_get_num_lock_state(keymap) != FALSE;
+#else
             return gdk_keymap_get_num_lock_state(keymap) != FALSE;
+#endif
 
 #if GTK_CHECK_VERSION(3,18,0)
         case WXK_SCROLL:
             if (gtk_check_version(3,18,0) == nullptr)
+            {
+#ifdef __WXGTK4__
+                return gdk_device_get_scroll_lock_state(keymap) != FALSE;
+#else
                 return gdk_keymap_get_scroll_lock_state(keymap) != FALSE;
+#endif
+            }
             wxFALLTHROUGH;
 #endif // GTK 3.18+
 
@@ -2645,8 +2669,11 @@ static bool wxGetKeyStateGTK(wxKeyCode key)
     }
 
     // Mask is set if we get here, so it must be one of the modifier keys.
+#ifdef __WXGTK4__
+    return (gdk_device_get_modifier_state(keymap) & mask) != 0;
+#else
     return (gdk_keymap_get_modifier_state(keymap) & mask) != 0;
-
+#endif
 }
 #endif // wxHAS_GETKEYSTATE_GTK
 

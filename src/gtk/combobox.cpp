@@ -146,7 +146,9 @@ bool wxComboBox::Create( wxWindow *parent, wxWindowID id, const wxString& value,
                                          !HasFlag(wxTE_PROCESS_ENTER) );
 
         gtk_editable_set_editable(GTK_EDITABLE(entry), true);
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+        gtk_editable_set_width_chars(GTK_EDITABLE(entry), 0);
+#elif defined(__WXGTK3__)
         gtk_entry_set_width_chars(entry, 0);
 #endif
     }
@@ -172,7 +174,11 @@ bool wxComboBox::Create( wxWindow *parent, wxWindowID id, const wxString& value,
         else // editable combobox
         {
             // any value is accepted, even if it's not in our list
+#ifdef __WXGTK4__
+            gtk_editable_set_text( GTK_EDITABLE(entry), value.utf8_str() );
+#else
             gtk_entry_set_text( entry, value.utf8_str() );
+#endif
         }
 
         GTKConnectChangedSignal();
@@ -203,7 +209,11 @@ void wxComboBox::GTKCreateComboBoxWidget()
 #endif
     g_object_ref(m_widget);
 
+#ifdef __WXGTK4__
+    m_entry = GTK_ENTRY(gtk_combo_box_get_child(GTK_COMBO_BOX(m_widget)));
+#else
     m_entry = GTK_ENTRY(gtk_bin_get_child(GTK_BIN(m_widget)));
+#endif
     g_object_add_weak_pointer(G_OBJECT(m_entry), (void**)&m_entry);
 }
 

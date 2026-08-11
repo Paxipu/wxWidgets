@@ -109,7 +109,7 @@ wxColourButton::~wxColourButton()
 void wxColourButton::UpdateColour()
 {
 #ifdef __WXGTK4__
-    gtk_color_chooser_set_rgba(GTK_COLOR_CHOOSER(m_widget), m_colour);
+    gtk_color_chooser_set_rgba(GTK_COLOR_CHOOSER(m_widget), m_colour.GTKGetRGBA());
 #elif defined(__WXGTK3__)
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     gtk_color_button_set_rgba(GTK_COLOR_BUTTON(m_widget), m_colour.GTKGetRGBA());

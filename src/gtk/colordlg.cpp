@@ -90,7 +90,7 @@ void wxColourDialog::ColourDataToDialog()
     const wxColour& color = m_data.GetColour();
 #ifdef __WXGTK4__
     if (color.IsOk())
-        gtk_color_chooser_set_rgba(GTK_COLOR_CHOOSER(m_widget), color);
+        gtk_color_chooser_set_rgba(GTK_COLOR_CHOOSER(m_widget), color.GTKGetRGBA());
 #else
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     GtkColorSelection* sel = GTK_COLOR_SELECTION(

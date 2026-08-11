@@ -69,17 +69,22 @@ symbols in shared headers.
 
 ## What actually blocks everything else
 
-`gtk_widget_get_window` (33 hits) and the direct `GdkWindow` usage (10+
-hits, but the *type itself* not existing is what really matters) are the
-critical-path item. `wxGetTopLevelGDK()` — defined once in
-`src/gtk/window.cpp:478`, returning `GdkWindow*` — is called from at
-least 8 other files (`bitmap.cpp`, `cursor.cpp`, `display.cpp`,
-`evtloop.cpp`, `taskbar.cpp`, `utilsgtk.cpp`, plus `window.cpp` itself).
-Every one of those is a dead end under GTK4 until Phase 2 (§2 of the
-port plan — the `GdkWindow`→`GdkSurface` / child-widget redesign) lands.
-**Do not attempt to patch around this file-by-file** — it's exactly the
-architectural decision the port plan calls out as needing real design
-work, not a mechanical rename.
+**Update:** the design work is now done — see
+`docs/gtk/gtk4-phase2-window-model-design.md`. Tracing the actual call
+sites of `gtk_widget_get_window`/`GdkWindow` (and the ~18 per-widget
+`GTKGetWindow()` overrides that depend on it) showed this isn't a single
+opaque blocker but six distinct, mostly *easier*-in-GTK4 sub-problems
+(display lookup, event-source identity, cursor setting, paint/clip,
+Z-order, coordinate translation), none of which require redesigning how
+child widgets are positioned — that part (`wxPizza`) already carries over
+from GTK3 unchanged. `wxGetTopLevelGDK()` (`src/gtk/window.cpp:478`,
+called from `bitmap.cpp`, `cursor.cpp`, `display.cpp`, `evtloop.cpp`,
+`taskbar.cpp`, `utilsgtk.cpp`, plus `window.cpp` itself) turns out to be
+mostly the "get me a display" pattern with a one-line fix
+(`gdk_display_get_default()`), not a sign of deep window-per-widget
+coupling. See the design doc for the full breakdown and the two items
+that do need a real design/scope decision (`wxPopupWindow`,
+`wxNativeContainerWindow`).
 
 ## Fixed so far
 

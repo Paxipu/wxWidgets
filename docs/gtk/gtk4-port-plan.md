@@ -161,36 +161,46 @@ Produces no user-visible behavior, but this is the phase that turns "a
 GTK4 port" from a vague multi-month fear into a scoped list of PRs — worth
 front-loading before writing architectural code.
 
-**Phase 2 — Window/child model (2-4 months, the critical design phase).**
-Replace the `GdkWindow`-per-widget model with a scheme that works when
-only toplevels have a `GdkSurface`:
-- Reposition children of `wxPizza`/`m_wxwindow` purely through GtkFixed's
-  `put`/`move` layout, not window reparenting.
-- Redesign popups/tooltips/comboboxes that relied on override-redirect
-  subwindows around `GtkPopover`/`GdkPopup`.
-- Replace input-only `GdkWindow` hit-testing (custom cursor regions,
-  drag handles) with `GtkEventController`-based hit-testing.
-- Mechanical sub-task: migrate `get_preferred_width/height` → `measure()`
-  across every custom widget class (start with `wxPizza` in
-  `win_gtk.cpp` as the reference example — it already isolates the vfunc
-  table in one `class_init()` function).
+**Phase 2/3/4 — Window model, input, and painting: revised, merged, and
+scoped down (was 4-7 months combined; now looks like weeks). See
+`docs/gtk/gtk4-phase2-window-model-design.md` for the full design.**
 
-This is the phase that needs a genuine design write-up before coding
-starts — plan to spend real time here before touching `window.cpp`.
+The original three-phase split assumed the `GdkWindow`-per-widget model
+needed a from-scratch redesign. Tracing actual call sites showed
+otherwise: `wxPizza`'s child positioning is already windowless (no
+`GdkWindow`-per-child, no reparenting anywhere except one narrow file —
+see below), and the real `gtk_widget_get_window()`/`GdkWindow` usages
+break down into six much smaller, mostly-*easier*-in-GTK4 buckets: "get
+me a display" (trivial `gdk_display_get_default()` swap), event-source
+identity matching (obsolete — GTK4 event controllers report their owning
+widget directly, so the whole matching mechanism and its ~18 per-widget
+overrides get *deleted*, not reimplemented), cursor setting (simpler,
+`gtk_widget_set_cursor()`), paint/clip/size (folds directly into the
+`draw`→`snapshot` migration — same call sites), Z-order (`gtk_widget_
+insert_after/before`, with a small documented fidelity gap for
+`wxWindow::Lower()` on toplevels), and coordinate translation
+(`gtk_widget_translate_coordinates`). Recommend doing the former Phases
+2-4 as one coordinated pass through `window.cpp`/`win_gtk.cpp` rather
+than three sequential phases, since a given call site's fix usually
+resolves items from more than one former phase at once. Order: (1)
+`wxGetTopLevelGDK()` → `GdkDisplay*`, (2) `wxGetTopLevel()` →
+`GdkSurface*` for the narrow toplevel/backend-interop call sites, (3)
+event-controller input model, (4) `draw`→`snapshot` + clip/size, (5)
+delete the now-dead `GTKGetWindow`/`GTKIsOwnWindow` machinery.
 
-**Phase 3 — Input/event model (1-2 months, can overlap Phase 2).**
-Replace the raw-event signal connections in `ConnectWidget()` with
-`GtkEventController` equivalents, keeping the adapter thin (mirror the
-existing `GTKConnectWidget()` idiom) so the higher-level wx event
-generation code that builds `wxMouseEvent`/`wxKeyEvent` objects barely
-changes — only the "receive the native event" layer changes.
-
-**Phase 4 — Painting (1 month).**
-Switch `"draw"` signal handling to an overridden `snapshot` vfunc,
-sourcing `cairo_t*` via `gtk_snapshot_append_cairo()`. Because
-`wxGTKCairoDC`/`wxCairoContext` are already Cairo-based, this should be
-close to a drop-in swap of where the `cairo_t*` comes from. Explicitly
-defer GSK-native render-node fast paths to a later optimization pass.
+Two items are explicitly carved out as separate, parallelizable tracks
+rather than blocking this pass:
+- **`wxPopupWindow`** (`src/gtk/popupwin.cpp`) uses the now-removed
+  `GTK_WINDOW_POPUP` type hint and needs a `GtkPopover`/`GdkPopup`-based
+  rewrite — a real API-shape change (anchored+relative vs. absolute
+  screen position), self-contained to one file and its few consumers.
+- **`wxNativeContainerWindow`** (`src/gtk/nativewin.cpp`, the one file
+  that actually reparents a raw `GdkWindow`, for embedding foreign
+  windows by XID) has no GTK4 equivalent mechanism at all — GTK removed
+  `GtkSocket`/`GtkPlug`-style embedding, and Wayland's security model
+  mostly precludes it. This needs an explicit scope decision (drop it
+  for GTK4 vs. investigate a portal-based replacement) rather than a
+  technical fix — see the design doc §7.
 
 **Phase 5 — Widget-by-widget remediation (2-3 months).**
 Work the Phase 1 checklist: menu/menuitem, toolbar, notebook, dataview,
@@ -216,29 +226,25 @@ Wayland.
 
 ## 5. Sequencing note for a multi-month, mostly-solo effort
 
-Phases 2 → 3 → 4 are one critical-path track: they all touch the core
-`window.cpp`/`win_gtk.cpp` machinery and build on each other, so they
-benefit from architectural continuity — ideally one continuous thread of
-work rather than interleaved context-switches. Phases 6 and 7 are
-genuinely separable (different files, no shared state) and are good
-candidates to peel off into parallel branches/sessions without much
-coordination overhead once Phase 1's inventory exists.
+The merged Phase 2/3/4 `window.cpp`/`win_gtk.cpp` pass is one
+critical-path track — do it as one continuous thread of work rather than
+interleaved context-switches, per the ordering in that section. `wxPopupWindow`,
+`wxNativeContainerWindow`, Phase 6 (DnD/clipboard), and Phase 7 (native
+dialogs) are all genuinely separable (different files, no shared state)
+and are good candidates to peel off into parallel branches/sessions once
+the core pass is underway.
 
 ## 6. Recommended immediate next step
 
-Phase 0 and Phase 1 are now done: `docs/gtk/gtk4-status.md` has the real,
-compiler-verified error inventory (1304 errors / ~80 files, categorized by
-root cause), and `.github/workflows/ci.yml` has an `allow-failure` GTK4
-matrix entry (`build/tools/before_install.sh` now knows how to install
-`libgtk-4-dev`) so the error count is tracked over time instead of being
-invisible.
+Phase 0 and Phase 1 are done: `docs/gtk/gtk4-status.md` has the real,
+compiler-verified error inventory (1304 errors / ~80 files), and CI now
+tracks the GTK4 build (allow-failure) over time. The merged Phase 2/3/4
+design is also done — `docs/gtk/gtk4-phase2-window-model-design.md` —
+and revised the effort estimate for that critical-path work down
+substantially (weeks, not months) once §7's scope decision on
+`wxNativeContainerWindow` is made.
 
-The next concrete step is the start of **Phase 2**: design the
-`GdkWindow`→`GdkSurface` / child-widget-positioning replacement. This is
-the item blocking the largest share of the error count
-(`gtk_widget_get_window`, `GdkWindow`, and everything downstream of
-`wxGetTopLevelGDK()` in `window.cpp`) and needs a written-down design —
-specifically, how `wxPizza`/`m_wxwindow` will position children without
-per-widget native windows, and what replaces override-redirect popups —
-before any of the ~80 broken files can be fixed for real. Fixing files
-piecemeal ahead of that design would mean redoing the work once it exists.
+Next concrete step: start executing that design, in the order given in
+its §8 — beginning with the `wxGetTopLevelGDK()` → `GdkDisplay*` swap as
+the smallest, most mechanical first PR to validate the approach before
+taking on the event-controller input model.

@@ -22,6 +22,7 @@
 #endif // wxUSE_MARKUP
 
 #include "wx/gtk/private.h"
+#include "wx/gtk/private/gtk3-compat.h"
 
 //-----------------------------------------------------------------------------
 // wxStaticText

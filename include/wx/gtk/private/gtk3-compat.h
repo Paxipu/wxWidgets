@@ -92,6 +92,9 @@ static inline void wx_gtk_box_pack_start(GtkBox* box, GtkWidget* child,
 #define GTK_STYLE_CLASS_INLINE_TOOLBAR "inline-toolbar"
 #define GTK_STYLE_CLASS_PANE_SEPARATOR "pane-separator"
 
+// Plain rename, same signature.
+#define gtk_label_set_line_wrap(label, wrap) gtk_label_set_wrap(label, wrap)
+
 #else // !__WXGTK4__
 
 wxGCC_WARNING_SUPPRESS(deprecated-declarations)

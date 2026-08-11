@@ -117,10 +117,18 @@ bool wxSpinButton::Create(wxWindow *parent,
     m_widget = gtk_spin_button_new_with_range(0, 100, 1);
     g_object_ref(m_widget);
 
+#ifdef __WXGTK4__
+    // GtkSpinButton no longer subclasses GtkEntry under GTK4 (it now just
+    // implements the GtkEditable interface), and the width-chars setters
+    // moved from GtkEntry to that interface.
+    gtk_editable_set_width_chars(GTK_EDITABLE(m_widget), 0);
+    gtk_editable_set_max_width_chars(GTK_EDITABLE(m_widget), 0);
+#else
     gtk_entry_set_width_chars(GTK_ENTRY(m_widget), 0);
 #if GTK_CHECK_VERSION(3,12,0)
     if (gtk_check_version(3,12,0) == nullptr)
         gtk_entry_set_max_width_chars(GTK_ENTRY(m_widget), 0);
+#endif
 #endif
 #ifdef __WXGTK3__
     if (gtk_check_version(3,20,0) == nullptr)
@@ -247,7 +255,11 @@ wxSize wxSpinButton::DoGetBestSize() const
 #ifdef __WXGTK3__
     GtkStyleContext* sc = gtk_widget_get_style_context(m_widget);
     GtkBorder pad = { 0, 0, 0, 0 };
+#ifdef __WXGTK4__
+    gtk_style_context_get_padding(sc, &pad);
+#else
     gtk_style_context_get_padding(sc, gtk_style_context_get_state(sc), &pad);
+#endif
     best.x -= pad.left + pad.right;
 #else
     gtk_widget_ensure_style(m_widget);

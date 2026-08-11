@@ -260,7 +260,29 @@ work (as opposed to translation work) is actually left.
   removed), `radiobut.cpp`/`radiobox.cpp` (`GtkRadioButton` removed,
   replacement is `GtkCheckButton` grouping), `toplevel.cpp`'s
   `GTKHandleRealized()` (window-manager decoration/function/cursor hints
-  work fundamentally differently under GTK4's CSD model).
+  work fundamentally differently under GTK4's CSD model), `minifram.cpp`
+  (`gtk_event_box_new()` — `GtkEventBox` is also confirmed absent from
+  GTK4 headers; `wxMiniFrame`'s custom title-bar/border drag handling was
+  built entirely around it).
+- **`gtk_widget_add_events()`/`set_events()`**: confirmed absent from GTK4
+  headers entirely (event masks are meaningless once delivery goes
+  through `GtkEventController` objects instead). Guarded out the 4
+  call sites in files not otherwise blocked (`win_gtk.cpp`'s
+  `wxPizza::New()` — which also needed `gtk_widget_set_has_window()`
+  guarded out, since no widget owns its own window under GTK4, not just
+  masks; `window.cpp`'s touch/touchpad-gesture mask setup; `textctrl.cpp`'s
+  enter/leave mask). The two remaining occurrences
+  (`minifram.cpp`, `toplevel.cpp`) are inside the whole-subsystem
+  redesigns above and weren't worth touching in isolation.
+  `window.cpp`'s raw touch-event pipeline
+  (`touch_callback()`/`wxEmulate*Event()`/`wxEmit*TapEvent()`, all built
+  on opaque-under-GTK4 `GdkEventTouch*`) is squarely part of the Phase 3
+  event-controller migration and was guarded out as one ~150-line block
+  rather than translated blind, for the same not-yet-runtime-testable
+  reason given in `gtk4-phase3-input-model-design.md`. This batch alone
+  took the error count from 1730 to **1641** (0 fatal, verified no
+  regressions by grepping the new build log for every symbol this batch
+  touched).
 - `src/gtk/taskbar.cpp`: has its own, deeper problem beyond anything in
   this file — `GtkStatusIcon` doesn't exist in GTK4 at all (system tray
   icons need the StatusNotifierItem D-Bus protocol or a library like

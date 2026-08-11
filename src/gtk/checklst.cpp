@@ -140,10 +140,19 @@ int wxCheckListBox::GetItemHeight() const
     wxCHECK_MSG( m_treeview != nullptr, 0, wxT("invalid listbox"));
 
     gint height;
+#ifdef __WXGTK4__
+    // gtk_tree_view_column_cell_get_size() dropped the leading
+    // cell_area/GdkRectangle* parameter under GTK4.
+    gtk_tree_view_column_cell_get_size(
+        gtk_tree_view_get_column(m_treeview, 0),
+                                       nullptr, nullptr, nullptr,
+                                       &height);
+#else
     gtk_tree_view_column_cell_get_size(
         gtk_tree_view_get_column(m_treeview, 0),
                                        nullptr, nullptr, nullptr, nullptr,
                                        &height);
+#endif
     return height;
 }
 

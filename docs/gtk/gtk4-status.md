@@ -339,6 +339,41 @@ site needs a quick look at whether it's destroying a toplevel
   the build entirely via `--disable-uiactionsim`, so this isn't blocking
   anything today.
 
+## Progress update 6: `gtk_widget_get_toplevel()`, same shim pattern
+
+Same treatment as `gtk_box_pack_start`/`pack_end`: added
+`wx_gtk_widget_get_toplevel()` to `gtk3-compat.h`, `#define`'d over the
+old name. `gtk_widget_get_root()` (the GTK4 replacement) returns a
+`GtkRoot*` interface pointer instead of a `GtkWidget*`, and returns
+`nullptr` for a not-yet-rooted widget instead of GTK3's confusing
+"returns the widget itself" convention — checked every call site in the
+tree first, and all of them already guard the result (`GTK_IS_WINDOW()`
+checks, or an assumption it's parented by that point in dialog-creation
+code), so this is a safe, arguably more-correct substitution. Added the
+header include to `statusbr.cpp`, `popupwin.cpp`, `dialog.cpp`,
+`textentry.cpp`; `dirdlg.cpp`/`filedlg.cpp` already had it.
+`overlay.cpp`'s call site is left alone — that file has deeper,
+already-documented blocking issues with no marginal benefit from this
+fix alone, confirmed by rebuild (it's the only remaining
+`gtk_widget_get_toplevel` error).
+
+**1569** errors after this batch (0 fatal, no regressions). Session
+running total: 1760 → 1730 → 1641 → 1629 → 1598 → 1577 → **1569**.
+
+**Next candidate scoped but not started**: the `gdk_window_get_display`
+occurrences remaining (`window.cpp`, `toplevel.cpp`, `settings.cpp`,
+`minifram.cpp`, `cursor.cpp`, `popupcmn.cpp`, `assertdlg_gtk.cpp`) all
+call it on a local `GdkWindow*` obtained via `gtk_widget_get_window()`
+in the same function — meaning the real fix isn't a `gdk_window_get_display`
+shim, it's part of the much bigger 50-occurrence `gtk_widget_get_window`
+category that `gtk4-phase2-window-model-design.md` already scoped into
+six buckets (display lookup, event-source identity, cursor setting,
+paint/clip, Z-order, coordinate translation). Worth tackling as its own
+focused pass through that design rather than picking off individual
+`gdk_window_get_display` call sites, since each one needs the same
+"what bucket does this actually belong to" judgment call already made
+for `wxGetTopLevelGDK()`'s consumers.
+
 ## Progress update 5: `gtk_box_pack_start`/`gtk_box_pack_end` via a shared shim
 
 Rather than porting each of the ~21 call sites individually,

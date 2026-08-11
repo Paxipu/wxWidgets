@@ -63,6 +63,7 @@ static void pizza_size_allocate(GtkWidget* widget, GtkAllocation* alloc)
     int w = alloc->width - border.left - border.right;
     if (w < 0) w = 0;
 
+#ifndef __WXGTK4__
     if (gtk_widget_get_realized(widget))
     {
         int h = alloc->height - border.top - border.bottom;
@@ -91,6 +92,19 @@ static void pizza_size_allocate(GtkWidget* widget, GtkAllocation* alloc)
             }
         }
     }
+#else
+    // This whole block existed to reposition wxPizza's own inset GdkWindow
+    // (offset from its allocation by `border`, so the border decoration
+    // drawn on the parent window shows through around it) -- but wxPizza
+    // is windowless under GTK4 (see wxPizza::New()'s __WXGTK4__ branch),
+    // so there's no separate window to move any more. KNOWN GAP, not yet
+    // addressed: BORDER_STYLES (simple/raised/sunken/theme borders, e.g.
+    // on wxTextCtrl/wxListBox) relied on this parent-window-peeking-through
+    // mechanism and needs a real redesign as part of the draw->snapshot
+    // migration (docs/gtk/gtk4-phase2-window-model-design.md's painting
+    // bucket) -- border rendering is likely incomplete or missing under
+    // GTK4 until that's done. Not runtime-verified.
+#endif // __WXGTK4__/!__WXGTK4__
 
     gtk_widget_set_allocation(widget, alloc);
 
@@ -110,6 +124,7 @@ static void pizza_realize(GtkWidget* widget)
 {
     parent_class->realize(widget);
 
+#ifndef __WXGTK4__
     wxPizza* pizza = WX_PIZZA(widget);
     if (pizza->m_windowStyle & wxPizza::BORDER_STYLES)
     {
@@ -125,6 +140,9 @@ static void pizza_realize(GtkWidget* widget)
         if (h < 0) h = 0;
         gdk_window_move_resize(gtk_widget_get_window(widget), x, y, w, h);
     }
+#endif // !__WXGTK4__
+    // See the comment in pizza_size_allocate() -- BORDER_STYLES has the
+    // same known gap here, for the same reason.
 }
 
 static void pizza_show(GtkWidget* widget)

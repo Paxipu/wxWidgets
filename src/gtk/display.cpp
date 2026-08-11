@@ -113,10 +113,18 @@ int wxDisplayFactoryGTK::GetFromWindow(const wxWindow* win)
     {
         GdkDisplay* display = gtk_widget_get_display(win->m_widget);
         GdkMonitor* monitor;
+#ifdef __WXGTK4__
+        GtkNative* native = gtk_widget_get_native(win->m_widget);
+        if (native)
+            monitor = gdk_display_get_monitor_at_surface(display, gtk_native_get_surface(native));
+        else
+            monitor = gdk_display_get_primary_monitor(display);
+#else
         if (GdkWindow* window = gtk_widget_get_window(win->m_widget))
             monitor = gdk_display_get_monitor_at_window(display, window);
         else
             monitor = gdk_display_get_primary_monitor(display);
+#endif // __WXGTK4__/!__WXGTK4__
 
         for (unsigned i = gdk_display_get_n_monitors(display); i--;)
         {

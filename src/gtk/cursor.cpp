@@ -406,6 +406,21 @@ static void UpdateCursors(wxWindow* win, GdkCursor* globalCursor)
 static void SetGlobalCursor(const wxCursor& cursor)
 {
     GdkCursor* gdk_cursor = cursor.GetCursor();
+#ifdef __WXGTK4__
+    // gtk_widget_set_cursor() works directly on any widget, no window
+    // needed at all -- simpler than the GdkWindow-based GTK3 code below.
+    wxWindowList::const_iterator i = wxTopLevelWindows.begin();
+    for (size_t n = wxTopLevelWindows.size(); n--; ++i)
+    {
+        wxWindow* win = *i;
+        if (win->m_widget)
+        {
+            gtk_widget_set_cursor(win->m_widget, gdk_cursor);
+            UpdateCursors(win, gdk_cursor);
+        }
+    }
+    gdk_display_flush(wxGetTopLevelGdkDisplay());
+#else
     GdkDisplay* display = nullptr;
     wxWindowList::const_iterator i = wxTopLevelWindows.begin();
     for (size_t n = wxTopLevelWindows.size(); n--; ++i)
@@ -422,6 +437,7 @@ static void SetGlobalCursor(const wxCursor& cursor)
     }
     if (display)
         gdk_display_flush(display);
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 void wxBeginBusyCursor(const wxCursor* cursor)

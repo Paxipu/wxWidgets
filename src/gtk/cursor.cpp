@@ -174,7 +174,17 @@ wxCursor::InitFromBitmap(const wxBitmap& bitmap, int hotSpotX, int hotSpotY,
 
     // Prefer to create cursor from surface as this allows us to specify the
     // bitmap scaling factor.
-#if GTK_CHECK_VERSION(3,10,0)
+#ifdef __WXGTK4__
+    // GdkCursor is only constructible from a GdkTexture under GTK4 --
+    // there's no cairo-surface or GdkPixbuf constructor, and
+    // gdk_cursor_new_from_name()/new_from_texture() dropped the
+    // GdkDisplay* argument entirely (a cursor is display-independent now).
+    wxUnusedVar(display);
+    GdkTexture* texture = gdk_texture_new_for_pixbuf(pixbuf);
+    M_CURSORDATA->m_cursor = gdk_cursor_new_from_texture(
+        texture, hotSpotX, hotSpotY, nullptr);
+    g_object_unref(texture);
+#elif GTK_CHECK_VERSION(3,10,0)
     if (wx_is_at_least_gtk3(10))
     {
         cairo_surface_t* const
@@ -189,10 +199,12 @@ wxCursor::InitFromBitmap(const wxBitmap& bitmap, int hotSpotX, int hotSpotY,
     }
     else
 #endif // GTK 3 > 3.10
+#ifndef __WXGTK4__
     {
         M_CURSORDATA->m_cursor = gdk_cursor_new_from_pixbuf(
             display, pixbuf, hotSpotX, hotSpotY);
     }
+#endif
 #else
     if (!fg)
         fg = wxBLACK;
@@ -211,7 +223,16 @@ wxCursor::InitFromBitmap(const wxBitmap& bitmap, int hotSpotX, int hotSpotY,
 
 wxPoint wxCursor::GetHotSpot() const
 {
-#if GTK_CHECK_VERSION(2,8,0)
+#ifdef __WXGTK4__
+    // gdk_cursor_get_image() (returning a GdkPixbuf with "x_hot"/"y_hot"
+    // options) doesn't exist under GTK4 -- the hotspot is queried directly
+    // via its own getters now. Note this only reflects a hotspot actually
+    // set on construction (InitFromBitmap/InitFromImage); named cursors
+    // from InitFromStock don't carry a meaningful one.
+    if (GetCursor())
+        return wxPoint(gdk_cursor_get_hotspot_x(GetCursor()),
+                        gdk_cursor_get_hotspot_y(GetCursor()));
+#elif GTK_CHECK_VERSION(2,8,0)
     if (GetCursor())
     {
         if (wx_is_at_least_gtk2(8))
@@ -238,6 +259,71 @@ wxPoint wxCursor::GetHotSpot() const
     return wxDefaultPosition;
 }
 
+#ifdef __WXGTK4__
+void wxCursor::InitFromStock( wxStockCursor cursorId )
+{
+    m_refData = new wxCursorRefData();
+
+    // GdkCursorType (the old X-cursor-font shape enum) and
+    // gdk_cursor_new_for_display() (which took one) don't exist under
+    // GTK4 -- a GdkCursor can now only be built by CSS cursor name (see
+    // https://www.w3.org/TR/css-ui-4/#cursor) or from a GdkTexture (used
+    // by InitFromBitmap/InitFromImage instead). Mapped each stock cursor
+    // to the closest standard CSS keyword; a few have no real equivalent
+    // (paint brush/spraycan/pencil, the three mouse-button cursors, and
+    // "point at scrollbar arrow") and fall back to "default" -- a known,
+    // minor fidelity gap, not runtime-verified.
+    const char* name = "default";
+    switch (cursorId)
+    {
+        case wxCURSOR_BLANK:            name = "none"; break;
+        case wxCURSOR_ARROW:            // fall through to default
+        case wxCURSOR_DEFAULT:          name = "default"; break;
+        case wxCURSOR_RIGHT_ARROW:      name = "default"; break;
+        case wxCURSOR_HAND:             name = "pointer"; break;
+        case wxCURSOR_CROSS:            name = "crosshair"; break;
+        case wxCURSOR_SIZEWE:           name = "ew-resize"; break;
+        case wxCURSOR_SIZENS:           name = "ns-resize"; break;
+        case wxCURSOR_ARROWWAIT:
+        case wxCURSOR_WAIT:
+        case wxCURSOR_WATCH:            name = "wait"; break;
+        // Cursor themes don't have a generic four-way "sizing" cursor
+        // (this is what the pre-GTK4 code fell back to "move" for too,
+        // on non-X11 displays where cursor themes are always in play).
+        case wxCURSOR_SIZING:           name = "move"; break;
+        case wxCURSOR_SPRAYCAN:         name = "default"; break;
+        case wxCURSOR_IBEAM:            name = "text"; break;
+        case wxCURSOR_PENCIL:           name = "default"; break;
+        case wxCURSOR_NO_ENTRY:         name = "not-allowed"; break;
+        case wxCURSOR_SIZENWSE:         name = "nwse-resize"; break;
+        case wxCURSOR_SIZENESW:         name = "nesw-resize"; break;
+        case wxCURSOR_QUESTION_ARROW:   name = "help"; break;
+        case wxCURSOR_PAINT_BRUSH:      name = "default"; break;
+        case wxCURSOR_MAGNIFIER:        name = "zoom-in"; break;
+        case wxCURSOR_CHAR:             name = "text"; break;
+        case wxCURSOR_LEFT_BUTTON:      name = "default"; break;
+        case wxCURSOR_MIDDLE_BUTTON:    name = "default"; break;
+        case wxCURSOR_RIGHT_BUTTON:     name = "default"; break;
+        case wxCURSOR_BULLSEYE:         name = "crosshair"; break;
+
+        case wxCURSOR_POINT_LEFT:       name = "default"; break;
+        case wxCURSOR_POINT_RIGHT:      name = "default"; break;
+/*
+        case wxCURSOR_DOUBLE_ARROW:
+        case wxCURSOR_CROSS_REVERSE:
+        case wxCURSOR_BASED_ARROW_UP:
+        case wxCURSOR_BASED_ARROW_DOWN:
+*/
+
+        default:
+            wxFAIL_MSG(wxT("unsupported cursor type"));
+            // will use the standard one
+            break;
+    }
+
+    M_CURSORDATA->m_cursor = gdk_cursor_new_from_name(name, nullptr);
+}
+#else
 void wxCursor::InitFromStock( wxStockCursor cursorId )
 {
     m_refData = new wxCursorRefData();
@@ -315,6 +401,7 @@ void wxCursor::InitFromStock( wxStockCursor cursorId )
 #endif
     M_CURSORDATA->m_cursor = gdk_cursor_new_for_display(display, gdk_cur);
 }
+#endif // __WXGTK4__/!__WXGTK4__
 
 #if wxUSE_IMAGE
 
@@ -352,8 +439,15 @@ void wxCursor::InitFromImage( const wxImage & image )
         }
     }
     m_refData = new wxCursorRefData;
+#ifdef __WXGTK4__
+    GdkTexture* texture = gdk_texture_new_for_pixbuf(pixbuf);
+    M_CURSORDATA->m_cursor = gdk_cursor_new_from_texture(
+        texture, hotSpotX, hotSpotY, nullptr);
+    g_object_unref(texture);
+#else
     M_CURSORDATA->m_cursor = gdk_cursor_new_from_pixbuf(
         wxGetTopLevelGdkDisplay(), pixbuf, hotSpotX, hotSpotY);
+#endif
     g_object_unref(pixbuf);
 }
 

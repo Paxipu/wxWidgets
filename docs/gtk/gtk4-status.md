@@ -805,3 +805,44 @@ Session running total (diagnostic count): 1760 → 1730 → 1641 → 1629 →
 1598 → 1577 → 1569 → 1555 → 1529 → 1494 → 1481 → **1474**. Failing build
 targets (tracked from update 10 on, the more accurate metric): 78 → 72 →
 **69**.
+
+## Progress update 12: `infobar.cpp`, `spinbutt.cpp`, `calctrl.cpp`
+
+Three more small independent fixes:
+
+- **`infobar.cpp`**: `gtk_info_bar_get_content_area()` +
+  `gtk_container_add()` → `gtk_info_bar_add_child()`, GTK4's direct
+  replacement for "add this widget to the info bar's content area".
+- **`spinbutt.cpp`**: `GtkSpinButton` no longer subclasses `GtkEntry`
+  under GTK4 (it now just implements the `GtkEditable` interface), so
+  `gtk_entry_set_width_chars()`/`set_max_width_chars()` moved to
+  `gtk_editable_set_width_chars()`/`set_max_width_chars()`. Also picked up
+  the same `gtk_style_context_get_padding()` state-parameter fix already
+  applied elsewhere (`win_gtk.cpp`, `control.cpp`).
+- **`calctrl.cpp`**: `GtkCalendar` moved to a `GDateTime`-based API —
+  `gtk_calendar_select_month()` is gone, `gtk_calendar_select_day()` now
+  takes a full `GDateTime*` instead of a bare day-of-month int, and
+  `gtk_calendar_get_date()` returns a `GDateTime*` instead of filling in
+  separate out-params. Built via `g_date_time_new_local()`/
+  `g_date_time_unref()` rather than the newer
+  `gtk_calendar_set_year()`/`set_month()`/`set_day()` individual setters —
+  those are `GDK_AVAILABLE_IN_4_14` (this environment happens to have
+  4.14.5, but that's not true of all GTK4), while `GDateTime` and
+  `select_day()`/`get_date()` are `GDK_AVAILABLE_IN_ALL`. GLib's
+  `GDateTime` months are 1-based, unlike `wxDateTime::Month`/GTK3's
+  0-based convention here, so both call sites convert.
+
+Investigated but not fixed, both entangled in already-deferred subsystems:
+`dirdlg.cpp` (`gtk_native_dialog_run()` — same async-only modal redesign
+as `gtk_dialog_run()`; the other two errors in this file wouldn't get it
+compiling on their own) and `dataobj.cpp` (`GdkAtom` — type is gone
+entirely under GTK4, part of the same clipboard/DnD data-format redesign
+already flagged for `clipbrd.cpp`).
+
+Verified via standalone compiles against real GTK4 4.14.5 and GTK3 3.24.41
+headers, then a full whole-tree rebuild: **69 → 66** failing build
+targets, zero regressions. Diagnostic count: 1474 → **1465**.
+
+Session running total (diagnostic count): 1760 → 1730 → 1641 → 1629 →
+1598 → 1577 → 1569 → 1555 → 1529 → 1494 → 1481 → 1474 → **1465**. Failing
+build targets: 78 → 72 → 69 → **66**.

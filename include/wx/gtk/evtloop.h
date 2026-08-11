@@ -14,7 +14,11 @@
 // wxGUIEventLoop for wxGTK
 // ----------------------------------------------------------------------------
 
+#ifdef __WXGTK4__
+typedef struct _GdkEvent        GdkEvent;
+#else
 typedef union  _GdkEvent        GdkEvent;
+#endif
 
 #include <vector>
 

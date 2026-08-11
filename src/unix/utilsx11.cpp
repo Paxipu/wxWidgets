@@ -27,10 +27,16 @@
 #include "wx/gtk/private/wrapgtk.h"
 #include "wx/gtk/private/backend.h"
 #ifdef GDK_WINDOWING_X11
+#ifdef __WXGTK4__
+#include <gdk/x11/gdkx.h>
+#else
 #include <gdk/gdkx.h>
+#endif
 #define wxHAS_X11_SUPPORT
 #endif
+#ifndef __WXGTK4__
 GdkWindow* wxGetTopLevelGDK();
+#endif
 GtkWidget* wxGetTopLevelGTK();
 
 #if GTK_CHECK_VERSION(3,4,0)

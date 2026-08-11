@@ -54,7 +54,11 @@
 using namespace wxGTKImpl;
 
 #ifdef GDK_WINDOWING_X11
+#ifdef __WXGTK4__
+#include <gdk/x11/gdkx.h>
+#else
 #include <gdk/gdkx.h>
+#endif
 #include "wx/x11/private/wrapxkb.h"
 #else
 typedef guint KeySym;
@@ -446,6 +450,28 @@ const char* wxDumpGtkWidget(GtkWidget* w)
 // global top level GtkWidget/GdkWindow
 //-----------------------------------------------------------------------------
 
+// GTK4 removed GdkWindow entirely, so there is no way to fill in a
+// GdkWindow** output parameter for it; only toplevels have a native
+// surface at all (via GdkSurface/GtkNative) and none of the current
+// callers need that, so the GTK4 overload only ever reports the widget.
+// See docs/gtk/gtk4-phase2-window-model-design.md for the full picture.
+#ifdef __WXGTK4__
+static bool wxGetTopLevel(GtkWidget** widget)
+{
+    wxWindowList::const_iterator i = wxTopLevelWindows.begin();
+    for (; i != wxTopLevelWindows.end(); ++i)
+    {
+        const wxWindow* win = *i;
+        if (win->m_widget && gtk_widget_get_realized(win->m_widget))
+        {
+            if (widget)
+                *widget = win->m_widget;
+            return true;
+        }
+    }
+    return false;
+}
+#else
 static bool wxGetTopLevel(GtkWidget** widget, GdkWindow** window)
 {
     wxWindowList::const_iterator i = wxTopLevelWindows.begin();
@@ -467,14 +493,20 @@ static bool wxGetTopLevel(GtkWidget** widget, GdkWindow** window)
     }
     return false;
 }
+#endif // __WXGTK4__/!__WXGTK4__
 
 GtkWidget* wxGetTopLevelGTK()
 {
     GtkWidget* widget = nullptr;
+#ifdef __WXGTK4__
+    wxGetTopLevel(&widget);
+#else
     wxGetTopLevel(&widget, nullptr);
+#endif
     return widget;
 }
 
+#ifndef __WXGTK4__
 GdkWindow* wxGetTopLevelGDK()
 {
     GdkWindow* window;
@@ -482,11 +514,44 @@ GdkWindow* wxGetTopLevelGDK()
         window = gdk_get_default_root_window();
     return window;
 }
+#endif // !__WXGTK4__
+
+// Cross-version replacement for the common "I just want a display" use of
+// wxGetTopLevelGDK() (gdk_window_get_display(wxGetTopLevelGDK())): under
+// GTK4 there's no window to get a display from any more, but wx apps only
+// ever use a single (the default) display in practice, so this is
+// equivalent to the old behaviour for all realistic use cases.
+#ifdef __WXGTK4__
+GdkDisplay* wxGetTopLevelGdkDisplay()
+{
+    return gdk_display_get_default();
+}
+#else
+GdkDisplay* wxGetTopLevelGdkDisplay()
+{
+    return gdk_window_get_display(wxGetTopLevelGDK());
+}
+#endif // __WXGTK4__/!__WXGTK4__
 
 PangoContext* wxGetPangoContext()
 {
     PangoContext* context = nullptr;
     GtkWidget* widget;
+#ifdef __WXGTK4__
+    if (wxGetTopLevel(&widget))
+    {
+        context = gtk_widget_get_pango_context(widget);
+        g_object_ref(context);
+    }
+    else
+    {
+        // GdkScreen doesn't exist any more under GTK4, so there's no
+        // screen-based fallback available; go straight to the same
+        // default-font-map fallback used below for console applications.
+        context = pango_font_map_create_context(
+                        pango_cairo_font_map_get_default());
+    }
+#else
     if (wxGetTopLevel(&widget, nullptr))
     {
         context = gtk_widget_get_pango_context(widget);
@@ -513,6 +578,7 @@ PangoContext* wxGetPangoContext()
         }
 #endif // Pango 1.22+
     }
+#endif // __WXGTK4__/!__WXGTK4__
 
     return context;
 }
@@ -521,7 +587,19 @@ PangoContext* wxGetPangoContext()
 static bool IsBackend(void* instance, const char* string)
 {
     if (instance == nullptr)
+    {
+        // The backend (X11/Wayland/...) is a property of the display, not
+        // of any particular window, so using the default display's type
+        // instead of a toplevel's GdkWindow type (not available under
+        // GTK4 any more) is equivalent: both give e.g. "GdkWaylandWindow"
+        // vs. "GdkWaylandDisplay", which match the same "GdkWayland"/
+        // "GdkX11" prefixes checked by the callers below.
+#ifdef __WXGTK4__
+        instance = wxGetTopLevelGdkDisplay();
+#else
         instance = wxGetTopLevelGDK();
+#endif
+    }
     const char* name = g_type_name(G_TYPE_FROM_INSTANCE(instance));
     return strncmp(string, name, strlen(string)) == 0;
 }
@@ -2833,27 +2911,42 @@ wxMouseState wxGetMouseState()
 {
     wxMouseState ms;
 
-    gint x;
-    gint y;
-    GdkModifierType mask;
+    gint x = 0;
+    gint y = 0;
+    GdkModifierType mask = GdkModifierType(0);
 
-    GdkWindow* window = wxGetTopLevelGDK();
-    GdkDisplay* display = gdk_window_get_display(window);
-#ifdef __WXGTK3__
 #ifdef __WXGTK4__
+    // GTK4 (particularly under Wayland, by deliberate design) provides no
+    // API to query the pointer's position in global screen coordinates
+    // any more -- gdk_device_get_surface_at_position() is the closest
+    // replacement, but it's relative to whatever surface the pointer
+    // happens to be over, not the screen. This means the position is only
+    // meaningful while the pointer is over one of this application's own
+    // windows; see docs/gtk/gtk4-status.md for the tracked limitation.
+    GdkDisplay* display = wxGetTopLevelGdkDisplay();
     GdkSeat* seat = gdk_display_get_default_seat(display);
     GdkDevice* device = gdk_seat_get_pointer(seat);
+    double dx = 0, dy = 0;
+    if (gdk_device_get_surface_at_position(device, &dx, &dy))
+    {
+        x = gint(dx);
+        y = gint(dy);
+        mask = gdk_device_get_modifier_state(device);
+    }
 #else
+    GdkWindow* window = wxGetTopLevelGDK();
+    GdkDisplay* display = wxGetTopLevelGdkDisplay();
+#ifdef __WXGTK3__
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     GdkDeviceManager* manager = gdk_display_get_device_manager(display);
     GdkDevice* device = gdk_device_manager_get_client_pointer(manager);
     wxGCC_WARNING_RESTORE()
-#endif
     gdk_device_get_position(device, nullptr, &x, &y);
     gdk_device_get_state(device, window, nullptr, &mask);
 #else
     gdk_display_get_pointer(display, nullptr, &x, &y, &mask);
 #endif
+#endif // __WXGTK4__/!__WXGTK4__
 
     ms.SetX(x);
     ms.SetY(y);
@@ -7020,17 +7113,22 @@ void wxWindowGTK::GTKScrolledWindowSetBorder(GtkWidget* w, int wxstyle)
 // Get the current mouse position.
 void wxGetMousePosition(int* x, int* y)
 {
-    GdkDisplay* display = gdk_window_get_display(wxGetTopLevelGDK());
-#ifdef __WXGTK3__
+    GdkDisplay* display = wxGetTopLevelGdkDisplay();
 #ifdef __WXGTK4__
+    // See the identical comment in wxGetMouseState() above: this is only
+    // meaningful while the pointer is over one of this application's own
+    // windows, not truly global screen coordinates.
     GdkSeat* seat = gdk_display_get_default_seat(display);
     GdkDevice* device = gdk_seat_get_pointer(seat);
-#else
+    double dx = 0, dy = 0;
+    gdk_device_get_surface_at_position(device, &dx, &dy);
+    if (x) *x = gint(dx);
+    if (y) *y = gint(dy);
+#elif defined(__WXGTK3__)
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     GdkDeviceManager* manager = gdk_display_get_device_manager(display);
     GdkDevice* device = gdk_device_manager_get_client_pointer(manager);
     wxGCC_WARNING_RESTORE()
-#endif
     gdk_device_get_position(device, nullptr, x, y);
 #else
     gdk_display_get_pointer(display, nullptr, x, y, nullptr);

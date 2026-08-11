@@ -33,10 +33,16 @@
 #ifdef __WXGTK__
 #include "wx/gtk/private/wrapgtk.h"
 #include "wx/gtk/private/gtk3-compat.h"
+#ifdef __WXGTK4__
+#include <gdk/x11/gdkx.h>
+#else
 #include <gdk/gdkx.h>
+#endif
 
 GtkWidget* wxGetTopLevelGTK();
+#ifndef __WXGTK4__
 GdkWindow* wxGetTopLevelGDK();
+#endif
 #endif // __WXGTK__
 
 // Normally we fall back on "plain X" implementation if XTest is not available,

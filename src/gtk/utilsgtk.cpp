@@ -47,7 +47,10 @@
 #include <unistd.h>
 #endif
 
+#ifndef __WXGTK4__
 GdkWindow* wxGetTopLevelGDK();
+#endif
+GdkDisplay* wxGetTopLevelGdkDisplay();
 
 //----------------------------------------------------------------------------
 // misc.
@@ -73,7 +76,7 @@ wxDisplayInfo wxGetDisplayInfo()
 {
     wxDisplayInfo info = { nullptr, wxDisplayNone };
 #if defined(GDK_WINDOWING_WAYLAND) || defined(GDK_WINDOWING_X11)
-    GdkDisplay *display = gdk_window_get_display(wxGetTopLevelGDK());
+    GdkDisplay *display = wxGetTopLevelGdkDisplay();
 #endif
 
 #ifdef GDK_WINDOWING_X11

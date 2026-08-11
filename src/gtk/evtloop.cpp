@@ -33,7 +33,10 @@
 
 #include "wx/gtk/private/wrapgtk.h"
 
+#ifndef __WXGTK4__
 GdkWindow* wxGetTopLevelGDK();
+#endif
+GdkDisplay* wxGetTopLevelGdkDisplay();
 
 // ============================================================================
 // wxEventLoop implementation
@@ -397,7 +400,7 @@ void wxGUIEventLoop::DoYieldFor(long eventsToProcess)
     // put any unprocessed GDK events back in the queue
     if ( !m_queuedGdkEvents.empty() )
     {
-        GdkDisplay* disp = gdk_window_get_display(wxGetTopLevelGDK());
+        GdkDisplay* disp = wxGetTopLevelGdkDisplay();
         for ( GdkEvent* ev : m_queuedGdkEvents )
         {
             // NOTE: gdk_display_put_event makes a copy of the event passed to it

@@ -22,13 +22,20 @@
         #define wxGTK_HAVE_X11_DISPLAY
     #endif
 
-    #include <gdk/gdkx.h>
+    #ifdef __WXGTK4__
+        #include <gdk/x11/gdkx.h>
+    #else
+        #include <gdk/gdkx.h>
+    #endif
 #endif
 
 // This file is not used at all when using Win32.
 #if !defined(GDK_WINDOWING_WIN32)
 
+#ifndef __WXGTK4__
 GdkWindow* wxGetTopLevelGDK();
+#endif
+GdkDisplay* wxGetTopLevelGdkDisplay();
 
 // There are 2 quite different implementations here: one for GTK+ 4 and the
 // other one for the previous versions.
@@ -37,7 +44,7 @@ GdkWindow* wxGetTopLevelGDK();
 
 static inline GdkDisplay* GetDisplay()
 {
-    return gdk_window_get_display(wxGetTopLevelGDK());
+    return wxGetTopLevelGdkDisplay();
 }
 
 // This class is always defined as it's used for the main display even when

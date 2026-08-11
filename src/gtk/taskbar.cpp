@@ -26,7 +26,11 @@
 #include "wx/gtk/private/wrapgtk.h"
 #include "wx/gtk/private/backend.h"
 #ifdef GDK_WINDOWING_X11
-    #include <gdk/gdkx.h>
+    #ifdef __WXGTK4__
+        #include <gdk/x11/gdkx.h>
+    #else
+        #include <gdk/gdkx.h>
+    #endif
 #endif
 #ifndef __WXGTK3__
     #include "eggtrayicon.h"

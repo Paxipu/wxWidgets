@@ -23,7 +23,10 @@
 #include "wx/gtk/private/backend.h"
 #include "wx/gtk/private/gtk3-compat.h"
 
+#ifndef __WXGTK4__
 GdkWindow* wxGetTopLevelGDK();
+#endif
+GdkDisplay* wxGetTopLevelGdkDisplay();
 
 //-----------------------------------------------------------------------------
 // wxCursorRefData
@@ -167,7 +170,7 @@ wxCursor::InitFromBitmap(const wxBitmap& bitmap, int hotSpotX, int hotSpotY,
         }
     }
 
-    GdkDisplay* const display = gdk_window_get_display(wxGetTopLevelGDK());
+    GdkDisplay* const display = wxGetTopLevelGdkDisplay();
 
     // Prefer to create cursor from surface as this allows us to specify the
     // bitmap scaling factor.
@@ -301,7 +304,7 @@ void wxCursor::InitFromStock( wxStockCursor cursorId )
             break;
     }
 
-    GdkDisplay* display = gdk_window_get_display(wxGetTopLevelGDK());
+    GdkDisplay* display = wxGetTopLevelGdkDisplay();
 #ifdef __WXGTK3__
     // Cursor themes don't have "sizing"
     if (gdk_cur == GDK_SIZING && !wxGTKImpl::IsX11(display))
@@ -350,7 +353,7 @@ void wxCursor::InitFromImage( const wxImage & image )
     }
     m_refData = new wxCursorRefData;
     M_CURSORDATA->m_cursor = gdk_cursor_new_from_pixbuf(
-        gdk_window_get_display(wxGetTopLevelGDK()), pixbuf, hotSpotX, hotSpotY);
+        wxGetTopLevelGdkDisplay(), pixbuf, hotSpotX, hotSpotY);
     g_object_unref(pixbuf);
 }
 

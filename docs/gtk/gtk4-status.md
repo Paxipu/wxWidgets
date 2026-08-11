@@ -338,3 +338,43 @@ site needs a quick look at whether it's destroying a toplevel
   separate design problem, not attempted here. Currently excluded from
   the build entirely via `--disable-uiactionsim`, so this isn't blocking
   anything today.
+
+## Unit tests: the base test suite already builds and runs today
+
+wxWidgets ships a real, extensive Catch2-based test suite in `tests/`
+(the console `test` binary — strings, dates, containers, streams,
+sockets, filesystem, config, XML, etc. — and the GUI-dependent
+`test_gui` binary). The `3rdparty/catch` submodule wasn't checked out
+locally, same situation as `3rdparty/nanosvg` earlier; initialized it
+with `git submodule update --init 3rdparty/catch`.
+
+**`test` (the console binary) links only `wxBase`/`wxNet`/`wxXml` — not
+the GUI library — so it builds and runs today, completely independently
+of the GTK4 corelib work above being finished.** Verified locally:
+compiles with 0 errors, links, and running it executes **1,231,492
+assertions across 444 test cases, with 430 passing**. The 14 failures
+are all environmental, not port regressions: `numformatter.cpp`/
+`intltest.cpp` need a locale with thousands-separator formatting (this
+container only has `C`/`C.utf8`/`POSIX`), and `url.cpp` needs outbound
+network access (no egress in this sandbox). None of this session's
+changes touch `wxBase` at all, so this is expected, not a surprise —
+but it's still a genuine, valuable regression check to have running
+continuously as the port progresses, since a base-library regression
+would be just as bad as a GTK4-specific one.
+
+Wired this into CI (`.github/workflows/ci.yml`): the `gtk_version: 4`
+matrix entry now has `base_tests_only: true`, which makes the "Building
+tests" step build just the `test` target (the full build and
+`failtest` both need the GUI library and would fail), and skips the
+two GUI-only testing steps (`test_gui`, Xvfb). The existing "Testing"
+step (`./test`) needed no changes — it was already GUI-independent —
+so it now actually runs and reports real pass/fail counts for this
+matrix entry instead of being skipped because an earlier step failed
+outright.
+
+**`test_gui` remains blocked** until enough of the GTK4 corelib
+compiles to link it — that's the real milestone to watch for, since it
+would unlock exercising this session's window/input-model work (the
+Tab-order Z-order caveat, `wxGetMouseState`'s reduced fidelity, etc.)
+under `xvfb-run`, which is available in this environment (confirmed via
+`which Xvfb xvfb-run`) but has had nothing to test against so far.

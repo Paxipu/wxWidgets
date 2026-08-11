@@ -92,6 +92,12 @@ jobs:
             allow_warnings: true
             skip_samples: true
             use_xvfb: true
+            # The GUI library doesn't build yet (see gtk4-status.md), but
+            # the console-only test binary only needs wxBase/wxNet, which
+            # already do, and is a real regression check for those while
+            # the port is in progress -- so build and run just that one
+            # instead of everything, and skip the GUI-only test steps.
+            base_tests_only: true
           - name: Ubuntu 26.04 wxGTK UTF-8
             runner: ubuntu-26.04
             configure_flags: --enable-utf8 --enable-utf8only --enable-monolithic
@@ -348,13 +354,18 @@ jobs:
       - name: Building tests
         working-directory: tests
         run: |
-          if [ ${{ matrix.check_headers }} ]; then
-            echo "Checking that all headers are self-contained..."
-            make allheaders_selfcontained
-            echo "Done."
+          if [ ${{ matrix.base_tests_only }} ]; then
+            # failtest and the full build both need the GUI library.
+            make $wxBUILD_ARGS "CXXFLAGS=$wxMAKEFILE_CXXFLAGS" "LDFLAGS=$wxMAKEFILE_LDFLAGS" test
+          else
+            if [ ${{ matrix.check_headers }} ]; then
+              echo "Checking that all headers are self-contained..."
+              make allheaders_selfcontained
+              echo "Done."
+            fi
+            make $wxBUILD_ARGS failtest
+            make -k $wxBUILD_ARGS "CXXFLAGS=$wxMAKEFILE_CXXFLAGS" "LDFLAGS=$wxMAKEFILE_LDFLAGS"
           fi
-          make $wxBUILD_ARGS failtest
-          make -k $wxBUILD_ARGS "CXXFLAGS=$wxMAKEFILE_CXXFLAGS" "LDFLAGS=$wxMAKEFILE_LDFLAGS"
 
       - name: Setup tmate
         uses: mxschmitt/action-tmate@v3
@@ -406,12 +417,13 @@ jobs:
           fi
 
       - name: Testing launching GUI test
+        if: '!matrix.base_tests_only'
         working-directory: tests
         run: |
           WX_TEST_DISABLE_GUI=1 ./test_gui
 
       - name: Testing GUI using Xvfb
-        if: matrix.use_xvfb
+        if: matrix.use_xvfb && !matrix.base_tests_only
         working-directory: tests
         run: |
           if [ ${{ matrix.use_asan }} ]; then

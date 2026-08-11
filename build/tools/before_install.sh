@@ -70,6 +70,8 @@ case $(uname -s) in
                 *--disable-gui*)   ;;
                 *)
                     case "$wxGTK_VERSION" in
+                        4)  libtoolkit_dev=libgtk-4-dev
+                            ;;
                         3)  libtoolkit_dev=libgtk-3-dev
                             extra_deps='libwebkit2gtk-4.0-dev libgspell-1-dev'
                             ;;

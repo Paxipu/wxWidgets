@@ -37,6 +37,22 @@ existing GTK4 path broken and untested."** The fastest way to derisk the
 whole project is to make it buildable and visible first (Phase 0 below),
 then find out empirically how much of the scaffolding still holds.
 
+**Update, first build attempt:** that empirical check has now been done —
+see `docs/gtk/gtk4-status.md`. A clean `./configure --with-gtk=4` +
+`make -k` against real GTK4 4.14 headers produces **1304 compiler errors
+across ~80 files**, i.e. essentially the entire GTK-specific core library
+fails to compile. This is not 80 unrelated bugs; it's a handful of
+removed GTK3 APIs (`GtkContainer`, `GtkBin`, `gtk_widget_get_window`/
+`GdkWindow`, `gtk_box_pack_start/end`, old style-properties API,
+`GtkSelectionData`) whose absence cascades through shared code. The
+`__WXGTK4__` conditionals already in the tree are necessary but nowhere
+near sufficient — "already partially working" (as this document originally
+characterized it, based on grep for `__WXGTK4__`) overstated the state;
+correct to "scaffolded but never actually compiled against real GTK4
+headers." See `gtk4-status.md` for the full breakdown and running
+checklist; §3 below is retained for its narrative but `gtk4-status.md` is
+now the source of truth for counts.
+
 ## 2. The three hard problems you named, reassessed against the code
 
 ### a. Signals — smaller than it sounds
@@ -127,13 +143,14 @@ finished one.
 
 ## 4. Phased roadmap
 
-**Phase 0 — Restore visibility (weeks, not months).**
-Get a GTK4 build compiling again (fix whatever's currently bit-rotted —
-possibly nothing, possibly a lot, we don't know until we try), then add an
-`allow-failure` CI job building `--with-gtk=4` so future regressions in
-the existing `__WXGTK4__` branches are visible immediately instead of
-silently rotting further. Highest leverage, lowest risk — this should be
-the first PR.
+**Phase 0 — Restore visibility (weeks, not months). Partially done.**
+The first build attempt (see update above and `gtk4-status.md`) showed
+this isn't "fix whatever's bit-rotted" — it's 1304 errors from a genuinely
+unbuilt path. Revised scope: an `allow-failure` CI job building
+`--with-gtk=4` has been added so the error count is tracked over time
+and visibly trends toward zero as later phases land, rather than waiting
+for a fully green build before it's visible at all. Getting the job to
+actually pass is now realistically a Phase 2/5 outcome, not a Phase 0 one.
 
 **Phase 1 — Inventory & triage (1-2 months).**
 Systematic widget-by-widget audit of every removed/deprecated GTK3→GTK4
@@ -209,8 +226,19 @@ coordination overhead once Phase 1's inventory exists.
 
 ## 6. Recommended immediate next step
 
-Start Phase 0 (get a GTK4 build green, add the allow-failure CI job) and
-Phase 1 (turn §3's table into a real tracked checklist) as the first
-concrete deliverable. Both are cheap, low-risk, and everything downstream
-depends on having accurate ground truth instead of assumptions about what
-still compiles.
+Phase 0 and Phase 1 are now done: `docs/gtk/gtk4-status.md` has the real,
+compiler-verified error inventory (1304 errors / ~80 files, categorized by
+root cause), and `.github/workflows/ci.yml` has an `allow-failure` GTK4
+matrix entry (`build/tools/before_install.sh` now knows how to install
+`libgtk-4-dev`) so the error count is tracked over time instead of being
+invisible.
+
+The next concrete step is the start of **Phase 2**: design the
+`GdkWindow`→`GdkSurface` / child-widget-positioning replacement. This is
+the item blocking the largest share of the error count
+(`gtk_widget_get_window`, `GdkWindow`, and everything downstream of
+`wxGetTopLevelGDK()` in `window.cpp`) and needs a written-down design —
+specifically, how `wxPizza`/`m_wxwindow` will position children without
+per-widget native windows, and what replaces override-redirect popups —
+before any of the ~80 broken files can be fixed for real. Fixing files
+piecemeal ahead of that design would mean redoing the work once it exists.

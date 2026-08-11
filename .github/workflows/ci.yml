@@ -69,6 +69,9 @@ jobs:
   build:
     runs-on: ${{ matrix.runner }}
     name: ${{ matrix.name }}
+    # GTK4 is a work in progress (see docs/gtk/gtk4-status.md) and is not
+    # expected to build cleanly yet; don't let it block the rest of CI.
+    continue-on-error: ${{ matrix.gtk_version == 4 }}
     container:
       image: ${{ matrix.container }}
       # We need to make container privileged just to allow writing to
@@ -81,6 +84,13 @@ jobs:
           - name: Ubuntu 26.04 wxGTK 2
             runner: ubuntu-26.04
             gtk_version: 2
+            use_xvfb: true
+          - name: Ubuntu 24.04 wxGTK 4 (WIP port, see docs/gtk/gtk4-status.md)
+            runner: ubuntu-24.04
+            gtk_version: 4
+            configure_flags: --disable-uiactionsim
+            allow_warnings: true
+            skip_samples: true
             use_xvfb: true
           - name: Ubuntu 26.04 wxGTK UTF-8
             runner: ubuntu-26.04

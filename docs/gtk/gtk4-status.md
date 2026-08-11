@@ -447,6 +447,105 @@ Session running total: 1760 → 1730 → 1641 → 1629 → 1598 → 1577 → 156
 1555 → 1529 → **1494** (win_gtk.cpp + cursor.cpp combined). Distinct
 failing files: 84 → **82**.
 
+## Progress update 10: small mechanical batch, plus a methodology fix and two newly-scoped deferred items
+
+Picked off seven small, independent errors surfaced by the last full
+rebuild (1-4 errors each) rather than one big file:
+
+- **`gtk3-compat.h`**: restored the `GTK_STYLE_CLASS_*` string-constant
+  macros (`BUTTON`, `CELL`, `EXPANDER`, `GRIP`, `INLINE_TOOLBAR`,
+  `PANE_SEPARATOR`) as plain string shims — the macros were dropped along
+  with the rest of the deprecated style-context header, but
+  `gtk_style_context_add_class()` still takes a plain string, so this is a
+  pure restoration, no behavior change.
+- **`dockart.cpp`** (AUI docking splitter handle): needed an explicit
+  `gtk3-compat.h` include to see the shim above (it only pulled in
+  `wrapgtk.h`/`private.h`, neither of which includes it).
+- **`control.cpp`**: `GetClassDefaultAttributes()` rewritten — GTK4 has no
+  replacement for querying a widget's effective background as a single
+  flat colour (backgrounds are `render_background()`-painted, possibly a
+  gradient/image, under CSS), so `gtk_style_context_lookup_color(sc,
+  "theme_bg_color", ...)` is used as an approximation, falling back to
+  opaque white. Unlike the GTK3 code, this doesn't walk the parent chain,
+  so a widget with no `theme_bg_color` of its own won't inherit an
+  ancestor's background — a known, documented fidelity gap, not yet
+  runtime-verified. Font description now comes from
+  `pango_context_get_font_description(gtk_widget_get_pango_context())`
+  instead of the removed `GTK_STYLE_PROPERTY_FONT` query (copied via
+  `pango_font_description_copy()` since the context owns the original —
+  `wxNativeFontInfo`'s destructor frees `description`, so handing it a
+  borrowed pointer would double-free the context's copy).
+  `GTKGetEntryMargins()` got the same `get_border()`/`get_padding()`
+  state-parameter fix as `win_gtk.cpp` (update 8).
+- **`app.cpp`**: `gtk_events_pending()` → `g_main_context_pending(nullptr)`
+  (GTK4 removed the former; it was always just a thin wrapper around the
+  latter). Does **not** fully fix `app.cpp` — see below.
+- **`bitmap.cpp`**: `wxBitmap(const wxCursor&)` rebuilt on
+  `gdk_cursor_get_texture()` + `gdk_pixbuf_get_from_texture()`, replacing
+  the removed `gdk_cursor_get_image()`.
+- **`checklst.cpp`**: `gtk_tree_view_column_cell_get_size()` dropped its
+  leading `GdkRectangle*` parameter under GTK4.
+- **`clrpicker.cpp`/`colordlg.cpp`**: their GTK4 branches (added in an
+  earlier session batch) passed a `wxColour` directly where
+  `gtk_color_chooser_set_rgba()` needs a `const GdkRGBA*` — fixed with
+  `wxColourImpl::GTKGetRGBA()`, the same conversion the neighboring GTK3
+  branches already used.
+
+Verified via standalone compiles against real GTK4 4.14.5 and GTK3 3.24.41
+headers (build's actual flags) for each file individually, then via a full
+whole-tree rebuild.
+
+**Methodology correction**: the failing-*files* diff used in updates 8-9
+(grepping error lines for a leading file path) silently misattributes
+errors to whichever header the bad line lives in, not the `.cpp`
+translation unit that triggered it — so a `.cpp` file can vanish from that
+list while its build target still fails. Caught here because `app.cpp`
+looked "fixed" by that method despite `corelib_gtk_app.o` still failing
+(via `threads.h`, see below). Switched to diffing the actual failed
+**build targets** (`grep -oP` on `make`'s `[Makefile:NNNNN: target.o]
+Error` lines) instead, which tracks what a rebuild actually produces.
+Re-checked updates 8-9 against this method too: no discrepancy there,
+both `win_gtk.cpp` and `cursor.cpp` genuinely dropped off. This doc's
+future updates use the target-based method.
+
+By that method: **78 → 72** failing build targets, zero regressions
+(nothing newly failing). 6 targets fixed: `dockart.o`, `bitmap.o`,
+`checklst.o`, `clrpicker.o`, `colordlg.o`, `control.o`. `app.o` correctly
+still fails, for an unrelated reason (below). Diagnostic count: 1494 →
+**1481**.
+
+**Two newly-scoped deferred items found along the way**, both real
+enough to need a design decision rather than a mechanical fix:
+
+1. **`wxGtkStyleContext`/`wxGtkWidgetPath`** (`stylecontext.h` +
+   `settings.cpp`): a synthetic-`GtkWidgetPath`-based mechanism for
+   querying theme style info (colours, sizes) for widget *types* that are
+   never actually instantiated — built on `GtkWidgetPath`,
+   `gtk_style_context_new()`, parent-context chains, and sibling-path
+   tricks (`AddTreeviewHeaderButton()`), none of which exist under GTK4 at
+   all (`GtkWidgetPath` the type is simply gone). Blocks `statbox.cpp`,
+   `notebook.cpp`, `renderer.cpp`, and parts of `settings.cpp` itself — a
+   single shared fix would unblock several files at once, higher leverage
+   than most remaining items, but GTK4's idiomatic replacement (build real
+   scratch widgets instead of synthetic paths, the same idiom already used
+   for `button.cpp`'s `GetDefaultSize()` earlier this session) needs to be
+   worked out per `Add*()` method, and a couple of them
+   (`AddMenu()`/`AddMenuItem()`) reference `GTK_TYPE_MENU`, which doesn't
+   exist under GTK4 either and ties into the already-deferred `menu.cpp`
+   rewrite. Candidate for the next design pass.
+2. **`gdk_threads_enter()`/`gdk_threads_leave()`** (`wx/gtk/private/
+   threads.h`, used via `wxGDKThreadsLock` in `textctrl.cpp`, `timer.cpp`,
+   `toplevel.cpp`, plus direct calls in `app.cpp`): GTK4 removed the GDK
+   thread-lock mechanism entirely, with no direct replacement — its
+   threading model requires GTK calls to stay on the main thread, full
+   stop. Stubbing these out as no-ops would compile, but would silently
+   remove real thread-safety rather than just lose visual fidelity, for
+   whichever of these 9 call sites are genuinely reached from a worker
+   thread. Unlike the approximation gaps documented elsewhere in this doc,
+   this isn't safe to guess at without checking each call site's actual
+   threading context — left unfixed, `app.cpp` still fails to build
+   because of it.
+
 ## Progress update 7: starting the `gtk_widget_get_window` sweep
 
 Surveyed all ~51 remaining `gtk_widget_get_window` occurrences against

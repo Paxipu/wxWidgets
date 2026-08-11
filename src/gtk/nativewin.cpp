@@ -26,7 +26,9 @@
 
 #include "wx/gtk/private/wrapgtk.h"
 
-#ifdef GDK_WINDOWING_X11
+// Only needed by the wxNativeContainerWindow implementation below, which
+// isn't available at all under GTK4.
+#if defined(GDK_WINDOWING_X11) && defined(wxHAS_NATIVE_CONTAINER_WINDOW)
     #include <gdk/gdkx.h>
 #endif
 
@@ -75,6 +77,9 @@ void wxNativeWindow::DoDisown()
 // ----------------------------------------------------------------------------
 // wxNativeContainerWindow
 // ----------------------------------------------------------------------------
+
+// Not available at all under GTK4, see include/wx/nativewin.h.
+#ifdef wxHAS_NATIVE_CONTAINER_WINDOW
 
 // TODO: we probably need equivalent code for other GDK platforms
 #ifdef GDK_WINDOWING_X11
@@ -182,3 +187,5 @@ wxNativeContainerWindow::~wxNativeContainerWindow()
     // object) or we are being deleted because the native window was destroyed
     // and in this case our m_widget was set to nullptr by OnNativeDestroyed()
 }
+
+#endif // wxHAS_NATIVE_CONTAINER_WINDOW

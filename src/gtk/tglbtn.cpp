@@ -201,14 +201,22 @@ bool wxToggleButton::DoSetLabelMarkup(const wxString& markup)
 
 GtkLabel *wxToggleButton::GTKGetLabel() const
 {
+#ifdef __WXGTK4__
+    GtkWidget* child = gtk_button_get_child(GTK_BUTTON(m_widget));
+#else
     GtkWidget* child = gtk_bin_get_child(GTK_BIN(m_widget));
+#endif
     return GTK_LABEL(child);
 }
 
 void wxToggleButton::DoApplyWidgetStyle(GtkRcStyle *style)
 {
     GTKApplyStyle(m_widget, style);
+#ifdef __WXGTK4__
+    GtkWidget* child = gtk_button_get_child(GTK_BUTTON(m_widget));
+#else
     GtkWidget* child = gtk_bin_get_child(GTK_BIN(m_widget));
+#endif
     GTKApplyStyle(child, style);
 
 #ifndef __WXGTK4__

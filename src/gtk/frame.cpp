@@ -18,6 +18,7 @@
 #endif // WX_PRECOMP
 
 #include "wx/gtk/private/wrapgtk.h"
+#include "wx/gtk/private/gtk3-compat.h"
 
 // ----------------------------------------------------------------------------
 // event tables

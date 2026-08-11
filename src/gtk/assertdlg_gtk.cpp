@@ -11,6 +11,7 @@
 #if wxDEBUG_LEVEL
 
 #include "wx/gtk/private.h"
+#include "wx/gtk/private/gtk3-compat.h"
 #include "wx/gtk/assertdlg_gtk.h"
 #include "wx/gtk/private/mnemonics.h"
 #include "wx/translation.h"

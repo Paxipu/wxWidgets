@@ -24,6 +24,7 @@
 #include "wx/fontutil.h"
 
 #include "wx/gtk/private.h"
+#include "wx/gtk/private/gtk3-compat.h"
 #include "wx/gtk/private/image.h"
 #include "wx/gtk/private/log.h"
 #include "wx/gtk/private/stylecontext.h"

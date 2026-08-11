@@ -18,6 +18,53 @@ inline GdkDevice* wx_get_gdk_device_from_display(GdkDisplay* display)
     return gdk_seat_get_pointer(seat);
 }
 
+// gtk_box_pack_start()/pack_end() don't exist under GTK4: expand/fill/
+// padding moved from box-call parameters to per-child widget properties
+// (hexpand/vexpand, halign/valign, margins), and packing itself is just
+// gtk_box_append(). #define'd over the old names so call sites (which
+// only ever use one or a few pack_end calls per box in this codebase,
+// never GTK3's "stack backward from the end" multi-pack_end pattern)
+// don't need individual porting -- append(), called in the same order as
+// the original pack_start/pack_end calls, already gives the same visual
+// result for every case actually used here.
+static inline void wx_gtk_box_pack_start(GtkBox* box, GtkWidget* child,
+                                          gboolean expand, gboolean fill, guint padding)
+{
+    const GtkOrientation orient = gtk_orientable_get_orientation(GTK_ORIENTABLE(box));
+    if (expand)
+    {
+        if (orient == GTK_ORIENTATION_HORIZONTAL)
+            gtk_widget_set_hexpand(child, true);
+        else
+            gtk_widget_set_vexpand(child, true);
+    }
+    if (!fill)
+    {
+        if (orient == GTK_ORIENTATION_HORIZONTAL)
+            gtk_widget_set_halign(child, GTK_ALIGN_CENTER);
+        else
+            gtk_widget_set_valign(child, GTK_ALIGN_CENTER);
+    }
+    if (padding)
+    {
+        if (orient == GTK_ORIENTATION_HORIZONTAL)
+        {
+            gtk_widget_set_margin_start(child, gint(padding));
+            gtk_widget_set_margin_end(child, gint(padding));
+        }
+        else
+        {
+            gtk_widget_set_margin_top(child, gint(padding));
+            gtk_widget_set_margin_bottom(child, gint(padding));
+        }
+    }
+    gtk_box_append(box, child);
+}
+#define gtk_box_pack_start(box, child, expand, fill, padding) \
+    wx_gtk_box_pack_start(box, child, expand, fill, padding)
+#define gtk_box_pack_end(box, child, expand, fill, padding) \
+    wx_gtk_box_pack_start(box, child, expand, fill, padding)
+
 #else // !__WXGTK4__
 
 wxGCC_WARNING_SUPPRESS(deprecated-declarations)

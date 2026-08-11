@@ -846,3 +846,41 @@ targets, zero regressions. Diagnostic count: 1474 → **1465**.
 Session running total (diagnostic count): 1760 → 1730 → 1641 → 1629 →
 1598 → 1577 → 1569 → 1555 → 1529 → 1494 → 1481 → 1474 → **1465**. Failing
 build targets: 78 → 72 → 69 → **66**.
+
+## Progress update 13: `tglbtn.cpp`, `bmpcbox.cpp`/`combobox.cpp`'s `GtkComboBox` entry access
+
+More instances of the by-now-familiar `gtk_bin_get_child(GTK_BIN(...))`
+pattern, fixed per-widget-type same as `button.cpp` earlier:
+
+- **`tglbtn.cpp`**: `GtkToggleButton` subclasses `GtkButton`, so
+  `gtk_button_get_child()` applies directly, same as `button.cpp`. A third
+  call site (inside the removed-`GtkAlignment` codepath) was already
+  correctly guarded under `#ifndef __WXGTK4__`, left untouched.
+- **`bmpcbox.cpp`/`combobox.cpp`**: both create an entry-mode
+  `GtkComboBox`; `gtk_combo_box_get_child(GTK_COMBO_BOX(combo))` is the
+  matching per-type replacement, returning the embedded entry widget
+  directly. `combobox.cpp` also needed two more fixes for that entry,
+  same pattern as `spinbutt.cpp` (update 12) — `gtk_entry_set_width_chars()`/
+  `gtk_entry_set_text()` moved to the `GtkEditable` interface
+  (`gtk_editable_set_width_chars()`/`set_text()`).
+
+`bmpcbox.cpp` has two more errors left **unfixed**:
+`gdk_cairo_surface_create_from_pixbuf()` (gone under GTK4, no direct
+replacement) and `gtk_widget_get_window()`, used together to build a
+`cairo_surface_t` for a `CAIRO_GOBJECT_TYPE_SURFACE` tree-model column
+rendered by `GtkCellRendererPixbuf` (the combo's dropdown item icons).
+Whether that cell renderer's underlying "surface" property still exists
+under GTK4, or needs a `GdkTexture`/`GIcon` instead, isn't something to
+guess at without a way to verify rendering behavior — same caution
+category as the already-deferred `cairo.h`/Phase 4 draw redesign, so left
+as-is rather than risk a plausible-looking but wrong fix.
+
+Verified via standalone compiles against real GTK4 4.14.5 and GTK3 3.24.41
+headers, then a full whole-tree rebuild: **66 → 64** failing build
+targets (`combobox.o`, `tglbtn.o` fixed; `bmpcbox.o` still fails on its 2
+known-deferred errors, as expected), zero regressions. Diagnostic count:
+1465 → **1455**.
+
+Session running total (diagnostic count): 1760 → 1730 → 1641 → 1629 →
+1598 → 1577 → 1569 → 1555 → 1529 → 1494 → 1481 → 1474 → 1465 → **1455**.
+Failing build targets: 78 → 72 → 69 → 66 → **64**.

@@ -339,6 +339,73 @@ site needs a quick look at whether it's destroying a toplevel
   the build entirely via `--disable-uiactionsim`, so this isn't blocking
   anything today.
 
+## Progress update 8: `win_gtk.cpp`'s `measure()`/`size_allocate` vfunc migration
+
+Picked up the `win_gtk.cpp` scope flagged as "a legitimate next
+significant target" at the end of update 7. `wxPizza` (the
+`GtkFixed`-derived widget backing every `wxWindow`) overrides several
+`GtkWidgetClass`/`GtkContainerClass` vfuncs whose signatures or existence
+changed under GTK4:
+
+- `size_allocate`: GTK4 dropped `GtkAllocation*` in favor of separate
+  `width`/`height`/`baseline` parameters (a widget no longer owns a
+  window it needs to position). Split into two full function definitions
+  — GTK4 keeps only the border-inset width calc and child-position loop;
+  GTK3/GTK2 keep the original signature and the window-repositioning code
+  intact. The repositioning code was the mechanism that let
+  `BORDER_STYLES` decoration (simple/raised/sunken/theme borders, e.g. on
+  `wxTextCtrl`/`wxListBox`) show through the parent window — already a
+  known gap since wxPizza went windowless under GTK4 (update 7); this
+  batch doesn't add new gap, just carries the existing one through the
+  new vfunc shape with an explicit comment.
+- `get_preferred_width`/`get_preferred_height`/`adjust_size_request`
+  merged into one `measure()` vfunc. New `pizza_measure()` always reports
+  a zero minimum unconditionally — GTK3's `GTK_IS_TOOL_ITEM` special case
+  is dropped because `GtkToolItem` doesn't exist under GTK4 at all (no
+  toolbar port exists yet, see the deferred `toolbar.cpp` item), so there
+  is currently no way for a wxPizza to be inside one.
+- `GtkContainerClass` (and therefore its `add`/`remove` vfunc slots)
+  doesn't exist under GTK4 — `pizza_add()`/`pizza_remove()` are guarded
+  out entirely rather than ported, since nothing can call
+  `gtk_container_add()`/`remove()` generically any more; child add/remove
+  already goes through `wxPizza::put()`/`RemoveChild()` directly. (Noted
+  but not acted on: with these vfuncs gone, nothing automatically calls
+  back into `wxPizza::m_children` bookkeeping if a child is unparented via
+  raw `gtk_widget_unparent()` outside of `RemoveChild()` — `notebook.cpp`
+  already does this even under GTK3 without observed issues, so treated
+  as consistent with existing behavior, not a new bug introduced here.)
+- `pizza_show`/`pizza_hide`: `gtk_widget_queue_draw_area()` (partial-rect
+  invalidation) doesn't exist under GTK4; falls back to whole-parent
+  `gtk_widget_queue_draw()`.
+- `gtk_widget_size_allocate()` gained a `baseline` int parameter (`-1` =
+  no baseline, matching prior behavior).
+- `gtk_widget_is_toplevel()` doesn't exist under GTK4; `wxPizza::put()`
+  now checks `GTK_IS_WINDOW()` instead.
+- `gtk_style_context_get_border()` dropped its `GtkStateFlags` parameter
+  under GTK4 — it queries the context's current state, which the existing
+  `gtk_style_context_set_state()` call already set, so behavior is
+  unchanged.
+
+Verified via full rebuild (`make -k -j4`, whole tree): `win_gtk.cpp` went
+from 1 remaining error to 0 (only deprecation warnings, expected — GTK4
+still ships these style/allocation APIs but flags them in favor of the
+CSS/snapshot render model that's the subject of the still-pending Phase 4
+redesign). Error count **1529 → 1528**, no new failing files (diffed the
+full failing-file list against the pre-batch build; zero regressions).
+
+**Same signature break found in 5 other files**, not fixed here because
+each is already entangled in much larger, separately-scoped rewrites and
+fixing just this one call wouldn't get them compiling anyway:
+`renderer.cpp` and `settings.cpp` (both deep in the removed
+`GtkStateType`/`gtk_style_context_get()` varargs/`GtkWidgetPath` style-API
+family), `notebook.cpp` (removed `GtkContainer`, `gtk_box_set_child_packing`,
+`gtk_widget_show_all`), `control.cpp` and `statbox.cpp` (removed
+`gtk_widget_style_get`/`gtk_widget_get_preferred_width` and friends).
+Worth revisiting once those files' broader rewrites are scoped.
+
+Session running total: 1760 → 1730 → 1641 → 1629 → 1598 → 1577 → 1569 →
+1555 → **1528**.
+
 ## Progress update 7: starting the `gtk_widget_get_window` sweep
 
 Surveyed all ~51 remaining `gtk_widget_get_window` occurrences against

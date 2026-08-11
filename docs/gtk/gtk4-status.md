@@ -339,6 +339,53 @@ site needs a quick look at whether it's destroying a toplevel
   the build entirely via `--disable-uiactionsim`, so this isn't blocking
   anything today.
 
+## Progress update 4: `gtk_widget_destroy()`, and three more deferred subsystems
+
+Fixed the 9 files where `gtk_widget_destroy()`'s replacement was a safe,
+type-specific call: `gtk_window_destroy()` for `GtkWindow` subclasses
+(`assertdlg_gtk.cpp`, `utilsgtk.cpp`, `settings.cpp`, `control.cpp`,
+`aboutdlg.cpp`), or unparenting for plain widgets
+(`window.cpp`'s core `wxWindowGTK` destructor — used by every window in
+the framework, needs a runtime `GTK_IS_WINDOW()` check since this one
+function has to handle both toplevels and regular widgets correctly;
+`filepicker.cpp`'s shared `GtkFileChooserButton`; `infobar.cpp`'s
+buttons). `private.cpp` got the same `GetContainer()`/`AddToContainer()`
+GTK3-vs-GTK4 split already used in `settings.cpp` (it hit both
+`GTK_WINDOW_POPUP` and `GtkContainer` removal at once).
+
+**1598** errors after this batch (0 fatal, 93 files, no regressions —
+`window.cpp`'s destructor fix is flagged as core lifecycle code not yet
+verified against a running app, same treatment as the earlier Tab-order
+Z-order concern; exactly what `test_gui` under `xvfb-run` would catch
+once it can link).
+
+**Three more confirmed whole-subsystem redesigns found while surveying
+the remaining call sites** (joining `toolbar.cpp`, `radiobut.cpp`/
+`radiobox.cpp`, `minifram.cpp`, `taskbar.cpp`, `toplevel.cpp`'s WM
+hints):
+- **`clipbrd.cpp`**: connects `"selection_received"`/
+  `"selection_clear_event"`, raw X11-selection signals that don't exist
+  under GTK4 either — it's `GdkClipboard`/`GdkContentProvider` now.
+  Squarely Phase 6, already scoped in the root-cause table; fixing just
+  the destroy calls here would have had zero marginal benefit.
+- **`overlay.cpp`**: 24 total errors including `GdkScreen`,
+  `gtk_widget_get_toplevel`, and the `"draw"` signal — `wxOverlay`'s
+  transparent-window GTK backend (used for rubber-band selection
+  rendering) needs its own redesign.
+- **`menu.cpp`**: `GtkMenu`/`GtkMenuItem` confirmed entirely absent from
+  GTK4 headers (replaced by `GMenuModel`/`GtkPopoverMenu`) — bigger in
+  practical impact than `GtkToolbar`'s removal, since menus (menu bars,
+  context menus) are used almost everywhere. Not attempted; deserves its
+  own design document before any code, same as the window/input models.
+
+**Also found**: `gtk_dialog_run()` is removed under GTK4 (modal dialogs
+are async now, no blocking call) — affects `msgdlg.cpp`, `print.cpp`,
+and is *why* `assertdlg_gtk.cpp`/`utilsgtk.cpp` still don't fully
+compile despite this batch's fixes to their `gtk_widget_destroy` calls.
+A real behavioral redesign (needs a nested-mainloop-pump replacement,
+wx already has infrastructure for this pattern elsewhere) — not
+something to guess at without runtime verification, so left alone.
+
 ## Unit tests: the base test suite already builds and runs today
 
 wxWidgets ships a real, extensive Catch2-based test suite in `tests/`

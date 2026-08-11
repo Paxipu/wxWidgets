@@ -808,7 +808,12 @@ bool wxTextCtrl::Create( wxWindow *parent,
 
         GTKScrolledWindowSetBorder(m_widget, style);
 
+#ifndef __WXGTK4__
+        // Enter/leave notification will need porting to
+        // GtkEventControllerMotion along with the rest of the input
+        // pipeline -- see docs/gtk/gtk4-phase3-input-model-design.md.
         gtk_widget_add_events( GTK_WIDGET(m_text), GDK_ENTER_NOTIFY_MASK | GDK_LEAVE_NOTIFY_MASK );
+#endif
 
         gtk_widget_set_can_focus(m_widget, FALSE);
     }

@@ -3806,6 +3806,12 @@ long_press_gesture_callback(GtkGesture* WXUNUSED(gesture), gdouble x, gdouble y,
 }
 }
 
+// Raw touch events (GdkEventTouch and the "touch-event" signal) don't
+// exist under GTK4; porting this needs the same event-controller redesign
+// as the rest of the input pipeline -- see
+// docs/gtk/gtk4-phase3-input-model-design.md, not yet implemented.
+#ifndef __WXGTK4__
+
 static void
 wxEmitTwoFingerTapEvent(GdkEventTouch* gdk_event, wxWindow* win)
 {
@@ -3955,8 +3961,11 @@ wxEmulateMotionEvent(GtkWidget* widget, GdkEventTouch* gdk_event, wxWindow* win)
                                     win, true);
 }
 
+#endif // !__WXGTK4__
+
 } // anonymous namespace
 
+#ifndef __WXGTK4__
 extern "C" {
 static gboolean
 touch_callback(GtkWidget* widget, GdkEventTouch* gdk_event, wxWindow* win)
@@ -4102,6 +4111,7 @@ touch_callback(GtkWidget* widget, GdkEventTouch* gdk_event, wxWindow* win)
     return true;
 }
 }
+#endif // !__WXGTK4__
 
 void wxWindowGesturesData::Reinit(wxWindowGTK* win,
                                   GtkWidget *widget,
@@ -4229,15 +4239,22 @@ void wxWindowGesturesData::Reinit(wxWindowGTK* win,
 
     if ( eventsMask & wxTOUCH_RAW_EVENTS )
     {
+#ifndef __WXGTK4__
         if ( gtk_check_version(3, 4, 0) == nullptr )
         {
             gtk_widget_add_events(widget, GDK_TOUCH_MASK);
         }
+#endif // !__WXGTK4__
+        // Raw touch events (GdkEventTouch, the "touch-event" signal) need
+        // porting to GTK4's event-controller model along with the rest of
+        // the input pipeline -- see
+        // docs/gtk/gtk4-phase3-input-model-design.md, not yet implemented.
 
         eventsMask &= ~wxTOUCH_RAW_EVENTS;
         m_rawTouchEvents = true;
     }
 
+#ifndef __WXGTK4__
     // GDK_TOUCHPAD_GESTURE_MASK was added in 3.18, but we can just define it
     // ourselves if we use an earlier version when compiling.
 #if !GTK_CHECK_VERSION(3,18,0)
@@ -4247,11 +4264,14 @@ void wxWindowGesturesData::Reinit(wxWindowGTK* win,
     {
         gtk_widget_add_events(widget, GDK_TOUCHPAD_GESTURE_MASK);
     }
+#endif // !__WXGTK4__
 
     wxASSERT_MSG( eventsMask == 0, "Unknown touch event mask bit specified" );
 
+#ifndef __WXGTK4__
     g_signal_connect (widget, "touch-event",
                       G_CALLBACK(touch_callback), win);
+#endif // !__WXGTK4__
 }
 
 void wxWindowGesturesData::Free()

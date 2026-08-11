@@ -360,11 +360,15 @@ GtkWidget* wxPizza::New(long windowStyle)
     pizza->m_scroll_x = 0;
     pizza->m_scroll_y = 0;
     pizza->m_windowStyle = windowStyle;
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    // Neither gtk_widget_set_has_window() nor event masks exist under
+    // GTK4: no widget (other than a toplevel's implicit surface) has its
+    // own window any more, and event delivery goes entirely through
+    // GtkEventController objects instead of enabling raw event types via
+    // a mask -- see docs/gtk/gtk4-phase3-input-model-design.md, not yet
+    // implemented.
+#elif defined(__WXGTK3__)
     gtk_widget_set_has_window(widget, true);
-#else
-    gtk_fixed_set_has_window(GTK_FIXED(widget), true);
-#endif
     gtk_widget_add_events(widget,
         GDK_EXPOSURE_MASK |
         GDK_SCROLL_MASK |
@@ -384,6 +388,25 @@ GtkWidget* wxPizza::New(long windowStyle)
         GDK_ENTER_NOTIFY_MASK |
         GDK_LEAVE_NOTIFY_MASK |
         GDK_FOCUS_CHANGE_MASK);
+#else
+    gtk_fixed_set_has_window(GTK_FIXED(widget), true);
+    gtk_widget_add_events(widget,
+        GDK_EXPOSURE_MASK |
+        GDK_SCROLL_MASK |
+        GDK_POINTER_MOTION_MASK |
+        GDK_POINTER_MOTION_HINT_MASK |
+        GDK_BUTTON_MOTION_MASK |
+        GDK_BUTTON1_MOTION_MASK |
+        GDK_BUTTON2_MOTION_MASK |
+        GDK_BUTTON3_MOTION_MASK |
+        GDK_BUTTON_PRESS_MASK |
+        GDK_BUTTON_RELEASE_MASK |
+        GDK_KEY_PRESS_MASK |
+        GDK_KEY_RELEASE_MASK |
+        GDK_ENTER_NOTIFY_MASK |
+        GDK_LEAVE_NOTIFY_MASK |
+        GDK_FOCUS_CHANGE_MASK);
+#endif // __WXGTK4__/__WXGTK3__/!__WXGTK3__
     return widget;
 }
 

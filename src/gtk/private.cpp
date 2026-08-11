@@ -34,6 +34,32 @@ namespace wxGTKPrivate
 
 static GtkWidget *gs_container = nullptr;
 
+// GetContainer()'s return type and AddToContainer()'s implementation differ
+// between GTK3 (GtkContainer*, still exists) and GTK4 (GtkContainer doesn't
+// exist; use gtk_fixed_put() on the GtkFixed directly instead). Callers
+// should use AddToContainer() rather than GetContainer() directly so they
+// work under both -- same pattern as ContainerWidget()/
+// ContainerWidgetAddChild() in settings.cpp.
+#ifdef __WXGTK4__
+static GtkWidget* GetContainer()
+{
+    if ( gs_container == nullptr )
+    {
+        // Never shown, just used to host scratch widgets for style/metric
+        // queries -- GTK_WINDOW_POPUP doesn't exist under GTK4 any more,
+        // but a plain, never-shown toplevel serves the same purpose here.
+        GtkWidget* window = gtk_window_new();
+        gs_container = gtk_fixed_new();
+        gtk_window_set_child(GTK_WINDOW(window), gs_container);
+    }
+    return gs_container;
+}
+
+static void AddToContainer(GtkWidget* widget)
+{
+    gtk_fixed_put(GTK_FIXED(GetContainer()), widget, 0, 0);
+}
+#else
 static GtkContainer* GetContainer()
 {
     if ( gs_container == nullptr )
@@ -45,6 +71,12 @@ static GtkContainer* GetContainer()
     return GTK_CONTAINER(gs_container);
 }
 
+static void AddToContainer(GtkWidget* widget)
+{
+    gtk_container_add(GetContainer(), widget);
+}
+#endif // __WXGTK4__/!__WXGTK4__
+
 GtkWidget *GetButtonWidget()
 {
     static GtkWidget *s_button = nullptr;
@@ -53,7 +85,7 @@ GtkWidget *GetButtonWidget()
     {
         s_button = gtk_button_new();
         g_object_add_weak_pointer(G_OBJECT(s_button), (void**)&s_button);
-        gtk_container_add(GetContainer(), s_button);
+        AddToContainer(s_button);
         gtk_widget_realize(s_button);
     }
 
@@ -68,7 +100,7 @@ GtkWidget *GetNotebookWidget()
     {
         s_notebook = gtk_notebook_new();
         g_object_add_weak_pointer(G_OBJECT(s_notebook), (void**)&s_notebook);
-        gtk_container_add(GetContainer(), s_notebook);
+        AddToContainer(s_notebook);
         gtk_widget_realize(s_notebook);
     }
 
@@ -83,7 +115,7 @@ GtkWidget *GetCheckButtonWidget()
     {
         s_button = gtk_check_button_new();
         g_object_add_weak_pointer(G_OBJECT(s_button), (void**)&s_button);
-        gtk_container_add(GetContainer(), s_button);
+        AddToContainer(s_button);
         gtk_widget_realize(s_button);
     }
 
@@ -98,7 +130,7 @@ GtkWidget * GetComboBoxWidget()
     {
         s_button = gtk_combo_box_new();
         g_object_add_weak_pointer(G_OBJECT(s_button), (void**)&s_button);
-        gtk_container_add(GetContainer(), s_button);
+        AddToContainer(s_button);
         gtk_widget_realize( s_button );
     }
 
@@ -114,7 +146,7 @@ GtkWidget *GetEntryWidget()
     {
         s_entry = gtk_entry_new();
         g_object_add_weak_pointer(G_OBJECT(s_entry), (void**)&s_entry);
-        gtk_container_add(GetContainer(), s_entry);
+        AddToContainer(s_entry);
         gtk_widget_realize(s_entry);
     }
 
@@ -195,7 +227,7 @@ GtkWidget * GetRadioButtonWidget()
     {
         s_button = gtk_radio_button_new(nullptr);
         g_object_add_weak_pointer(G_OBJECT(s_button), (void**)&s_button);
-        gtk_container_add(GetContainer(), s_button);
+        AddToContainer(s_button);
         gtk_widget_realize( s_button );
     }
 
@@ -219,7 +251,7 @@ GtkWidget* GetSplitterWidget(wxOrientation orient)
             widget = gtk_vpaned_new();
 #endif
         g_object_add_weak_pointer(G_OBJECT(widget), (void**)&widgets[gtkOrient]);
-        gtk_container_add(GetContainer(), widget);
+        AddToContainer(widget);
         gtk_widget_realize(widget);
     }
 
@@ -234,7 +266,7 @@ GtkWidget *GetTreeWidget()
     {
         s_tree = gtk_tree_view_new();
         g_object_add_weak_pointer(G_OBJECT(s_tree), (void**)&s_tree);
-        gtk_container_add(GetContainer(), s_tree);
+        AddToContainer(s_tree);
         gtk_widget_realize(s_tree);
     }
 
@@ -255,7 +287,11 @@ public:
         if ( gs_container )
         {
             GtkWidget* parent = gtk_widget_get_parent(gs_container);
+#ifdef __WXGTK4__
+            gtk_window_destroy(GTK_WINDOW(parent));
+#else
             gtk_widget_destroy(parent);
+#endif
             gs_container = nullptr;
         }
     }

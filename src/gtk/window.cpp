@@ -3226,10 +3226,26 @@ wxWindowGTK::~wxWindowGTK()
 
     if (m_widget)
     {
+#ifdef __WXGTK4__
+        // gtk_widget_destroy() doesn't exist under GTK4: GtkWindow
+        // (toplevels) has gtk_window_destroy() instead, while a plain
+        // widget's closest equivalent is simply detaching it from its
+        // parent (if it still has one -- DestroyChildren() above may
+        // already have done this indirectly). The explicit
+        // g_object_unref() below drops wx's own reference either way,
+        // same as the GTK3 path. Not yet runtime-verified against a
+        // live app -- this is core lifecycle code for every wxWindow,
+        // see docs/gtk/gtk4-status.md.
+        if (GTK_IS_WINDOW(m_widget))
+            gtk_window_destroy(GTK_WINDOW(m_widget));
+        else if (gtk_widget_get_parent(m_widget))
+            gtk_widget_unparent(m_widget);
+#else
         // Note that gtk_widget_destroy() does not destroy the widget, it just
         // emits the "destroy" signal. The widget is not actually destroyed
         // until its reference count drops to zero.
         gtk_widget_destroy(m_widget);
+#endif // __WXGTK4__/!__WXGTK4__
         // Release our reference, should be the last one
         g_object_unref(m_widget);
         m_widget = nullptr;

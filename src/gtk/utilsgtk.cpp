@@ -331,7 +331,11 @@ bool wxGUIAppTraits::ShowAssertDialog(const wxString& msg)
                 wxFAIL_MSG( wxT("unexpected return code from GtkAssertDialog") );
         }
 
+#ifdef __WXGTK4__
+        gtk_window_destroy(GTK_WINDOW(dialog));
+#else
         gtk_widget_destroy(dialog);
+#endif
         return returnCode;
     }
 #endif // wxDEBUG_LEVEL

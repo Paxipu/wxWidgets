@@ -1520,7 +1520,11 @@ void wxSystemSettingsModule::OnExit()
 #endif
     if (gs_tlw_parent)
     {
+#ifdef __WXGTK4__
+        gtk_window_destroy(GTK_WINDOW(gs_tlw_parent));
+#else
         gtk_widget_destroy(gs_tlw_parent);
+#endif
         gs_tlw_parent = nullptr;
     }
 }

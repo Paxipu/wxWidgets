@@ -276,7 +276,12 @@ void wxInfoBar::AddButton(wxWindowID btnid, const wxString& label)
     // have some user-defined button
     if ( m_impl->m_close )
     {
+#ifdef __WXGTK4__
+        if (gtk_widget_get_parent(m_impl->m_close))
+            gtk_widget_unparent(m_impl->m_close);
+#else
         gtk_widget_destroy(m_impl->m_close);
+#endif
         m_impl->m_close = nullptr;
     }
 
@@ -319,7 +324,12 @@ void wxInfoBar::RemoveButton(wxWindowID btnid)
     {
         if (i->id == btnid)
         {
+#ifdef __WXGTK4__
+            if (gtk_widget_get_parent(i->button))
+                gtk_widget_unparent(i->button);
+#else
             gtk_widget_destroy(i->button);
+#endif
             buttons.erase(i.base() - 1);
 
             // see comment in GTKAddButton()

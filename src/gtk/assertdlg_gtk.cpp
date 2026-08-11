@@ -204,7 +204,11 @@ static void gtk_assert_dialog_save_backtrace_callback(GtkWidget*, GtkAssertDialo
         }
     }
 
+#ifdef __WXGTK4__
+    gtk_window_destroy (GTK_WINDOW(dialog));
+#else
     gtk_widget_destroy (dialog);
+#endif
 }
 
 static void gtk_assert_dialog_copy_callback(GtkWidget*, GtkAssertDialog* dlg)

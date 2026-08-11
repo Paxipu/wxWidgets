@@ -245,8 +245,13 @@ wxControl::GetDefaultAttributesFromGTKWidget(GtkWidget* widget,
     GtkWidget* tlw = nullptr;
     if (gtk_widget_get_parent(widget) == nullptr)
     {
+#ifdef __WXGTK4__
+        tlw = gtk_window_new();
+        gtk_window_set_child(GTK_WINDOW(tlw), widget);
+#else
         tlw = gtk_window_new(GTK_WINDOW_TOPLEVEL);
         gtk_container_add(GTK_CONTAINER(tlw), widget);
+#endif
     }
 
 #ifdef __WXGTK3__
@@ -328,7 +333,11 @@ wxControl::GetDefaultAttributesFromGTKWidget(GtkWidget* widget,
     }
 
     if (tlw)
+#ifdef __WXGTK4__
+        gtk_window_destroy(GTK_WINDOW(tlw));
+#else
         gtk_widget_destroy(tlw);
+#endif
 
     return attr;
 }

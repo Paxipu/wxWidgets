@@ -158,7 +158,16 @@ wxFileButton::~wxFileButton()
         // on GtkFileChooserButton first (our base dtor will do it again, but
         // that does no harm). m_dialog holds a reference to the shared widget,
         // so it won't go away until m_dialog base dtor unrefs it.
+#ifdef __WXGTK4__
+        // gtk_widget_destroy() doesn't exist under GTK4; m_widget isn't a
+        // toplevel here, so unparenting it early is the equivalent -- the
+        // base dtor's own unparent call (see window.cpp) becomes a no-op
+        // once this has already run, same "does no harm" reasoning as above.
+        if (gtk_widget_get_parent(m_widget))
+            gtk_widget_unparent(m_widget);
+#else
         gtk_widget_destroy(m_widget);
+#endif
         delete m_dialog;
     }
 }
@@ -379,7 +388,12 @@ wxDirButton::~wxDirButton()
     if (m_dialog)
     {
         // see ~wxFileButton() comment
+#ifdef __WXGTK4__
+        if (gtk_widget_get_parent(m_widget))
+            gtk_widget_unparent(m_widget);
+#else
         gtk_widget_destroy(m_widget);
+#endif
         delete m_dialog;
     }
 }

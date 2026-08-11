@@ -91,7 +91,11 @@ extern "C" {
 static void wxGtkAboutDialogOnClose(GtkAboutDialog* about, int, wxIcon* icon)
 {
     icon->UnRef();
+#ifdef __WXGTK4__
+    gtk_window_destroy(GTK_WINDOW(about));
+#else
     gtk_widget_destroy(GTK_WIDGET(about));
+#endif
     if ( about == gs_aboutDialog )
         gs_aboutDialog = nullptr;
 }

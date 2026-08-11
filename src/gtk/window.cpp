@@ -3082,7 +3082,11 @@ void wxWindowGTK::GTKCreateScrolledWindowWith(GtkWidget* view)
     m_scrollBar[ScrollDir_Horz] = GTK_RANGE(gtk_scrolled_window_get_hscrollbar(scrolledWindow));
     m_scrollBar[ScrollDir_Vert] = GTK_RANGE(gtk_scrolled_window_get_vscrollbar(scrolledWindow));
 
+#ifdef __WXGTK4__
+    gtk_scrolled_window_set_child( scrolledWindow, view );
+#else
     gtk_container_add( GTK_CONTAINER(m_widget), view );
+#endif
 
     // connect various scroll-related events
     for ( int dir = 0; dir < ScrollDir_Max; dir++ )
@@ -5296,8 +5300,13 @@ bool wxWindowGTK::Reparent( wxWindowBase *newParentBase )
     // Notice that old m_parent pointer might be non-null here but the widget
     // still not have any parent at GTK level if it's a notebook page that had
     // been removed from the notebook so test this at GTK level and not wx one.
-    if ( GtkWidget *parentGTK = gtk_widget_get_parent(m_widget) )
-        gtk_container_remove(GTK_CONTAINER(parentGTK), m_widget);
+    if ( gtk_widget_get_parent(m_widget) )
+    {
+        // gtk_widget_unparent() is the generic, GTK-version-independent way
+        // to detach a widget from whatever container currently owns it
+        // (GtkContainer itself doesn't exist under GTK4 any more).
+        gtk_widget_unparent(m_widget);
+    }
 
     wxASSERT( GTK_IS_WIDGET(m_widget) );
 
@@ -5506,17 +5515,39 @@ void wxWindowGTK::RealizeTabOrder()
 
             chain = g_list_reverse(chain);
 
+#ifdef __WXGTK4__
+            // GTK4 removed gtk_container_set_focus_chain() entirely --
+            // there is no separate "focus chain" any more, Tab traversal
+            // follows actual widget-tree sibling order. Reproduce the
+            // desired order by physically reordering the children.
+            // CAVEAT, not yet runtime-verified: GTK4 ties paint/Z-order to
+            // the same widget-tree position, so this could visually
+            // reorder overlapping children that used to have independent
+            // paint and tab order -- see docs/gtk/gtk4-status.md.
+            {
+                GtkWidget* prev = nullptr;
+                for (GList* p = chain; p; p = p->next)
+                {
+                    GtkWidget* const w = GTK_WIDGET(p->data);
+                    gtk_widget_insert_after(w, m_wxwindow, prev);
+                    prev = w;
+                }
+            }
+#else
             wxGCC_WARNING_SUPPRESS(deprecated-declarations)
             gtk_container_set_focus_chain(GTK_CONTAINER(m_wxwindow), chain);
             wxGCC_WARNING_RESTORE(deprecated-declarations)
+#endif // __WXGTK4__/!__WXGTK4__
 
             g_list_free(chain);
         }
         else // no children
         {
+#ifndef __WXGTK4__
             wxGCC_WARNING_SUPPRESS(deprecated-declarations)
             gtk_container_unset_focus_chain(GTK_CONTAINER(m_wxwindow));
             wxGCC_WARNING_RESTORE(deprecated-declarations)
+#endif // !__WXGTK4__
         }
     }
 }

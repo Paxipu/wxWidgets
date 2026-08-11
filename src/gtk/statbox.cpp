@@ -92,8 +92,13 @@ bool wxStaticBox::DoCreate(wxWindow *parent,
 
         // The widget must not have any parent at GTK+ level or setting it as
         // label widget would fail.
+#ifndef __WXGTK4__
+        // gtk_widget_unparent() below already does what this does (and more
+        // generically, without needing GtkContainer, which doesn't exist
+        // under GTK4), but keep the original GTK3 behaviour unchanged.
         GtkWidget* const oldParent = gtk_widget_get_parent(labelWidget);
         gtk_container_remove(GTK_CONTAINER(oldParent), labelWidget);
+#endif
         gtk_widget_unparent(labelWidget);
 
         // It also should be our child at wx API level, but without being our
@@ -146,7 +151,11 @@ void wxStaticBox::AddChild( wxWindowBase *child )
         // and packing it into the GtkFrame:
         m_wxwindow = wxPizza::New();
         gtk_widget_show( m_wxwindow );
+#ifdef __WXGTK4__
+        gtk_frame_set_child( GTK_FRAME(m_widget), m_wxwindow );
+#else
         gtk_container_add( GTK_CONTAINER (m_widget), m_wxwindow );
+#endif
         GTKApplyWidgetStyle();
     }
 
@@ -208,6 +217,12 @@ void wxStaticBox::GetBordersForSizer(int *borderTop, int *borderOther) const
     }
     wxGtkStyleContext sc(GetContentScaleFactor());
     sc.Add(GTK_TYPE_FRAME, "frame", "frame", nullptr);
+#ifdef __WXGTK4__
+    // wx_is_at_least_gtk3(20) is hardcoded true under GTK4 (see
+    // gtk3-compat.h), so this branch is unreachable at runtime there, and
+    // GtkContainer/border-width don't exist to even compile it.
+    sc.Add("border");
+#else
     if (wx_is_at_least_gtk3(20))
         sc.Add("border");
     else
@@ -215,6 +230,7 @@ void wxStaticBox::GetBordersForSizer(int *borderTop, int *borderOther) const
         *borderOther = gtk_container_get_border_width(GTK_CONTAINER(m_widget));
         *borderTop += *borderOther;
     }
+#endif
     GtkBorder border;
     gtk_style_context_get_border(sc, GTK_STATE_FLAG_NORMAL, &border);
     *borderOther += border.left;

@@ -798,7 +798,11 @@ bool wxTextCtrl::Create( wxWindow *parent,
         m_scrollBar[1] = GTK_RANGE(gtk_scrolled_window_get_vscrollbar(GTK_SCROLLED_WINDOW(m_widget)));
 
         // Insert view into scrolled window
+#ifdef __WXGTK4__
+        gtk_scrolled_window_set_child( GTK_SCROLLED_WINDOW(m_widget), m_text );
+#else
         gtk_container_add( GTK_CONTAINER(m_widget), m_text );
+#endif
 
         GTKSetWrapMode();
 

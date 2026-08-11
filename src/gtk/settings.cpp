@@ -44,6 +44,29 @@ static wxFont gs_fontSystem;
 static int gs_scrollWidth;
 static GtkWidget* gs_tlw_parent;
 
+// This is a GtkContainer* under GTK2/3 and a GtkWidget* (of a GtkFixed)
+// under GTK4, where GtkContainer doesn't exist any more; callers that need
+// to add a child to it should use ContainerWidgetAddChild() below instead
+// of gtk_container_add() directly so they work under both.
+#ifdef __WXGTK4__
+static GtkWidget* ContainerWidget()
+{
+    static GtkWidget* s_widget;
+    if (s_widget == nullptr)
+    {
+        s_widget = gtk_fixed_new();
+        g_object_add_weak_pointer(G_OBJECT(s_widget), (void**)&s_widget);
+        gs_tlw_parent = gtk_window_new();
+        gtk_window_set_child(GTK_WINDOW(gs_tlw_parent), s_widget);
+    }
+    return s_widget;
+}
+
+static void ContainerWidgetAddChild(GtkWidget* child)
+{
+    gtk_fixed_put(GTK_FIXED(ContainerWidget()), child, 0, 0);
+}
+#else
 static GtkContainer* ContainerWidget()
 {
     static GtkContainer* s_widget;
@@ -57,6 +80,12 @@ static GtkContainer* ContainerWidget()
     return s_widget;
 }
 
+static void ContainerWidgetAddChild(GtkWidget* child)
+{
+    gtk_container_add(ContainerWidget(), child);
+}
+#endif // __WXGTK4__/!__WXGTK4__
+
 static GtkWidget* ScrollBarWidget()
 {
     static GtkWidget* s_widget;
@@ -64,7 +93,7 @@ static GtkWidget* ScrollBarWidget()
     {
         s_widget = gtk_scrollbar_new(GTK_ORIENTATION_VERTICAL, nullptr);
         g_object_add_weak_pointer(G_OBJECT(s_widget), (void**)&s_widget);
-        gtk_container_add(ContainerWidget(), s_widget);
+        ContainerWidgetAddChild(s_widget);
 #ifndef __WXGTK3__
         gtk_widget_ensure_style(s_widget);
 #endif

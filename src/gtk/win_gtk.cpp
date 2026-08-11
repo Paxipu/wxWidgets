@@ -452,6 +452,7 @@ void wxPizza::put(GtkWidget* widget, int x, int y, int width, int height)
     m_children = g_list_append(m_children, child);
 }
 
+#ifndef __WXGTK4__
 struct AdjustData {
     GdkWindow* window;
     int dx, dy;
@@ -482,6 +483,7 @@ static void scroll_adjust(GtkWidget* widget, void* data)
     }
 }
 }
+#endif // !__WXGTK4__
 
 void wxPizza::scroll(int dx, int dy)
 {
@@ -492,6 +494,16 @@ void wxPizza::scroll(int dx, int dy)
 #endif
     m_scroll_x -= dx;
     m_scroll_y -= dy;
+#ifdef __WXGTK4__
+    // No more low-level pixel-blit scrolling under GTK4: GdkWindow and
+    // gdk_window_scroll() don't exist any more, and there's no direct
+    // replacement (compositing handles this differently now). A normal
+    // re-allocate is enough to get correct (if not blit-optimized)
+    // behavior, since size_allocate_child() above already positions
+    // every child from m_scroll_x/m_scroll_y on every allocation pass.
+    gtk_widget_queue_allocate(widget);
+    gtk_widget_queue_draw(widget);
+#else
     GdkWindow* window = gtk_widget_get_window(widget);
     if (window)
     {
@@ -501,6 +513,7 @@ void wxPizza::scroll(int dx, int dy)
         AdjustData data = { window, dx, dy };
         gtk_container_forall(GTK_CONTAINER(widget), scroll_adjust, &data);
     }
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 void wxPizza::get_border(GtkBorder& border)

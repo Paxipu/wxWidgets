@@ -209,8 +209,17 @@ bool wxGtkCalendarCtrl::SetDate(const wxDateTime& date)
     int year = date.GetYear();
     int month = date.GetMonth();
     int day = date.GetDay();
+#ifdef __WXGTK4__
+    // gtk_calendar_select_month() is gone under GTK4 -- gtk_calendar_
+    // select_day() now takes a full GDateTime (GLib months are 1-based,
+    // unlike wxDateTime::Month/GTK3's 0-based gtk_calendar_select_month()).
+    GDateTime* const dt = g_date_time_new_local(year, month + 1, day, 0, 0, 0);
+    gtk_calendar_select_day(GTK_CALENDAR(m_widget), dt);
+    g_date_time_unref(dt);
+#else
     gtk_calendar_select_month(GTK_CALENDAR(m_widget), month, year);
     gtk_calendar_select_day(GTK_CALENDAR(m_widget), day);
+#endif
 
     g_signal_handlers_unblock_by_func( m_widget,
         (gpointer) gtk_month_changed_callback, this);
@@ -223,7 +232,18 @@ bool wxGtkCalendarCtrl::SetDate(const wxDateTime& date)
 wxDateTime wxGtkCalendarCtrl::GetDate() const
 {
     guint year, monthGTK, day;
+#ifdef __WXGTK4__
+    // gtk_calendar_get_date() returns a GDateTime under GTK4 instead of
+    // filling in separate out-params; GLib months are 1-based, unlike
+    // wxDateTime::Month/GTK3's 0-based out-param.
+    GDateTime* const dt = gtk_calendar_get_date(GTK_CALENDAR(m_widget));
+    year = guint(g_date_time_get_year(dt));
+    monthGTK = guint(g_date_time_get_month(dt) - 1);
+    day = guint(g_date_time_get_day_of_month(dt));
+    g_date_time_unref(dt);
+#else
     gtk_calendar_get_date(GTK_CALENDAR(m_widget), &year, &monthGTK, &day);
+#endif
 
     // GTK may return an invalid date, this happens at least when switching the
     // month (or the year in case of February in a leap year) and the new month

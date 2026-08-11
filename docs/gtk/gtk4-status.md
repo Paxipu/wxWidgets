@@ -175,12 +175,92 @@ before/after error output rather than assuming the change was correct —
 worth calling out as the reason every batch in this file gets a rebuild
 before being called done.
 
+## Progress update 2: `GtkContainer`/`GtkBin` removal, first pass
+
+Also produced `docs/gtk/gtk4-phase3-input-model-design.md` (the
+event-controller input model design, Phase 3) in between the two
+progress updates in this file — see that document for why it stops at
+design rather than also implementing, unlike the Phase 2 window-model
+document. Decided to spend the next implementation pass on
+`GtkContainer`/`GtkBin` instead, since it's mechanical, independently
+compile-verifiable, and orthogonal to the input-model architecture
+question (see that design doc's closing recommendation).
+
+After this batch:
+
+- **1730** `error:` diagnostics (down from 1760)
+- **93** distinct failing files (unchanged — this batch reduced error
+  *density* per file, not the count of touched files, since none of the
+  5 files fixed were fully cleared)
+- **0** fatal errors (unchanged)
+- Verified no regressions: grepped the new build log for every API this
+  batch introduced (`gtk_scrolled_window_set_child`,
+  `gtk_frame_set_child`, `gtk_widget_unparent`, `gtk_widget_insert_after`,
+  `gtk_widget_queue_allocate`, `ContainerWidgetAddChild`) — none appear
+  in any error, and no `GTK_CONTAINER`/`GTK_BIN` errors remain in any of
+  the 5 touched files.
+
+Fixed: `window.cpp` (scrolled-window child, `Reparent()`'s generic
+`gtk_widget_unparent()`, `RealizeTabOrder()`'s tab-order-via-physical-
+reordering — flagged with a Z-order caveat needing runtime verification),
+`statbox.cpp` (`GtkFrame` child, a redundant remove call, a
+runtime-dead-under-GTK4 border-width fallback), `textctrl.cpp`
+(scrolled-window child), `settings.cpp` (`ContainerWidget()`'s scratch
+`GtkFixed` helper split GTK3/GTK4 behind a shared
+`ContainerWidgetAddChild()`), `win_gtk.cpp` (`wxPizza::scroll()`'s
+`gdk_window_scroll()` pixel-blit optimization, which has no GTK4
+equivalent at all, replaced with a plain re-allocate + redraw — correct
+since `size_allocate_child()` already positions children from
+`m_scroll_x`/`m_scroll_y` on every allocation pass, just not
+blit-optimized).
+
+**New finding while surveying the remaining `GtkContainer`/`GtkBin`
+occurrences**: not all of them are mechanical accessor renames. Two
+files depend on GTK widget *types* that GTK4 removed entirely, not just
+container/bin accessors on types that still exist:
+
+- **`src/gtk/toolbar.cpp`**: built on `GtkToolbar`/`GtkToolItem`, both
+  confirmed absent from GTK4 headers (0 hits grepping
+  `/usr/include/gtk-4.0/gtk/*.h`). `wxToolBar`'s native GTK backend needs
+  a real redesign — most likely composing a `GtkBox` of plain
+  `GtkButton`s by hand, similar to what other GTK4 apps do, or falling
+  back to wx's own generic toolbar implementation for this port. Not a
+  Phase 5 mechanical fix; deserves its own design pass.
+- **`src/gtk/radiobut.cpp`/`radiobox.cpp`**: built on `GtkRadioButton`,
+  also confirmed absent from GTK4 (same check, 0 hits). GTK4's
+  replacement is `GtkCheckButton` with `gtk_check_button_set_group()`
+  for the mutual-exclusion grouping that used to be `GtkRadioButton`'s
+  job. Same situation as toolbar.cpp — a real widget-backend redesign,
+  not a rename.
+- **`src/gtk/toplevel.cpp`**'s `GTKHandleRealized()` goes deeper than
+  its one `gtk_container_forall()` call (titlebar detection, left
+  unfixed since the function doesn't compile regardless): it also calls
+  `gdk_window_set_decorations()`/`set_functions()`/`set_cursor()` on the
+  toplevel's `GdkWindow`, none of which have direct GTK4 equivalents —
+  window-manager decoration/function hints are handled fundamentally
+  differently under GTK4's client-side-decoration model. Another
+  deferred redesign, not attempted here.
+
+These three join `taskbar.cpp` (`GtkStatusIcon`) and
+`uiactionx11.cpp` (`GdkWindow`-based input synthesis) as confirmed
+whole-subsystem redesigns rather than mechanical fixes — worth keeping
+as a distinct tracked category since lumping them in with the
+mechanical `GtkContainer`/`GtkBin` count understates how much design
+work (as opposed to translation work) is actually left.
+
 ## Not yet attempted / explicitly deferred
 
-- The bulk of the root-cause table above (`GtkContainer`/`GtkBin`
-  removal, DnD/clipboard rewrite, old style API, `gtk_box_pack_*`, file
-  choosers, deprecated type-check macros) — left for the phases the port
-  plan assigns them to.
+- The remainder of the mechanical `GtkContainer`/`GtkBin` occurrences not
+  covered by the first pass above, plus the rest of the root-cause table
+  (DnD/clipboard rewrite, old style API, `gtk_box_pack_*`, file choosers,
+  deprecated type-check macros) — left for the phases the port plan
+  assigns them to.
+- **Confirmed whole-subsystem redesigns** (not mechanical, need their own
+  design pass, not attempted): `toolbar.cpp` (`GtkToolbar`/`GtkToolItem`
+  removed), `radiobut.cpp`/`radiobox.cpp` (`GtkRadioButton` removed,
+  replacement is `GtkCheckButton` grouping), `toplevel.cpp`'s
+  `GTKHandleRealized()` (window-manager decoration/function/cursor hints
+  work fundamentally differently under GTK4's CSD model).
 - `src/gtk/taskbar.cpp`: has its own, deeper problem beyond anything in
   this file — `GtkStatusIcon` doesn't exist in GTK4 at all (system tray
   icons need the StatusNotifierItem D-Bus protocol or a library like

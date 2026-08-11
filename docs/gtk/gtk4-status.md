@@ -915,3 +915,29 @@ targets, zero regressions. Diagnostic count: 1455 → **1447**.
 Session running total (diagnostic count): 1760 → 1730 → 1641 → 1629 →
 1598 → 1577 → 1569 → 1555 → 1529 → 1494 → 1481 → 1474 → 1465 → 1455 →
 **1447**. Failing build targets: 78 → 72 → 69 → 66 → 64 → **62**.
+
+## Newly-scoped deferred item: `colour.cpp`'s `GdkColor`/`GetColor()` removal
+
+Investigated while looking for the next small fix; turned out much bigger
+than its 4-error count in `colour.cpp` itself suggests. `wxColourRefData`
+keeps a full `GdkColor` (`m_gdkColor`) alongside `GdkRGBA` even under
+GTK3, and the *actual* implementation of `Red()`/`Green()`/`Blue()`/
+`operator==` all read from `m_gdkColor`, not `m_gdkRGBA` — so this isn't
+just an unused legacy field, it's load-bearing for core colour-component
+access. `GdkColor` the type doesn't exist under GTK4 at all.
+
+Worse, `wxColourImpl::GetColor()` (returns `const GdkColor*`) is called
+from roughly a dozen other files: `dcclient.cpp` (`gdk_gc_set_foreground`/
+`background`, old `GdkGC`-based drawing — likely already GTK2-only dead
+code under GTK3+, but needs checking per call site, not assuming),
+`textctrl.cpp`, `window.cpp`, `dataview.cpp`, `listbox.cpp`, `cursor.cpp`,
+`clrpicker.cpp`, `colordlg.cpp`. Each call site needs individually
+classifying as either dead-under-GTK3+ (safe to leave broken/unreachable)
+or needing a real `GdkRGBA`-based rewrite — not something to batch-fix
+blindly, since `Red()`/`Green()`/`Blue()` correctness (rounding behavior
+converting `GdkRGBA`'s 0.0-1.0 floats to bytes) matters everywhere colour
+values get compared or cached. A proper fix would restructure
+`wxColourRefData`/`wxColourImpl` with a GTK4-only branch backed solely by
+`GdkRGBA`, then audit and fix each `GetColor()` caller — a bounded but
+real subsystem task, not attempted here. Candidate for a future batch
+alongside the `wxGtkStyleContext` rewrite (update 10).

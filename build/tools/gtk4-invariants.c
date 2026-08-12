@@ -33,6 +33,14 @@
 #include <stdio.h>
 #include <string.h>
 
+/* The gesture check needs to inject real clicks, which requires XTest. It is
+ * optional: without it that one check reports SKIP rather than failing, so
+ * this still builds and runs anywhere GTK4 does. */
+#ifdef HAVE_XTEST
+    #include <gdk/x11/gdkx.h>
+    #include <X11/extensions/XTest.h>
+#endif
+
 static int g_failures = 0;
 static int g_checks = 0;
 
@@ -335,6 +343,125 @@ static void test_theme_colour_names(void)
     g_object_unref(w);
 }
 
+#ifdef HAVE_XTEST
+
+/* Claiming a gesture sequence is what lets wx consume a click so a native
+ * control doesn't also act on it -- and, less obviously, what determines
+ * whether wx receives the *release* at all. Measured, not assumed: see
+ * docs/gtk/probes/gtk4-gesture-semantics.c and the comment on
+ * wx_gtk_button_pressed_callback() in src/gtk/window.cpp.
+ *
+ * If GTK ever changes this, wx clicks break in ways no compile check sees,
+ * which is exactly what this is here to catch. */
+static int gest_pressed, gest_released, native_clicked;
+static gboolean gest_claim;
+static GtkWidget *gest_win, *gest_button;
+
+static void gest_on_pressed(GtkGestureClick* g, int n, double x, double y, gpointer d)
+{
+    (void)n; (void)x; (void)y; (void)d;
+    gest_pressed++;
+    if (gest_claim)
+        gtk_gesture_set_state(GTK_GESTURE(g), GTK_EVENT_SEQUENCE_CLAIMED);
+}
+static void gest_on_released(GtkGestureClick* g, int n, double x, double y, gpointer d)
+{ (void)g;(void)n;(void)x;(void)y;(void)d; gest_released++; }
+static void gest_on_clicked(GtkButton* b, gpointer d)
+{ (void)b;(void)d; native_clicked++; }
+
+static gboolean gest_inject(gpointer d)
+{
+    (void)d;
+    GdkSurface* s = gtk_native_get_surface(gtk_widget_get_native(gest_win));
+    if (!GDK_IS_X11_SURFACE(s))
+        return G_SOURCE_REMOVE;
+
+    Display* dpy = GDK_SURFACE_XDISPLAY(s);
+    Window xw = GDK_SURFACE_XID(s);
+
+    graphene_rect_t b;
+    if (!gtk_widget_compute_bounds(gest_button, gest_win, &b))
+        return G_SOURCE_REMOVE;
+
+    Window child; int rx = 0, ry = 0;
+    XTranslateCoordinates(dpy, xw, DefaultRootWindow(dpy),
+                          (int)(b.origin.x + b.size.width / 2),
+                          (int)(b.origin.y + b.size.height / 2),
+                          &rx, &ry, &child);
+
+    XTestFakeMotionEvent(dpy, -1, rx, ry, 0); XFlush(dpy);
+    XTestFakeButtonEvent(dpy, 1, True, CurrentTime); XFlush(dpy);
+    XTestFakeButtonEvent(dpy, 1, False, CurrentTime); XFlush(dpy);
+    return G_SOURCE_REMOVE;
+}
+static gboolean gest_finish(gpointer d)
+{ (void)d; gtk_window_destroy(GTK_WINDOW(gest_win)); return G_SOURCE_REMOVE; }
+
+static void gest_run(gboolean claim)
+{
+    gest_claim = claim;
+    gest_pressed = gest_released = native_clicked = 0;
+
+    gest_win = gtk_window_new();
+    gtk_window_set_default_size(GTK_WINDOW(gest_win), 300, 200);
+    gest_button = gtk_button_new_with_label("target");
+    gtk_window_set_child(GTK_WINDOW(gest_win), gest_button);
+    g_signal_connect(gest_button, "clicked", G_CALLBACK(gest_on_clicked), NULL);
+
+    GtkGesture* g = gtk_gesture_click_new();
+    g_signal_connect(g, "pressed", G_CALLBACK(gest_on_pressed), NULL);
+    g_signal_connect(g, "released", G_CALLBACK(gest_on_released), NULL);
+    gtk_widget_add_controller(gest_button, GTK_EVENT_CONTROLLER(g));
+
+    gtk_window_present(GTK_WINDOW(gest_win));
+    g_timeout_add(500, gest_inject, NULL);
+    g_timeout_add(2000, gest_finish, NULL);
+
+    GMainLoop* loop = g_main_loop_new(NULL, FALSE);
+    g_signal_connect_swapped(gest_win, "destroy", G_CALLBACK(g_main_loop_quit), loop);
+    g_main_loop_run(loop);
+    g_main_loop_unref(loop);
+}
+
+static void test_gesture_claim_semantics(void)
+{
+    printf("GtkGestureClick claim semantics (real injected clicks)\n");
+
+    gest_run(FALSE);
+    const int noclaim_press = gest_pressed, noclaim_release = gest_released,
+              noclaim_native = native_clicked;
+
+    if (!noclaim_press)
+    {
+        /* Injection didn't land -- no window manager, pointer grabbed, XTest
+         * refused. Skip rather than report a failure we can't attribute. */
+        soft(0, "click injection did not reach the window; gesture checks skipped",
+             "not a GTK behaviour change, an environment limitation");
+        return;
+    }
+
+    gest_run(TRUE);
+
+    check(noclaim_native == 1,
+          "not claiming lets the native control act",
+          "wx would no longer be able to let a click through to a native control");
+    check(native_clicked == 0,
+          "claiming suppresses the native control",
+          "wx can no longer consume a click; GTK3's 'handler returned TRUE' is lost");
+    check(gest_released == 1,
+          "claiming delivers the release",
+          "press/release pairing is broken even when wx claims the sequence");
+
+    /* Not a failure -- this is the documented GTK4 behaviour the port works
+     * around -- but if it ever changes, window.cpp's comment and the residual
+     * gap it describes should be revisited. */
+    soft(noclaim_release == 0,
+         "unclaimed press on a native control still yields no release (as documented)",
+         "GTK now delivers it; the caveat in window.cpp can be dropped");
+}
+
+#endif /* HAVE_XTEST */
+
 int main(void)
 {
     if (!gtk_init_check())
@@ -360,6 +487,12 @@ int main(void)
     test_scratch_hierarchy_lifecycle();
     printf("\n");
     test_theme_colour_names();
+#ifdef HAVE_XTEST
+    printf("\n");
+    test_gesture_claim_semantics();
+#else
+    printf("\n(built without XTest: gesture claim semantics not checked)\n");
+#endif
 
     printf("\n%d checks, %d failed\n", g_checks, g_failures);
     if (g_failures)

@@ -345,8 +345,18 @@ jobs:
           # not a crash -- so check them explicitly. Needs only GTK, not libwx,
           # so it runs regardless of how far the port currently builds.
           # See docs/gtk/gtk4-stylecontext-design.md.
+          # XTest is optional: it enables the gesture-semantics checks, which
+          # need real injected clicks. Without it those are simply not built,
+          # and without a usable display they report SKIP rather than failing.
+          if pkg-config --exists xtst; then
+            xtest_flags="-DHAVE_XTEST $(pkg-config --cflags --libs xtst) -lX11"
+          else
+            xtest_flags=""
+            echo "note: XTest not available, gesture checks will be skipped"
+          fi
           gcc -o /tmp/gtk4-invariants build/tools/gtk4-invariants.c \
-              $(pkg-config --cflags --libs gtk4) -Wno-deprecated-declarations
+              $(pkg-config --cflags --libs gtk4) $xtest_flags \
+              -Wno-deprecated-declarations
           xvfb-run -a /tmp/gtk4-invariants
 
       - name: Building

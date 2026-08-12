@@ -916,6 +916,212 @@ Session running total (diagnostic count): 1760 → 1730 → 1641 → 1629 →
 1598 → 1577 → 1569 → 1555 → 1529 → 1494 → 1481 → 1474 → 1465 → 1455 →
 **1447**. Failing build targets: 78 → 72 → 69 → 66 → 64 → **62**.
 
+## Progress update 15: the `GTKGetWindow()` family removed, plus display/icon-theme ports
+
+First session in a fresh container. Worth recording for whoever picks
+this up next: **the build tree does not survive**, only the git tree
+does. Re-running the `configure` line at the top of this file and
+`make -k -j4` reproduced update 14's numbers exactly (1447 errors, 0
+fatal, 62 failing targets), which is a useful confirmation that the
+recorded state is real and nothing was lost between sessions.
+
+Also set up a **second, GTK3 configure tree** (`/home/user/wxbuild-gtk3`,
+`--with-gtk=3`, otherwise identical flags) purely so every file touched
+can be syntax-checked against *both* real GTK4 4.14.5 and real GTK3
+3.24.41 headers before being called done. Previous updates describe doing
+this; having a standing GTK3 tree makes it one command instead of a
+setup step, and it caught nothing this session, which is the point —
+it's the check that says the `#ifdef` split is right.
+
+### The structural piece: `GTKGetWindow()` is obsolete, not portable
+
+`gtk_widget_get_window` has been the headline blocker since the very
+first table in this file, and the ~18 per-widget `GTKGetWindow()`
+overrides were the largest single block of it. Both the Phase 2 and
+Phase 3 design docs deferred them as "not safe to stub blind".
+
+Tracing what the return value is actually *used* for settles it, and the
+answer is that the whole mechanism has no purpose left under GTK4:
+
+- **`GTKIsOwnWindow()`**, one of its two consumers, has **no callers
+  anywhere in the tree.** It's dead code.
+- **`GTKSetCursorForAllWindows()`**, the other, exists solely to push a
+  `GdkCursor` onto each of those windows one at a time. Under GTK4
+  `gtk_widget_set_cursor()` sets the cursor for a widget *and all its
+  children by inheritance* in a single call — which is exactly the
+  simplification already made and accepted for `cursor.cpp`'s
+  `SetGlobalCursor()` back in update 7.
+
+So the family is compiled out under GTK4 rather than given an invented
+meaning in a toolkit where widgets have no windows, and
+`GTKSetCursor()`/`GTKUpdateCursor()` get direct `gtk_widget_set_cursor()`
+implementations. `GTKUpdateCursor()`'s trailing "prod the native widget
+into restoring its own cursor" loop goes too: it only existed because
+GTK3 native widgets set cursors on their private `GdkWindow`s, and under
+GTK4 they set them on themselves, where a cursor set on an *ancestor*
+doesn't override them in the first place.
+
+This is a behaviour-affecting decision, not a rename, and **cursor
+handling is exactly the sort of thing that needs runtime verification
+once `test_gui` links** — flagging it here in the same spirit as the
+Tab-order Z-order and `wxGetMouseState` caveats. But it is a reasoned
+removal with evidence, not a blind stub, and it unblocks a dozen files
+that were otherwise capped.
+
+### Two latent runtime bugs found, neither of which the compiler reports
+
+Both are the same shape and worth watching for in the remaining files,
+because **they compile cleanly and would only fail at runtime**: a
+`GTK_FOO()` cast to a type the widget no longer derives from, where
+`GtkFoo` itself still exists under GTK4 so nothing is undeclared.
+
+- `spinctrl.cpp` cast a `GtkSpinButton` to `GtkEntry` for
+  `gtk_entry_set_alignment()`. `GtkSpinButton` is not a `GtkEntry`
+  subclass under GTK4 (it implements `GtkEditable` instead), but
+  `GtkEntry` and that function both still exist, so it compiled.
+- `checkbox.cpp` cast a `GtkCheckButton` to `GtkToggleButton` for the
+  active/inconsistent accessors. Same situation: `GtkCheckButton` no
+  longer derives from `GtkToggleButton` under GTK4, but `GtkToggleButton`
+  is still there.
+
+Grepping for `GTK_ENTRY(`, `GTK_TOGGLE_BUTTON(`, `GTK_BUTTON(` and
+friends on widgets whose GTK4 class hierarchy changed is a cheap
+sweep that would likely find more of these, and none of them will ever
+show up in the error count.
+
+### A methodology note on the error count itself
+
+gcc reports an undeclared identifier **only once per function**. In
+`spinctrl.cpp`'s `DoGetSizeFromTextSize()` this hid a second
+`gtk_entry_set_width_chars()` call, on the line restoring the original
+width, which the build log never mentioned. So "fix every error the log
+lists for this file" is not the same as "fix this file" — after editing,
+re-grep the function for the old symbol rather than trusting the
+diagnostic list to be exhaustive.
+
+### Shims added to `gtk3-compat.h`
+
+Four API changes were each about to get their fourth or fifth
+copy-pasted per-call-site fix, so they're now shimmed centrally
+alongside the existing `gtk_box_pack_start()`/`gtk_widget_get_toplevel()`
+ones:
+
+- `gtk_widget_get_preferred_width()`/`get_preferred_height()`/
+  `get_preferred_height_for_width()` → `gtk_widget_measure()`. This is
+  the pattern that had already recurred in `win_gtk.cpp` (update 8),
+  `mdi.cpp`/`activityindicator.cpp` (update 11) and `gauge.cpp`
+  (update 14).
+- `gtk_box_reorder_child()` → `gtk_box_reorder_child_after()`, walking
+  the box's children to turn the index into a sibling reference (and
+  skipping the child being moved while counting, as GTK3 did).
+- The `GtkEntry` → `GtkEditable` text/width/alignment moves. This one is
+  shimmed in the *opposite* direction — GTK4 spelling at the call sites,
+  mapped back to `GtkEntry` for older GTK — because `GtkSpinButton`
+  genuinely isn't a `GtkEntry` under GTK4, so the call sites have to use
+  the `GtkEditable` names.
+- `wx_gtk_widget_remove_from_parent()` for `gtk_container_remove()`.
+  Deliberately **not** a blanket `gtk_container_remove` shim: for the
+  simple multi-child containers (`GtkBox`, `wxPizza`) it is exactly
+  `gtk_widget_unparent()`, but for single-child containers like
+  `GtkScrolledWindow` and `GtkFrame`, which keep their own pointer to
+  the child, unparenting directly would leave that pointer dangling.
+  The helper is documented as unusable for those.
+
+### Files ported
+
+- **`display.cpp`** — the `GListModel` monitor rewrite scoped but not
+  started in update 7. Beyond the mechanical part, three APIs have no
+  GTK4 equivalent: `gdk_display_get_monitor_at_point()` (replaced by
+  scanning the monitor list, which also subsumes the containment check
+  the old code needed because that function returned the merely
+  *nearest* monitor); `gdk_monitor_is_primary()` and the whole primary
+  monitor concept (dropped the `IsPrimary()` override, the base class
+  already treats monitor 0 as primary — which is also the new fallback
+  in `GetFromWindow()`); and `gdk_monitor_get_workarea()`. That last one
+  is a **real fidelity gap**: it's gone because the work area can't be
+  determined under Wayland, but it survives in the X11 backend as
+  `gdk_x11_monitor_get_workarea()`, so it's used when running under X11
+  and falls back to full geometry otherwise — meaning `GetClientArea()`
+  wrongly includes panels and docks under Wayland. Also implemented
+  `GetRawPPI()`, which the never-compiled GTK4 branch simply lacked.
+- **`artgtk.cpp`/`mimetype.cpp`** — the GTK4 icon theme API. Lookups
+  return a `GtkIconPaintable`, meant to be *drawn* rather than turned
+  into pixels, so both files go via the file the icon was loaded from
+  (which also handles resource-backed icons for free: there's no path
+  and `g_file_get_path()` returns null, exactly what the callers want).
+  Note that the GTK4 lookup **never fails**, falling back to the
+  "missing image" icon, so `gtk_icon_theme_has_icon()` has to be checked
+  first to preserve the "not found" result. GTK4 also removed the named
+  icon sizes and `gtk_icon_size_lookup()`; since `artgtk.cpp` uses named
+  sizes throughout as a way of *naming pixel sizes*, a `wxGtkIconSize`
+  abstraction (real `GtkIconSize` for GTK3, plain pixels for GTK4, using
+  GTK3's default values) keeps all the closest-size and art-client
+  mapping logic unchanged. **Known gap**: `CreateIconBundle()` used
+  `gtk_icon_theme_get_icon_sizes()` to ask which sizes an icon really
+  exists in, and GTK4 has nothing equivalent, so it now requests a fixed
+  set of standard sizes and lets the lookup scale.
+- **`spinctrl.cpp`**, **`frame.cpp`**, **`collpane.cpp`** — the new
+  shims plus, for collpane, `gtk_expander_set_child()` and dropping the
+  `gtk_expander_get_spacing()` term (GTK4 has no spacing property; the
+  gap is CSS and can't be queried).
+- **`checkbox.cpp`** — `GtkCheckButton`'s own API, plus creating the
+  label widget explicitly, since the one made by
+  `gtk_check_button_new_with_label()` is an unreachable internal detail
+  under GTK4 and wx needs a real `GtkLabel` to style and hide. Uses
+  `gtk_check_button_set_child()`, which unlike everything else used here
+  is `GDK_AVAILABLE_IN_4_8` rather than `_IN_ALL` — noted because
+  update 12 deliberately preferred `_IN_ALL` for `calctrl.cpp`; there
+  is no `_IN_ALL` way to own the label, so this is a considered
+  exception rather than an oversight.
+- **`aboutdlg.cpp`** — `gtk_about_dialog_set_logo()` takes a
+  `GdkPaintable` now, so the pixbuf gets wrapped in a `GdkTexture`. The
+  HiDPI hand-drawing workaround is skipped under GTK4: it's built on
+  `gtk_container_forall()` and the `"draw"` signal, and a texture
+  carries its own scale anyway.
+- **`fontdlg.cpp`** — all three `GtkFontSelectionDialog` uses are the
+  fallback taken when `gtk_check_version(3,2,0)` fails, unreachable
+  under GTK4, so simply compiled out.
+- **`statbox.cpp`** — `gtk_frame_set_label_align()` lost its `yalign`
+  parameter and the style getters lost their state parameter. Clears all
+  of the file's *own* errors, but it still fails via `stylecontext.h`
+  (see below).
+- **`addremovectrl.h`** — its toolbar appearance tweak is skipped under
+  GTK4: it styles the `GtkToolbar` behind `wxToolBar`, which has no GTK4
+  backend yet, and uses style context junction sides, gone with the rest
+  of the pre-CSS styling API.
+
+### Numbers
+
+Every batch verified by a full `make -k -j4` and a failing-**target**
+diff (the update 10 methodology), with zero regressions at each step:
+1447 → 1410 → 1386 → 1350 → **1329** diagnostics; failing build targets
+62 → 59 → 58 → 54 → **52**. Ten targets fully cleared: `display.o`,
+`frame.o`, `spinctrl.o`, `collpane.o`, `addremovectrl.o`, `artgtk.o`,
+`aboutdlg.o`, `mimetype.o`, `checkbox.o`, `fontdlg.o`.
+
+### What the next session should probably pick up
+
+`wxGtkStyleContext`/`GtkWidgetPath` (`stylecontext.h`), already scoped in
+update 10, is now clearly **the highest-leverage remaining item**: it is
+the *sole* remaining blocker for `statbox.cpp` after this session's fix,
+and it also blocks `notebook.cpp`, `renderer.cpp` and parts of
+`settings.cpp`. Nothing else remaining unblocks four files at once.
+
+Everything else near the top of the list is entangled in an
+already-deferred subsystem: `msgdlg.cpp` and `dirdlg.cpp` need the
+`gtk_dialog_run()` async-modal redesign, `scrolbar.cpp`/`slider.cpp`/
+`srchctrl.cpp` need Phase 3's event controllers, `image_gtk.cpp` and
+`cairo.h` need Phase 4's snapshot migration, `textentry.cpp` is three
+easy fixes plus one Phase 3 one (`gtk_entry_im_context_filter_keypress`),
+and `hyperlink.cpp` needs the `colour.cpp` `GdkColor` work scoped below.
+
+One genuinely new deferred item found this session:
+**`nonownedwnd.cpp`'s `gdk_window_shape_combine_region()`** (3 call
+sites). GTK4 removed shaped windows outright — there is no replacement,
+as compositors handle transparency instead. `wxNonOwnedWindow::SetShape`
+is public API, so this needs a real decision (report failure? approximate
+with an alpha-masked CSS/snapshot render?) rather than a mechanical fix.
+
 ## Newly-scoped deferred item: `colour.cpp`'s `GdkColor`/`GetColor()` removal
 
 Investigated while looking for the next small fix; turned out much bigger

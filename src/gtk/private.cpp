@@ -225,7 +225,15 @@ GtkWidget * GetRadioButtonWidget()
 
     if ( !s_button )
     {
+#ifdef __WXGTK4__
+        // GtkRadioButton doesn't exist under GTK4, a radio button being a
+        // GtkCheckButton in a group there. This widget only exists to query
+        // theme attributes such as the default font and colours, which don't
+        // depend on the group, so a plain check button will do.
+        s_button = gtk_check_button_new();
+#else
         s_button = gtk_radio_button_new(nullptr);
+#endif
         g_object_add_weak_pointer(G_OBJECT(s_button), (void**)&s_button);
         AddToContainer(s_button);
         gtk_widget_realize( s_button );

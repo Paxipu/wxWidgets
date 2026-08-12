@@ -115,6 +115,7 @@ static GtkWidgetClass* wxGtkImageParentClass;
 
 extern "C"
 {
+#ifndef __WXGTK4__
 #ifdef __WXGTK3__
 static gboolean wxGtkImageDraw(GtkWidget* widget, cairo_t* cr)
 #else
@@ -159,6 +160,7 @@ static gboolean wxGtkImageDraw(GtkWidget* widget, GdkEventExpose* event)
 #endif
     return false;
 }
+#endif // !__WXGTK4__
 
 static void wxGtkImageFinalize(GObject* object)
 {
@@ -168,9 +170,51 @@ static void wxGtkImageFinalize(GObject* object)
     G_OBJECT_CLASS(wxGtkImageParentClass)->finalize(object);
 }
 
+#ifdef __WXGTK4__
+
+// GTK4 replaced the draw vfunc with snapshot; take the same cairo escape hatch
+// wxPizza does (see pizza_snapshot() in win_gtk.cpp) so the drawing code below
+// is shared rather than reimplemented on render nodes.
+static void wxGtkImageSnapshot(GtkWidget* widget, GtkSnapshot* snapshot)
+{
+    const int w = gtk_widget_get_width(widget);
+    const int h = gtk_widget_get_height(widget);
+    if ( w <= 0 || h <= 0 )
+        return;
+
+    wxGtkImage* image = WX_GTK_IMAGE(widget);
+    const wxBitmap bitmap(image->m_provider->Get(gtk_widget_get_scale_factor(widget)));
+
+    if ( !bitmap.IsOk() )
+    {
+        // Missing bitmap, let GTK draw its default.
+        wxGtkImageParentClass->snapshot(widget, snapshot);
+        return;
+    }
+
+    graphene_rect_t bounds;
+    bounds.origin.x = 0;
+    bounds.origin.y = 0;
+    bounds.size.width = float(w);
+    bounds.size.height = float(h);
+
+    cairo_t* const cr = gtk_snapshot_append_cairo(snapshot, &bounds);
+
+    gtk_render_background(gtk_widget_get_style_context(widget), cr, 0, 0, w, h);
+    bitmap.Draw(cr,
+                (w - int(bitmap.GetLogicalWidth() )) / 2,
+                (h - int(bitmap.GetLogicalHeight())) / 2);
+
+    cairo_destroy(cr);
+}
+
+#endif // __WXGTK4__
+
 static void wxGtkImageClassInit(void* g_class, void* /*class_data*/)
 {
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    GTK_WIDGET_CLASS(g_class)->snapshot = wxGtkImageSnapshot;
+#elif defined(__WXGTK3__)
     GTK_WIDGET_CLASS(g_class)->draw = wxGtkImageDraw;
 #else
     GTK_WIDGET_CLASS(g_class)->expose_event = wxGtkImageDraw;

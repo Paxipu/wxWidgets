@@ -1194,15 +1194,27 @@ static void wxFillOtherKeyEventFields(wxKeyEvent& event,
 
     event.m_shiftDown = (keyData.state & GDK_SHIFT_MASK) != 0;
     event.m_controlDown = (keyData.state & GDK_CONTROL_MASK) != 0;
+#ifdef __WXGTK4__
+    event.m_altDown = (keyData.state & GDK_ALT_MASK) != 0;
+#else
     event.m_altDown = (keyData.state & GDK_MOD1_MASK) != 0;
+#endif
     event.m_metaDown = (keyData.state & GDK_META_MASK) != 0;
 
     // At least with current Linux systems, MOD5 corresponds to AltGr key and
     // we represent it, for consistency with Windows, which really allows to
     // use Ctrl+Alt as a replacement for AltGr if this key is not present, as a
     // combination of these two modifiers.
+#ifdef __WXGTK4__
+    // GDK_MOD5_MASK is gone under GTK4: the modifier enum was trimmed to the
+    // named modifiers, so the AltGr-as-Ctrl+Alt convention below cannot be
+    // detected. Known gap; AltGr will report as neither.
+    if ( false )
+    {
+#else
     if ( keyData.state & GDK_MOD5_MASK )
     {
+#endif
         event.m_controlDown =
         event.m_altDown = true;
     }
@@ -3423,7 +3435,11 @@ void wxWindowGTK::GTKHandleRealized()
             g_signal_connect(m_imContext,
                 "commit", G_CALLBACK(gtk_wxwindow_commit_cb), this);
         }
+#ifdef __WXGTK4__
+        gtk_im_context_set_client_widget(m_imContext, GetConnectWidget());
+#else
         gtk_im_context_set_client_window(m_imContext, window);
+#endif
     }
 
     // Use composited window if background is transparent, if supported.
@@ -3481,7 +3497,13 @@ void wxWindowGTK::GTKHandleUnrealized()
     if (m_wxwindow)
     {
         if (m_imContext)
+        {
+#ifdef __WXGTK4__
+            gtk_im_context_set_client_widget(m_imContext, nullptr);
+#else
             gtk_im_context_set_client_window(m_imContext, nullptr);
+#endif
+        }
     }
 }
 
@@ -3592,7 +3614,11 @@ wxMouseState wxGetMouseState()
 
     ms.SetControlDown((mask & GDK_CONTROL_MASK) != 0);
     ms.SetShiftDown((mask & GDK_SHIFT_MASK) != 0);
+#ifdef __WXGTK4__
+    ms.SetAltDown((mask & GDK_ALT_MASK) != 0);
+#else
     ms.SetAltDown((mask & GDK_MOD1_MASK) != 0);
+#endif
     ms.SetMetaDown((mask & GDK_META_MASK) != 0);
 
     return ms;
@@ -4610,11 +4636,8 @@ wxEmulateMotionEvent(GtkWidget* widget, GdkEventTouch* gdk_event, wxWindow* win)
                                     win, true);
 }
 
-#endif // !__WXGTK4__
-
 } // anonymous namespace
 
-#ifndef __WXGTK4__
 extern "C" {
 static gboolean
 touch_callback(GtkWidget* widget, GdkEventTouch* gdk_event, wxWindow* win)
@@ -7409,6 +7432,21 @@ void wxPopupMenuPositionCallback( GtkMenu *menu,
 
 bool wxWindowGTK::DoPopupMenu( wxMenu *menu, int x, int y )
 {
+#ifdef __WXGTK4__
+    // GtkMenu and the whole gtk_menu_popup*() family are gone under GTK4;
+    // menus are GMenuModel + GtkPopoverMenu now, and the modal "spin the main
+    // loop until the menu closes" idiom below has no equivalent either
+    // (gtk_main_iteration() is also gone, and popovers are not modal in that
+    // sense). Porting this needs the menu subsystem rewrite that menu.cpp is
+    // already deferred behind, so rather than fake it, this reports failure --
+    // the documented, checkable behaviour for "no popup menu support yet".
+    wxUnusedVar(menu);
+    wxUnusedVar(x);
+    wxUnusedVar(y);
+
+    wxLogDebug("wxWindow::PopupMenu() is not implemented under GTK4 yet");
+    return false;
+#else
     wxCHECK_MSG( m_widget != nullptr, false, wxT("invalid window") );
 
     GTKSetLayout(menu->m_menu, GetLayoutDirection());
@@ -7514,6 +7552,7 @@ bool wxWindowGTK::DoPopupMenu( wxMenu *menu, int x, int y )
     }
 
     return true;
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 #endif // wxUSE_MENUS_NATIVE
@@ -7653,6 +7692,23 @@ void wxWindowGTK::DoCaptureMouse()
 {
     wxCHECK_RET( m_widget != nullptr, wxT("invalid window") );
 
+#ifdef __WXGTK4__
+    // GTK4 removed every explicit pointer-grab API (gdk_seat_grab(),
+    // gdk_pointer_grab(), gtk_grab_add()) with no replacement, because it
+    // grabs implicitly instead: a gesture that claims a pointer sequence keeps
+    // receiving that sequence's events until it ends, wherever the pointer
+    // goes.
+    //
+    // That covers what wxWindow::CaptureMouse() is overwhelmingly used for --
+    // tracking a drag between button-down and button-up -- so the bookkeeping
+    // below is enough for that case, and the motion handler's g_captureWindow
+    // path continues to work as before.
+    //
+    // What it does NOT cover is capturing outside a pointer sequence (e.g.
+    // from a hover or a timer): there is no sequence to be implicitly grabbed,
+    // so events will not be redirected to this window. Known gap, not runtime-
+    // verified; see docs/gtk/gtk4-status.md.
+#else
     GdkWindow* const window = GTKGetConnectWindow();
     wxCHECK_RET( window, wxT("CaptureMouse() failed") );
 
@@ -7681,6 +7737,8 @@ void wxWindowGTK::DoCaptureMouse()
                           (guint32)GDK_CURRENT_TIME );
         wxGCC_WARNING_RESTORE()
     }
+#endif // __WXGTK4__/!__WXGTK4__
+
     g_captureWindow = this;
     g_captureWindowHasMouse = true;
 }
@@ -7693,6 +7751,7 @@ void wxWindowGTK::DoReleaseMouse()
 
     g_captureWindow = nullptr;
 
+#ifndef __WXGTK4__
     GdkWindow* const window = GTKGetConnectWindow();
 
     if (!window)
@@ -7709,6 +7768,11 @@ void wxWindowGTK::DoReleaseMouse()
         gdk_display_pointer_ungrab(display, unsigned(GDK_CURRENT_TIME));
         wxGCC_WARNING_RESTORE()
     }
+#else
+    // Nothing to ungrab: GTK4 has no explicit grabs, and the implicit one a
+    // gesture holds is released when its pointer sequence ends. See
+    // DoCaptureMouse() above.
+#endif
 }
 
 void wxWindowGTK::GTKReleaseMouseAndNotify()

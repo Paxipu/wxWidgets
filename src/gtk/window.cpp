@@ -2225,6 +2225,7 @@ static void SendSetCursorEvent(wxWindowGTK* win, int x, int y)
 // "motion_notify_event"
 //-----------------------------------------------------------------------------
 
+#ifndef __WXGTK4__
 gboolean
 wxGTKImpl::WindowMotionCallback(GtkWidget* WXUNUSED(widget),
                                        GdkEventMotion* gdk_event,
@@ -2358,6 +2359,7 @@ gtk_window_motion_notify_callback( GtkWidget * widget,
 }
 
 } // extern "C"
+#endif // !__WXGTK4__
 
 //-----------------------------------------------------------------------------
 // "scroll_event" (mouse wheel event)
@@ -2666,6 +2668,7 @@ gboolean SendEnterLeaveEvents(wxWindowGTK* win, EventType* gdk_event)
 
 } // namespace wxGTKImpl
 
+#ifndef __WXGTK4__
 // This is a (internally) public function used by wxChoice too.
 gboolean
 wxGTKImpl::WindowEnterCallback(GtkWidget* WXUNUSED_UNLESS_DEBUG(widget),
@@ -2707,11 +2710,13 @@ gtk_window_enter_callback( GtkWidget* widget,
 }
 
 } // extern "C"
+#endif // !__WXGTK4__
 
 //-----------------------------------------------------------------------------
 // "leave_notify_event"
 //-----------------------------------------------------------------------------
 
+#ifndef __WXGTK4__
 gboolean
 wxGTKImpl::WindowLeaveCallback(GtkWidget* WXUNUSED_UNLESS_DEBUG(widget),
                                GdkEventCrossing* gdk_event,
@@ -2741,9 +2746,262 @@ wxGTKImpl::WindowLeaveCallback(GtkWidget* WXUNUSED_UNLESS_DEBUG(widget),
 
     return win->GTKProcessEvent(event);
 }
+#endif // !__WXGTK4__
+
+#ifdef __WXGTK4__
+
+namespace wxGTKImpl
+{
+
+// Send the leave event for the previously-entered window, if any, then the
+// enter event for this one. GTK4 counterpart of the GdkEventCrossing-templated
+// version above; the coordinates come from the controller rather than from the
+// event, which is opaque.
+static bool SendEnterLeaveEvents(wxWindowGTK* win, GdkEvent* gdk_event,
+                                 double x, double y)
+{
+    if ( g_windowUnderMouse )
+    {
+        // We must not have got the leave event for the previous window, so
+        // generate it now -- better late than never.
+        wxMouseEvent event( wxEVT_LEAVE_WINDOW );
+        InitMouseEvent(g_windowUnderMouse, event, gdk_event, x, y);
+
+        (void)g_windowUnderMouse->GTKProcessEvent(event);
+    }
+
+    g_windowUnderMouse = win;
+
+    wxMouseEvent event( wxEVT_ENTER_WINDOW );
+    InitMouseEvent(win, event, gdk_event, x, y);
+
+    if ( !g_captureWindow )
+        SendSetCursorEvent(win, event.m_x, event.m_y);
+
+    return win->GTKProcessEvent(event);
+}
+
+// Is the pointer, at (x, y) in widget coordinates, actually over this widget?
+//
+// GTK3 answered this by asking GDK which GdkWindow was under the pointer and
+// comparing it with the one the event was delivered for. GTK4 has no per-widget
+// windows, so the equivalent question is which *widget* is picked at that
+// point, and whether it is this widget or something inside it.
+static bool PointerIsOverWidget(wxWindowGTK* win, GtkWidget* widget,
+                                double x, double y)
+{
+    GtkNative* const native = gtk_widget_get_native(widget);
+    if ( !native )
+        return false;
+
+    graphene_point_t in;
+    in.x = float(x);
+    in.y = float(y);
+
+    graphene_point_t out;
+    if ( !gtk_widget_compute_point(widget, GTK_WIDGET(native), &in, &out) )
+        return false;
+
+    GtkWidget* const picked =
+        gtk_widget_pick(GTK_WIDGET(native), out.x, out.y, GTK_PICK_DEFAULT);
+
+    for ( GtkWidget* w = picked; w; w = gtk_widget_get_parent(w) )
+    {
+        if ( w == widget )
+            return true;
+
+        // Don't treat an overlay scrollbar belonging to this window as a
+        // different window: same special case the GTK3 code made, expressed
+        // in terms of widgets rather than GdkWindows.
+        if ( GTK_IS_SCROLLBAR(w) )
+        {
+            GtkWidget* const parent = gtk_widget_get_parent(w);
+            if ( parent == win->m_widget && GTK_IS_SCROLLED_WINDOW(parent) )
+                return true;
+        }
+    }
+
+    return false;
+}
+
+} // namespace wxGTKImpl
+
+bool
+wxGTKImpl::WindowEnterCallback(wxWindowGTK* win, GdkEvent* gdk_event,
+                               double x, double y)
+{
+    if ( AreGTKEventsBlocked() )
+        return false;
+
+    // GTK3 ignored crossing events whose mode wasn't GDK_CROSSING_NORMAL, i.e.
+    // those synthesised by a grab being taken or released. GTK4 doesn't
+    // deliver those to a motion controller at all unless it was created with
+    // GTK_EVENT_CONTROLLER_SCOPE_CAPTURE, so there is nothing to filter here.
+
+    if ( g_windowUnderMouse == win )
+    {
+        // This can happen if the enter event was generated from another
+        // callback, as is the case for wxSearchCtrl, for example.
+        wxLogTrace(TRACE_MOUSE, "Reentering window %s", wxDumpWindow(win));
+        return false;
+    }
+
+    return SendEnterLeaveEvents(win, gdk_event, x, y);
+}
+
+bool
+wxGTKImpl::WindowLeaveCallback(wxWindowGTK* win, GdkEvent* gdk_event)
+{
+    if ( AreGTKEventsBlocked() )
+        return false;
+
+    if (win->m_needCursorReset)
+        win->GTKUpdateCursor();
+
+    if ( win == g_windowUnderMouse )
+        g_windowUnderMouse = nullptr;
+
+    // GtkEventControllerMotion::leave carries no coordinates, unlike GTK3's
+    // GdkEventCrossing. Recover them from the event where possible so the
+    // wxMouseEvent still reports where the pointer left; fall back to the
+    // origin if the event doesn't have a position either.
+    double x = 0, y = 0;
+    if ( gdk_event )
+        gdk_event_get_position(gdk_event, &x, &y);
+
+    wxMouseEvent event( wxEVT_LEAVE_WINDOW );
+    InitMouseEvent(win, event, gdk_event, x, y);
+
+    return win->GTKProcessEvent(event);
+}
+
+bool
+wxGTKImpl::WindowMotionCallback(wxWindowGTK* win, GdkEvent* gdk_event,
+                                double x, double y, bool synthesized)
+{
+    // No EventAlreadyProcessed() check: see the comment on the key-pressed
+    // callback. A controller only fires for the widget it is attached to, so
+    // the same native event is not seen by several wxWindows.
+
+    if ( AreGTKEventsBlocked() )
+        return false;
+
+    wxMouseEvent event( wxEVT_MOTION );
+    InitMouseEvent(win, event, gdk_event, x, y);
+    event.m_synthesized = synthesized;
+
+    if ( g_captureWindow )
+    {
+        // Synthesise a mouse enter or leave event if needed.
+        bool isOut = true;
+        bool hasMouse = false;
+
+        if ( x >= 0 && y >= 0 )
+        {
+            const wxSize size(win->GetClientSize());
+            if ( x < size.x && y < size.y )
+            {
+                isOut = false;
+                hasMouse = PointerIsOverWidget(win, win->GetConnectWidget(), x, y);
+            }
+        }
+
+        const bool hadMouse = g_captureWindowHasMouse;
+        g_captureWindowHasMouse = hasMouse;
+
+        if (g_captureWindowHasMouse != hadMouse)
+        {
+            // The mouse changed window.
+            wxMouseEvent eventM(g_captureWindowHasMouse ? wxEVT_ENTER_WINDOW
+                                                        : wxEVT_LEAVE_WINDOW);
+
+            // Ensure a fractional coordinate stays outside the window when
+            // converted to int.
+            double mx = x, my = y;
+            if (!g_captureWindowHasMouse && isOut)
+            {
+                if (mx < 0)
+                    mx = floor(mx);
+                if (my < 0)
+                    my = floor(my);
+            }
+
+            InitMouseEvent(win, eventM, gdk_event, mx, my);
+            eventM.SetEventObject(win);
+            win->GTKProcessEvent(eventM);
+        }
+    }
+    else // no capture
+    {
+        auto* const winUnderMouse =
+            FindWindowForMouseEvent(win, event.m_x, event.m_y);
+
+        // If our idea of the window under mouse is different from the actual
+        // window under it, we need to send enter or leave events.
+        bool setCursorEventAlreadySent = false;
+        if ( winUnderMouse != g_windowUnderMouse )
+        {
+            SendEnterLeaveEvents(winUnderMouse, gdk_event, x, y);
+            setCursorEventAlreadySent = true;
+        }
+
+        // Also redirect the event to the window under mouse if it's different.
+        if ( winUnderMouse != win )
+        {
+            win = winUnderMouse;
+
+            event.SetEventObject( win );
+            event.SetId( win->GetId() );
+        }
+
+        if ( !setCursorEventAlreadySent )
+            SendSetCursorEvent(win, event.m_x, event.m_y);
+    }
+
+    // GTK3 ended by re-requesting motion events for hint-mode pointers
+    // (gdk_event_request_motions()). GTK4 has no motion hints -- it compresses
+    // motion events internally -- so there is nothing to do here.
+
+    return win->GTKProcessEvent(event);
+}
 
 extern "C" {
 
+static void
+wx_gtk_motion_callback(GtkEventControllerMotion* controller,
+                       double x, double y, wxWindowGTK* win)
+{
+    wxGTKImpl::WindowMotionCallback(
+        win,
+        gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(controller)),
+        x, y);
+}
+
+static void
+wx_gtk_enter_callback(GtkEventControllerMotion* controller,
+                      double x, double y, wxWindowGTK* win)
+{
+    wxGTKImpl::WindowEnterCallback(
+        win,
+        gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(controller)),
+        x, y);
+}
+
+static void
+wx_gtk_leave_callback(GtkEventControllerMotion* controller, wxWindowGTK* win)
+{
+    wxGTKImpl::WindowLeaveCallback(
+        win,
+        gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(controller)));
+}
+
+} // extern "C"
+
+#endif // __WXGTK4__
+
+extern "C" {
+
+#ifndef __WXGTK4__
 static gboolean
 gtk_window_leave_callback( GtkWidget* widget,
                            GdkEventCrossing *gdk_event,
@@ -2751,6 +3009,7 @@ gtk_window_leave_callback( GtkWidget* widget,
 {
     return wxGTKImpl::WindowLeaveCallback(widget, gdk_event, win);
 }
+#endif // !__WXGTK4__
 
 //-----------------------------------------------------------------------------
 // "value_changed" from scrollbar
@@ -4605,12 +4864,27 @@ void wxWindowGTK::ConnectWidget( GtkWidget *widget )
                       G_CALLBACK (gtk_window_key_release_callback), this);
 #endif
 
+#ifndef __WXGTK4__
     g_signal_connect (widget, "button_press_event",
                       G_CALLBACK (gtk_window_button_press_callback), this);
     g_signal_connect (widget, "button_release_event",
                       G_CALLBACK (gtk_window_button_release_callback), this);
     g_signal_connect (widget, "motion_notify_event",
                       G_CALLBACK (gtk_window_motion_notify_callback), this);
+#else
+    // Motion and enter/leave all come from one GtkEventControllerMotion; the
+    // coordinates it hands over are already widget-relative.
+    {
+        GtkEventController* const motionController = gtk_event_controller_motion_new();
+        g_signal_connect (motionController, "motion",
+                          G_CALLBACK (wx_gtk_motion_callback), this);
+        g_signal_connect (motionController, "enter",
+                          G_CALLBACK (wx_gtk_enter_callback), this);
+        g_signal_connect (motionController, "leave",
+                          G_CALLBACK (wx_gtk_leave_callback), this);
+        gtk_widget_add_controller(widget, motionController);
+    }
+#endif
 
 #ifdef __WXGTK4__
     // One scroll controller per widget that used to carry a "scroll_event"
@@ -4647,10 +4921,13 @@ void wxWindowGTK::ConnectWidget( GtkWidget *widget )
 
     g_signal_connect (widget, "popup_menu",
                      G_CALLBACK (wxgtk_window_popup_menu_callback), this);
+#ifndef __WXGTK4__
+    // Under GTK4 these are signals of the motion controller connected above.
     g_signal_connect (widget, "enter_notify_event",
                       G_CALLBACK (gtk_window_enter_callback), this);
     g_signal_connect (widget, "leave_notify_event",
                       G_CALLBACK (gtk_window_leave_callback), this);
+#endif
 
 #ifdef __WXGTK3__
     g_signal_connect (widget, "notify::scale-factor",

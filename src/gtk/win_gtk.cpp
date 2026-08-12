@@ -374,6 +374,11 @@ g_cclosure_user_marshal_VOID__OBJECT_OBJECT (GClosure     *closure,
 // previously have connected the signal.
 static void pizza_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
 {
+    // Frozen by wxWindow::Freeze(): paint nothing at all, neither this
+    // widget's content nor its children, until thawed.
+    if ( g_object_get_data(G_OBJECT(widget), "wx-frozen") != nullptr )
+        return;
+
     wxWindow* const win = static_cast<wxWindow*>(
         g_object_get_data(G_OBJECT(widget), "wx-pizza-owner"));
 

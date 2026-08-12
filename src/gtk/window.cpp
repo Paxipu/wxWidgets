@@ -8173,6 +8173,38 @@ GdkWindow* wxWindowGTK::GTKGetDrawingWindow() const
 // freeze/thaw
 // ----------------------------------------------------------------------------
 
+#ifdef __WXGTK4__
+
+// Freezing worked by connecting a draw handler that returned TRUE to swallow
+// the event, and blocking/unblocking it. GTK4 has no draw signal to intercept,
+// so the frozen state becomes a flag on the widget which wxPizza's snapshot
+// vfunc checks -- see pizza_snapshot() in win_gtk.cpp, which skips both its
+// own painting and its children's while set.
+//
+// Note this only suppresses painting for wxPizza widgets. GTK3 could freeze
+// any widget, including native controls, because it intercepted the signal
+// before the widget's own handler; under GTK4 a native control's snapshot
+// vfunc cannot be intercepted from outside, so freezing one has no effect.
+// Known gap.
+
+void wxWindowGTK::GTKConnectFreezeWidget(GtkWidget* WXUNUSED(widget))
+{
+    // Nothing to connect: the flag below is checked directly.
+}
+
+void wxWindowGTK::GTKFreezeWidget(GtkWidget* widget)
+{
+    g_object_set_data(G_OBJECT(widget), "wx-frozen", GINT_TO_POINTER(1));
+}
+
+void wxWindowGTK::GTKThawWidget(GtkWidget* widget)
+{
+    g_object_set_data(G_OBJECT(widget), "wx-frozen", nullptr);
+    gtk_widget_queue_draw(widget);
+}
+
+#else // !__WXGTK4__
+
 extern "C" {
 static gboolean draw_freeze(GtkWidget*, void*, wxWindow*)
 {
@@ -8201,6 +8233,8 @@ void wxWindowGTK::GTKThawWidget(GtkWidget* widget)
     g_signal_handlers_block_by_func(widget, (void*)draw_freeze, this);
     gtk_widget_queue_draw(widget);
 }
+
+#endif // __WXGTK4__/!__WXGTK4__
 
 void wxWindowGTK::DoFreeze()
 {

@@ -10,6 +10,7 @@
 
 #include "wx/gtk/private.h"
 #include "wx/gtk/private/win_gtk.h"
+#include "wx/window.h"
 
 /*
 wxPizza is a custom GTK+ widget derived from GtkFixed.  A custom widget
@@ -359,6 +360,50 @@ g_cclosure_user_marshal_VOID__OBJECT_OBJECT (GClosure     *closure,
 }
 #endif
 
+#ifdef __WXGTK4__
+// GTK4 replaced the "draw" signal with a snapshot vfunc building render nodes.
+// wx paints with cairo throughout, so rather than rewrite every wxDC operation
+// onto render nodes, take the cairo escape hatch: gtk_snapshot_append_cairo()
+// hands back a real cairo_t, and measurement confirms it is in widget-relative
+// coordinates, exactly as the GTK3 draw vfunc was for a windowless widget --
+// so everything downstream of GTKSendPaintEvents() is unaffected. See
+// docs/gtk/gtk4-phase4-paint-model-design.md.
+//
+// A vfunc carries no user data where the signal carried the wxWindow, so the
+// owner is looked up from the widget; wxWindowGTK sets it when it would
+// previously have connected the signal.
+static void pizza_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
+{
+    wxWindow* const win = static_cast<wxWindow*>(
+        g_object_get_data(G_OBJECT(widget), "wx-pizza-owner"));
+
+    const int w = gtk_widget_get_width(widget);
+    const int h = gtk_widget_get_height(widget);
+
+    if ( win && w > 0 && h > 0 )
+    {
+        graphene_rect_t bounds;
+        bounds.origin.x = 0;
+        bounds.origin.y = 0;
+        bounds.size.width = float(w);
+        bounds.size.height = float(h);
+
+        cairo_t* const cr = gtk_snapshot_append_cairo(snapshot, &bounds);
+        win->GTKSendPaintEvents(cr);
+        cairo_destroy(cr);
+    }
+
+    // Children are no longer drawn by chaining up to a parent draw handler:
+    // each has to be snapshotted explicitly.
+    for ( GtkWidget* child = gtk_widget_get_first_child(widget);
+          child != nullptr;
+          child = gtk_widget_get_next_sibling(child) )
+    {
+        gtk_widget_snapshot_child(widget, child, snapshot);
+    }
+}
+#endif // __WXGTK4__
+
 static void class_init(void* g_class, void*)
 {
     GtkWidgetClass* widget_class = (GtkWidgetClass*)g_class;
@@ -376,6 +421,7 @@ static void class_init(void* g_class, void*)
 
 #ifdef __WXGTK4__
     widget_class->measure = pizza_measure;
+    widget_class->snapshot = pizza_snapshot;
     GObjectClass *gobject_class = G_OBJECT_CLASS(g_class);
     gobject_class->set_property = pizza_set_property;
     gobject_class->get_property = pizza_get_property;

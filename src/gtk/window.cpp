@@ -628,7 +628,7 @@ bool wxGTKImpl::IsX11(void* instance)
 //-----------------------------------------------------------------------------
 
 extern "C" {
-#ifdef __WXGTK3__
+#if defined(__WXGTK3__) && !defined(__WXGTK4__)
 static gboolean draw(GtkWidget*, cairo_t* cr, wxWindow* win)
 {
     if (gtk_cairo_should_draw_window(cr, win->GTKGetDrawingWindow()))
@@ -636,7 +636,7 @@ static gboolean draw(GtkWidget*, cairo_t* cr, wxWindow* win)
 
     return false;
 }
-#else // !__WXGTK3__
+#elif !defined(__WXGTK4__) // !__WXGTK3__
 static gboolean expose_event(GtkWidget*, GdkEventExpose* gdk_event, wxWindow* win)
 {
     if (gdk_event->window == win->GTKGetDrawingWindow())
@@ -3971,7 +3971,12 @@ void wxWindowGTK::PostCreation()
         if (!m_noExpose)
         {
             // these get reported to wxWidgets -> wxPaintEvent
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+            // There is no "draw" signal under GTK4: wxPizza paints from its
+            // snapshot vfunc, which has no user data, so record the owner for
+            // it to find. See pizza_snapshot() in win_gtk.cpp.
+            g_object_set_data(G_OBJECT(m_wxwindow), "wx-pizza-owner", this);
+#elif defined(__WXGTK3__)
             g_signal_connect(m_wxwindow, "draw", G_CALLBACK(draw), this);
 #else
             g_signal_connect(m_wxwindow, "expose_event", G_CALLBACK(expose_event), this);
@@ -6733,6 +6738,27 @@ void wxWindowGTK::GTKSendPaintEvents(const GdkRegion* region)
 #endif
 {
 #ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    // No clip to apply: there is no GdkWindow to take a clip region from, and
+    // the cairo_t from gtk_snapshot_append_cairo() is already clipped to the
+    // widget's bounds.
+    //
+    // Nor is there a damage region to narrow it to. GTK4 removed partial
+    // invalidation entirely (gtk_widget_queue_draw_area() is gone) and tells a
+    // widget nothing about what changed -- the renderer culls by diffing
+    // render nodes instead. So m_updateRegion below ends up being the whole
+    // client area every time, and wxWindow::GetUpdateRegion() reports that.
+    // Repainting more than necessary is always safe, but applications using
+    // the update region as an optimisation lose it. See
+    // docs/gtk/gtk4-phase4-paint-model-design.md section 3.
+    if (GetLayoutDirection() == wxLayout_RightToLeft)
+    {
+        // wxDC is mirrored for RTL
+        const int w = gtk_widget_get_width(m_wxwindow);
+        cairo_translate(cr, w, 0);
+        cairo_scale(cr, -1, 1);
+    }
+#else
     {
         cairo_region_t* region = gdk_window_get_clip_region(gtk_widget_get_window(m_wxwindow));
         cairo_rectangle_int_t rect;
@@ -6748,6 +6774,7 @@ void wxWindowGTK::GTKSendPaintEvents(const GdkRegion* region)
         cairo_translate(cr, w, 0);
         cairo_scale(cr, -1, 1);
     }
+#endif
     double x1, y1, x2, y2;
     cairo_clip_extents(cr, &x1, &y1, &x2, &y2);
 

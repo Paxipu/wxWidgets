@@ -1424,3 +1424,86 @@ Notably it asserts the *absence* of things too — `GtkFrame` having no
 implementation deliberately relies on both. Each check was verified to
 actually fail when the condition it guards is violated (renamed node,
 gained node, leaked widget), so these are not tests that can only pass.
+
+## Progress update 16: the Phase 3 input model, implemented
+
+`docs/gtk/gtk4-phase3-input-model-design.md` stopped at design on purpose.
+This is its execution, in the order it recommended — keyboard, scroll,
+motion/enter-leave, buttons — each verified and committed separately.
+
+**`window.cpp`: 206 → 110 errors**, GTK3 verified unaffected after every
+step. Whole-tree diagnostics 1227 → **1133** across the four batches, no
+regressions in any of them. The failing-target count stays at 46 throughout,
+because `window.cpp` doesn't drop off that list until *all* of its errors are
+gone; the remaining 110 are `GdkWindow` (Phase 2) and paint-model work, not
+input.
+
+### The shape of the port
+
+GTK4 replaced per-widget signals carrying concrete `GdkEventFoo*` structs
+with controller objects whose signals hand over the values directly. The
+translation logic in wx is large and entirely value-based, so rather than
+duplicate it per backend, each path collects what it needs into a small value
+type or passes primitives, leaving the shared logic untouched:
+
+- **Keyboard** (`GtkEventControllerKey`): `wxGTKKeyEventData`, fields named to
+  match `GdkEventKey`'s, so ~250 lines of keysym translation needed only a
+  mechanical rename. `m_imKeyEvent`/`GTKIMFilterKeypress()` use a
+  `wxGTKNativeKeyEvent` typedef (`GdkEventKey` / opaque `GdkEvent`) rather
+  than being duplicated.
+- **Scroll** (`GtkEventControllerScroll`): GTK4 has no scroll-direction
+  concept at all; everything is deltas, discrete clicks included. GTK3's
+  smooth-scroll branch became the only path needed, factored into
+  `wxGTKProcessScrollDeltas()` and shared.
+- **Motion + enter/leave** (`GtkEventControllerMotion`, one controller, three
+  signals).
+- **Buttons** (`GtkGestureClick`).
+
+### Resolved: the `EventAlreadyProcessed()` question
+
+Design doc §2 left open whether this needed a GTK4 equivalent. It does not,
+and the reason is structural rather than incidental: it guarded against GTK3
+propagating one native event up the widget hierarchy so several wxWindows saw
+it, and a controller only ever fires for the widget it is attached to. It is
+deliberately absent from every GTK4 input path.
+
+### Measured rather than assumed
+
+Two findings came from running code against real GTK4, not from reading docs,
+and both changed the implementation:
+
+1. **`gtk_widget_set_parent()` vs. type-specific setters** — irrelevant here
+   but see update 15.
+2. **Gesture claim/deny** — the risk the design doc named as riskiest. Real
+   clicks injected with XTest under Xvfb
+   (`docs/gtk/probes/gtk4-gesture-semantics.c`) showed that on a widget with
+   its own gesture, *not* claiming delivers the press but **never the
+   release**, because the native gesture claims the sequence and cancels
+   ours. GTK3 delivered both unconditionally, so any wx code pairing press
+   with release would have broken silently. The port claims exactly when wx
+   handles the press, reproducing GTK3's TRUE/FALSE semantics; `CAPTURE`
+   phase was rejected despite fixing the release because it leaves wx unable
+   to stop a native control acting at all.
+
+### Behavioural differences accepted, with reasons
+
+None of these are translations that were "close enough" — each is a place
+where GTK4 genuinely cannot do what GTK3 did:
+
+- `key-released` returns `void` (GTK3's `key_release_event` returned
+  `gboolean`), so a wx handler can no longer suppress GTK's own processing of
+  a key *release*. Presses are unaffected.
+- An unhandled press on a *native control* yields no release event (above).
+  Ordinary wx windows are unaffected, nothing competing for the sequence.
+- `GtkEventControllerMotion::leave` carries no coordinates, unlike
+  `GdkEventCrossing`; they are recovered from the controller's current event,
+  falling back to the origin.
+- The `GDK_CROSSING_NORMAL` filter is gone — a motion controller is not sent
+  grab-synthesised crossings unless created with `SCOPE_CAPTURE`.
+- `gdk_event_request_motions()` is gone — GTK4 has no motion hints and
+  compresses motion events internally.
+
+**None of this is runtime-verified beyond the gesture probe.** `test_gui`
+still cannot link, so the event *plumbing* is confirmed to compile and the
+gesture *semantics* are confirmed by injection, but nothing has exercised
+wx's own handlers end to end.

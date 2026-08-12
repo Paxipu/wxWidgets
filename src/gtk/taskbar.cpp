@@ -377,7 +377,7 @@ wxTaskBarIcon::~wxTaskBarIcon()
 {
 }
 
-bool wxTaskBarIcon::SetIcon(const wxIcon&, const wxString&)
+bool wxTaskBarIcon::SetIcon(const wxBitmapBundle&, const wxString&)
 {
     return false;
 }

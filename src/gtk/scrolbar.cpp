@@ -54,6 +54,57 @@ gtk_value_changed(GtkRange* range, wxScrollBar* win)
 // "button_press_event" from scrollbar
 //-----------------------------------------------------------------------------
 
+#ifdef __WXGTK4__
+
+extern "C" {
+
+// Deferred emission of the thumb-release events.
+//
+// GTK3 achieved this with the "event_after" signal, which runs once GTK has
+// finished handling the event, so a handler is free to set the scroll position
+// from it. GTK4 has no such signal; an idle callback lands at the equivalent
+// point, after the current event's handling completes.
+static gboolean wx_gtk_send_thumb_release(void* data)
+{
+    wxScrollBar* const win = static_cast<wxScrollBar*>(data);
+
+    const int value = win->GetThumbPosition();
+    const int orient = win->HasFlag(wxSB_VERTICAL) ? wxVERTICAL : wxHORIZONTAL;
+    const int id = win->GetId();
+
+    wxScrollEvent evtRel(wxEVT_SCROLL_THUMBRELEASE, id, value, orient);
+    evtRel.SetEventObject(win);
+    win->HandleWindowEvent(evtRel);
+
+    wxScrollEvent evtChanged(wxEVT_SCROLL_CHANGED, id, value, orient);
+    evtChanged.SetEventObject(win);
+    win->HandleWindowEvent(evtChanged);
+
+    return G_SOURCE_REMOVE;
+}
+
+static void
+wx_gtk_scrollbar_pressed(GtkGestureClick*, int, double, double, wxScrollBar* win)
+{
+    win->m_mouseButtonDown = true;
+}
+
+static void
+wx_gtk_scrollbar_released(GtkGestureClick*, int, double, double, wxScrollBar* win)
+{
+    win->m_mouseButtonDown = false;
+
+    if (win->m_isScrolling)
+    {
+        win->m_isScrolling = false;
+        g_idle_add(wx_gtk_send_thumb_release, win);
+    }
+}
+
+} // extern "C"
+
+#else // !__WXGTK4__
+
 extern "C" {
 static gboolean
 gtk_button_press_event(GtkRange*, GdkEventButton*, wxScrollBar* win)
@@ -113,6 +164,8 @@ gtk_button_release_event(GtkRange* range, GdkEventButton*, wxScrollBar* win)
 }
 }
 
+#endif // __WXGTK4__/!__WXGTK4__
+
 //-----------------------------------------------------------------------------
 // wxScrollBar
 //-----------------------------------------------------------------------------
@@ -144,6 +197,25 @@ bool wxScrollBar::Create(wxWindow *parent, wxWindowID id,
 
     g_signal_connect_after(m_widget, "value_changed",
                      G_CALLBACK(gtk_value_changed), this);
+#ifdef __WXGTK4__
+    {
+        // CAPTURE phase deliberately. GtkRange has its own click gesture for
+        // dragging the thumb, and a bubble-phase gesture that doesn't claim
+        // the sequence gets the press but never the release once GtkRange
+        // claims it -- measured, see docs/gtk/probes/gtk4-gesture-semantics.c.
+        // Capturing sees both without claiming, so GtkRange still drags
+        // normally; the wx events are deferred to an idle callback anyway, so
+        // running ahead of GtkRange here doesn't reorder them.
+        GtkGesture* const gesture = gtk_gesture_click_new();
+        gtk_event_controller_set_propagation_phase(
+            GTK_EVENT_CONTROLLER(gesture), GTK_PHASE_CAPTURE);
+        g_signal_connect(gesture, "pressed",
+                         G_CALLBACK(wx_gtk_scrollbar_pressed), this);
+        g_signal_connect(gesture, "released",
+                         G_CALLBACK(wx_gtk_scrollbar_released), this);
+        gtk_widget_add_controller(m_widget, GTK_EVENT_CONTROLLER(gesture));
+    }
+#else
     g_signal_connect(m_widget, "button_press_event",
                      G_CALLBACK(gtk_button_press_event), this);
     g_signal_connect(m_widget, "button_release_event",
@@ -153,6 +225,7 @@ bool wxScrollBar::Create(wxWindow *parent, wxWindowID id,
     handler_id = g_signal_connect(
         m_widget, "event_after", G_CALLBACK(gtk_event_after), this);
     g_signal_handler_block(m_widget, handler_id);
+#endif
 
     m_parent->DoAddChild( this );
 

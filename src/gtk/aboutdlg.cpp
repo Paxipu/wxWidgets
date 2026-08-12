@@ -27,6 +27,7 @@
 #endif //WX_PRECOMP
 
 #include "wx/gtk/private.h"
+#include "wx/gtk/private/object.h"
 
 // ----------------------------------------------------------------------------
 // GtkArray: temporary array of GTK strings
@@ -113,6 +114,7 @@ static gboolean activate_link(GtkAboutDialog*, const char* link, void* dontIgnor
     return false;
 }
 
+#ifndef __WXGTK4__
 static void wx_find_image(GtkWidget* widget, void* data)
 {
     GtkWidget** p = static_cast<GtkWidget**>(data);
@@ -140,6 +142,7 @@ static gboolean wx_image_draw(GtkWidget* widget, cairo_t* cr, wxIcon* icon)
     icon->Draw(cr, x, y);
     return true;
 }
+#endif // !__WXGTK4__
 }
 #else
 extern "C" {
@@ -180,6 +183,14 @@ void wxAboutBox(const wxAboutDialogInfo& info, wxWindow* parent)
     const wxIcon& icon = s_icon;
     if ( icon.IsOk() )
     {
+#ifdef __WXGTK4__
+        // GTK4 wants a GdkPaintable rather than a pixbuf here, and GdkTexture
+        // is the paintable implementation wrapping raw pixels. Drawing the
+        // icon by hand for HiDPI, as done below for GTK+ 3, isn't needed: a
+        // texture carries its own scale and GTK4 renders it accordingly.
+        wxGtkObject<GdkTexture> logo(gdk_texture_new_for_pixbuf(icon.GetPixbuf()));
+        gtk_about_dialog_set_logo(dlg, GDK_PAINTABLE(logo.get()));
+#else
         gtk_about_dialog_set_logo(dlg, icon.GetPixbuf());
 #ifdef __WXGTK3__
         GtkImage* image = nullptr;
@@ -188,6 +199,7 @@ void wxAboutBox(const wxAboutDialogInfo& info, wxWindow* parent)
         if (image)
             g_signal_connect(image, "draw", G_CALLBACK(wx_image_draw), &s_icon);
 #endif
+#endif // __WXGTK4__/!__WXGTK4__
     }
     else
         gtk_about_dialog_set_logo(dlg, nullptr);

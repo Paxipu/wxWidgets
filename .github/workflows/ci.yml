@@ -336,6 +336,19 @@ jobs:
             exit $rc
           fi
 
+      - name: Checking GTK4 platform invariants
+        if: matrix.gtk_version == 4
+        run: |
+          # Assumptions about GTK4's own behaviour that the port depends on:
+          # widget tree shape, style resolution, widget ownership. A GTK
+          # upgrade can change these silently -- the symptom is wrong metrics,
+          # not a crash -- so check them explicitly. Needs only GTK, not libwx,
+          # so it runs regardless of how far the port currently builds.
+          # See docs/gtk/gtk4-stylecontext-design.md.
+          gcc -o /tmp/gtk4-invariants build/tools/gtk4-invariants.c \
+              $(pkg-config --cflags --libs gtk4) -Wno-deprecated-declarations
+          xvfb-run -a /tmp/gtk4-invariants
+
       - name: Building
         run: |
           if [ ${{ matrix.use_asan }} ]; then

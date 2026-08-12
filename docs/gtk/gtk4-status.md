@@ -1347,3 +1347,80 @@ values get compared or cached. A proper fix would restructure
 `GdkRGBA`, then audit and fix each `GetColor()` caller — a bounded but
 real subsystem task, not attempted here. Candidate for a future batch
 alongside the `wxGtkStyleContext` rewrite (update 10).
+
+## Progress update 15: `wxGtkStyleContext` rebuilt on real widgets
+
+The deferred item scoped in update 10, now done. Full write-up in
+`docs/gtk/gtk4-stylecontext-design.md`; the short version is that GTK4
+removed `GtkWidgetPath`, `gtk_style_context_new()`, `set_path()`,
+`set_parent()` and the `gtk_style_context_get()` varargs query, so the
+class was rebuilt to query theme values from a real (never shown, never
+realized) widget hierarchy, descending to interior CSS nodes by walking
+actual children.
+
+Findings were established by **running probe programs against real GTK4**
+rather than reading headers — GTK4 4.14.5 and `xvfb` are both available
+here. The probes are committed under `docs/gtk/probes/` so they can be
+re-checked against a different GTK4 rather than taken on trust. Three
+mattered:
+
+- Interior nodes (`header`/`tabs`/`tab`, `trough`/`slider`, `check`) are
+  reachable as real child widgets, so a synthetic path segment maps
+  directly onto a child descent.
+- Ancestry genuinely affects resolution — a label reads white standalone
+  but dark inside a button — so the hierarchy has to be really parented.
+  This ruled out the obvious shortcut of creating each node standalone,
+  which would have compiled and silently produced wrong colours.
+- Widgets attached with `gtk_widget_set_parent()` are **not** freed with
+  their parent, so the destructor unparents explicitly, deepest first.
+
+**Impact: 62 → 46 failing build targets, zero regressions.** Sixteen files
+fixed at once, well beyond the six predicted when this was scoped: the
+class declaration mentions `GtkWidgetPath` directly, so `stylecontext.h`
+was failing to compile and poisoning every translation unit that
+transitively included it, not just the files that call the class.
+Diagnostic count 1447 → **1227**.
+
+Fixed: `statbox.o`, `generic_infobar.o`, `artgtk.o`, `collpane.o`,
+`generic_statusbr.o`, `aboutdlg.o`, `checkbox.o`, `display.o`, `fontdlg.o`,
+`frame.o`, `spinctrl.o`, `mimetype.o`, `private.o`, `splash.o`,
+`utilsx11.o`, `addremovectrl.o`.
+
+Two queries degrade and one improves, all documented in the design doc:
+`Bg()`/`Border()` lose their exact property queries and now approximate via
+`gtk_style_context_lookup_color()` (routed through one shared helper,
+`wxGTKLookupThemeColour()`, also used by `control.cpp` so the gap has a
+single implementation); `GetScrollbarWidth()` gains accuracy by using
+`gtk_widget_measure()` instead of summing `min-width` node by node.
+Foreground colours are unaffected and remain exact.
+
+`AddMenu()`/`AddMenuItem()` still reference types GTK4 has in no form and
+fall back to `GtkPopover` + a `GtkButton` named `modelbutton` until
+`menu.cpp` is ported.
+
+## Regression tests for GTK's own behaviour
+
+The port rests on assumptions about GTK4 itself — widget tree shape, style
+resolution rules, widget ownership — that a toolkit upgrade can change
+silently. The failure mode is not a crash but a wrong number: if
+`GtkNotebook`'s interior nodes are renamed, `wxGtkStyleContext` keeps
+returning metrics, just the wrong ones.
+
+`build/tools/gtk4-invariants.c` pins these down as assertions and runs in
+CI on the GTK4 job (new "Checking GTK4 platform invariants" step). It needs
+only GTK, not libwx, so it runs regardless of how far the port currently
+builds — which matters, because `test_gui` still cannot link and normal GUI
+tests remain unavailable. Once `test_gui` links this should move into the
+regular suite.
+
+It asserts **structure, not pixel values**: exact metrics and colours are
+theme-dependent, so asserting them would fail whenever CI's theme differs
+rather than when something is genuinely wrong. Checks that are inherently
+theme-dependent (whether a theme defines `theme_bg_color` and friends)
+report but do not fail. 12 checks currently pass against GTK 4.14.5.
+
+Notably it asserts the *absence* of things too — `GtkFrame` having no
+`border` child, an empty `GtkNotebook` having no `tab` node — because the
+implementation deliberately relies on both. Each check was verified to
+actually fail when the condition it guards is violated (renamed node,
+gained node, leaked widget), so these are not tests that can only pass.

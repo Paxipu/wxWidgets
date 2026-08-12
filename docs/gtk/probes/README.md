@@ -6,7 +6,13 @@ here so the conclusions recorded in `../gtk4-stylecontext-design.md` and
 `../gtk4-status.md` can be re-checked against a different GTK4 version
 instead of being taken on faith.
 
-They are not part of the build and are not run by CI.
+These are exploratory: they print what they find and are meant to be read by
+a human. The invariants they established that the port actually *depends*
+on have been turned into an automated regression check,
+`build/tools/gtk4-invariants.c`, which asserts rather than prints and runs
+in CI on the GTK4 job. If a GTK upgrade changes something fundamental, that
+check is what should catch it; these programs are then useful for
+investigating what changed.
 
 ## Building and running
 

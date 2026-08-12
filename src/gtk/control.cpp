@@ -24,6 +24,7 @@
 
 #include "wx/gtk/private.h"
 #include "wx/gtk/private/mnemonics.h"
+#include "wx/gtk/private/stylecontext.h"
 
 // ============================================================================
 // wxControl implementation
@@ -257,27 +258,21 @@ wxControl::GetDefaultAttributesFromGTKWidget(GtkWidget* widget,
 #ifdef __WXGTK4__
     // GTK4 removed gtk_style_context_get() and the whole varargs
     // style-property API it relied on ("color"/"background-color"/
-    // GTK_STYLE_PROPERTY_FONT). There's also no replacement for querying a
-    // widget's effective *background* colour as a single RGBA: backgrounds
-    // are painted via render_background(), which can be a gradient or an
-    // image under CSS, not necessarily a flat colour, and GTK4 doesn't
-    // expose a "give me the flat colour" query for that any more.
-    // gtk_style_context_lookup_color() with the theme's conventional
-    // "theme_bg_color" name is the closest available approximation --
-    // covers the common case, but unlike the GTK3 code below it doesn't
-    // walk the parent chain, so a widget whose own style has no
-    // theme_bg_color defined won't inherit an ancestor's background. Not
-    // yet runtime-verified (no linkable test_gui yet).
+    // GTK_STYLE_PROPERTY_FONT). Foreground still has an exact query;
+    // background does not, and is approximated through the shared helper in
+    // stylecontext.h so this gap has one implementation rather than one per
+    // call site. Unlike the GTK3 code below, the approximation doesn't walk
+    // the parent chain, so a widget whose theme defines no background colour
+    // won't inherit an ancestor's. Not yet runtime-verified (no linkable
+    // test_gui yet); see docs/gtk/gtk4-stylecontext-design.md.
     wxUnusedVar(state);
     GtkStyleContext* sc = gtk_widget_get_style_context(widget);
     GdkRGBA fg;
     gtk_style_context_get_color(sc, &fg);
     attr.colFg = wxColour(fg);
 
-    GdkRGBA bg;
-    if (!gtk_style_context_lookup_color(sc, "theme_bg_color", &bg))
-        bg = GdkRGBA{ 1, 1, 1, 1 };
-    attr.colBg = wxColour(bg);
+    attr.colBg = *wxWHITE;
+    wxGTKLookupThemeColour(sc, "theme_bg_color", attr.colBg);
 
     PangoFontDescription* const desc = pango_context_get_font_description(
         gtk_widget_get_pango_context(widget));

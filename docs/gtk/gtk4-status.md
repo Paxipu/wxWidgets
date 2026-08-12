@@ -1578,3 +1578,69 @@ The rest are assorted single items (`GtkBindingSet` → `GtkShortcut`,
 `window.cpp` will therefore not compile — and `window.o` will not leave the
 failing-target list — until Phase 4 is designed and implemented. That is now
 the single largest blocker in the port.
+
+## Progress update 18: Phase 4 started -- wxPizza paints
+
+The paint model is no longer just designed. `wxPizza` renders through a
+snapshot vfunc, and the design's central bet held: `gtk_snapshot_append_cairo()`
+yields a cairo context in widget-relative coordinates, so `GTKSendPaintEvents()`
+and everything downstream needed **no** coordinate changes. This is what keeps
+Phase 4 from becoming a rewrite of `wxGraphicsContext` and every `wxDC`
+operation.
+
+Done:
+
+- **`pizza_snapshot()`** (`win_gtk.cpp`) replaces the `draw` signal. Two
+  structural differences: a class vfunc carries no user data where the signal
+  carried the `wxWindow`, so the owner is recorded on the widget and looked up;
+  and children were previously drawn by chaining through the parent's handler,
+  so each is now snapshotted explicitly.
+- **Border painting** moved into wx's own paint path. GTK3 drew it from the
+  *parent's* draw signal, but the stroke always fell just inside the child's
+  own bounds, so the parent-relative rectangle becomes a child-relative one at
+  the origin and the ordering (after the content) is preserved. **This closes
+  the `BORDER_STYLES` gap open since update 8.**
+- **Freeze/thaw** becomes a flag the snapshot checks, since there is no draw
+  handler left to block.
+- **`wxGtkImage`** gained a snapshot vfunc (see below).
+
+`window.cpp`: **206 → 44 errors**. Whole-tree 1133 → 1067, no regressions.
+
+### An assumption I stated and then had to correct
+
+The design doc said `dc.cpp`, `graphicc.cpp`, `overlay.cpp` and
+`image_gtk.cpp` were "expected to be mostly mechanical once the `cairo_t` is
+flowing, since they consume a `cairo_t` rather than producing one -- but this
+is an assumption, not yet verified". Checked, and it is **partly wrong**:
+
+- `dc.cpp` and `graphicc.cpp` do mostly consume, **but both call
+  `gdk_cairo_create(gdk_get_default_root_window())`** to build a context for
+  `wxScreenDC`. GTK4 has no root window and no way to obtain a cairo context
+  for the screen at all. Drawing on the screen is simply not a thing GTK4
+  supports, so `wxScreenDC` needs a scope decision (X11-only fallback, or
+  unsupported under GTK4) rather than a port. **New deferred item.**
+- `image_gtk.cpp` overrides `GtkImageClass::draw`, i.e. another draw→snapshot
+  migration. That part is done, but the file still does not compile: `wxGtkImage`
+  derives from `GtkImage` by embedding its struct, and under GTK4 both
+  `GtkImage` and `GtkImageClass` are opaque, so the subclass cannot be
+  declared. Needs deriving from `GtkWidget` directly or wrapping a
+  `GtkPicture`. **New deferred item.**
+
+### Fidelity gaps added by this phase
+
+- **Update regions are gone.** GTK4 gives a widget no damage information and
+  removed partial invalidation, so `wxWindow::GetUpdateRegion()` reports the
+  whole client area and `wxPaintDC`'s clip to it is a no-op. Correctness holds
+  (repainting more is safe) and GTK4's renderer culls instead, but
+  applications using it as an optimisation lose it.
+- **Freezing a native control does nothing.** GTK3 intercepted the draw signal
+  ahead of the widget's own handler; a GTK4 snapshot vfunc cannot be
+  intercepted from outside, so only `wxPizza` widgets can be frozen.
+
+### Still unverified, and now most acutely
+
+Rendering is exactly what compiling cannot check. Whether borders appear in
+the right place, whether children paint in the right order, whether anything
+appears at all -- none of it is confirmed. `test_gui` still cannot link, and
+the remaining blockers for that are `dc.cpp`, `graphicc.cpp`, `overlay.cpp`
+and `image_gtk.cpp`, i.e. the two new deferred items above plus `overlay.cpp`.

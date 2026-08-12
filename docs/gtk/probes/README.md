@@ -62,3 +62,40 @@ has no `border` child node, so the descent finds nothing and deliberately
 stays on `frame` -- and that turns out to be precisely right. The notebook
 tab differences (1px bottom padding, and horizontal margins) are real
 changes in GTK4's Adwaita, not artifacts of the approach.
+
+## `gtk4-gesture-semantics.c`
+
+Answers the question the Phase 3 design document flagged as the riskiest in
+the whole input port: when a `GtkGestureClick` competes with a widget's own
+gesture, what does wx actually receive, and what does claiming the sequence
+change?
+
+Unlike the other probes this one injects **real clicks** via XTest
+(`-lXtst -lX11`) rather than inspecting state, because the behaviour only
+appears when a genuine pointer sequence is delivered. Build with:
+
+```
+gcc -o g gtk4-gesture-semantics.c $(pkg-config --cflags --libs gtk4) -lXtst -lX11
+xvfb-run -a ./g
+```
+
+Measured against GTK 4.14.5:
+
+```
+target          phase    claim   wx press  wx release  native control acts
+GtkButton       BUBBLE   no      yes       NO          yes
+GtkButton       BUBBLE   yes     yes       yes         no
+GtkButton       CAPTURE  no      yes       yes         yes
+GtkButton       CAPTURE  yes     yes       yes         yes
+GtkButton       TARGET   no      NO        NO          yes
+plain widget    BUBBLE   no      yes       yes         n/a
+plain widget    BUBBLE   yes     yes       yes         n/a
+```
+
+The important row is the first: on a widget with its own gesture, **not**
+claiming means the press arrives but the release never does, because the
+native gesture claims the sequence and cancels ours. GTK3 delivered both
+unconditionally. This is why `window.cpp` claims exactly when wx handles the
+press — that reproduces GTK3's TRUE/FALSE semantics — and why CAPTURE is not
+used instead, since it would restore the release at the cost of wx no longer
+being able to prevent a native control from acting at all.

@@ -1949,6 +1949,7 @@ bool AreGTKEventsBlocked()
 // "button_press_event"
 //-----------------------------------------------------------------------------
 
+#ifndef __WXGTK4__
 gboolean
 wxGTKImpl::WindowButtonPressCallback(GtkWidget* WXUNUSED_IN_GTK3(widget),
                                      GdkEventButton* gdk_event,
@@ -2187,6 +2188,7 @@ gtk_window_button_release_callback( GtkWidget *widget,
 }
 
 } // extern "C"
+#endif // !__WXGTK4__
 
 //-----------------------------------------------------------------------------
 
@@ -2965,7 +2967,170 @@ wxGTKImpl::WindowMotionCallback(wxWindowGTK* win, GdkEvent* gdk_event,
     return win->GTKProcessEvent(event);
 }
 
+bool
+wxGTKImpl::WindowButtonPressCallback(wxWindowGTK* win, GdkEvent* gdk_event,
+                                     int button, int nPress,
+                                     double x, double y, bool synthesized)
+{
+    wxLogTrace(TRACE_MOUSE, "Press %d for button %d at %g,%g in %s",
+               nPress, button, x, y, wxDumpWindow(win));
+
+    if ( AreGTKEventsBlocked() )
+        return false;
+
+    g_lastButtonNumber = button;
+
+    wxEventType down;
+    wxEventType dclick;
+    switch (button)
+    {
+        case 1: down = wxEVT_LEFT_DOWN;   dclick = wxEVT_LEFT_DCLICK;   break;
+        case 2: down = wxEVT_MIDDLE_DOWN; dclick = wxEVT_MIDDLE_DCLICK; break;
+        case 3: down = wxEVT_RIGHT_DOWN;  dclick = wxEVT_RIGHT_DCLICK;  break;
+        case 8: down = wxEVT_AUX1_DOWN;   dclick = wxEVT_AUX1_DCLICK;   break;
+        case 9: down = wxEVT_AUX2_DOWN;   dclick = wxEVT_AUX2_DCLICK;   break;
+        default:
+            return false;
+    }
+
+    // GtkGestureClick reports the click count directly, which removes the
+    // whole GDK_2BUTTON_PRESS/GDK_3BUTTON_PRESS dance the GTK3 code needed --
+    // including its gdk_event_peek() lookahead to suppress the surplus single
+    // press GDK sent before a double click. Triple clicks map to a plain down
+    // event, as they did under GTK3.
+    const wxEventType event_type = nPress == 2 ? dclick : down;
+
+    wxMouseEvent event( event_type );
+    InitMouseEvent( win, event, gdk_event, x, y );
+    event.m_synthesized = synthesized;
+
+    AdjustEventButtonState(event);
+
+    // Find the correct window to send the event to: it may be a different one
+    // from the one which got it at GTK level.
+    win = FindWindowForMouseEvent(win, event.m_x, event.m_y);
+
+    event.SetEventObject( win );
+    event.SetId( win->GetId() );
+
+    if ( win->GTKProcessEvent( event ) )
+        return true;
+
+    if ((event_type == wxEVT_LEFT_DOWN) && !win->IsOfStandardClass() &&
+        (gs_currentFocus != win) && win->IsFocusable())
+    {
+        win->SetFocus();
+    }
+
+    if (event_type == wxEVT_RIGHT_DOWN)
+    {
+        // Generate a "context menu" event.
+        const wxPoint pos = win->ClientToScreen(event.GetPosition());
+        return win->WXSendContextMenuEvent(pos);
+    }
+
+    return false;
+}
+
+bool
+wxGTKImpl::WindowButtonReleaseCallback(wxWindowGTK* win, GdkEvent* gdk_event,
+                                       int button, double x, double y,
+                                       bool synthesized)
+{
+    wxLogTrace(TRACE_MOUSE, "Release for button %d at %g,%g in %s",
+               button, x, y, wxDumpWindow(win));
+
+    if ( AreGTKEventsBlocked() )
+        return false;
+
+    g_lastButtonNumber = 0;
+
+    wxEventType event_type;
+    switch (button)
+    {
+        case 1: event_type = wxEVT_LEFT_UP;   break;
+        case 2: event_type = wxEVT_MIDDLE_UP; break;
+        case 3: event_type = wxEVT_RIGHT_UP;  break;
+        case 8: event_type = wxEVT_AUX1_UP;   break;
+        case 9: event_type = wxEVT_AUX2_UP;   break;
+        default:
+            // unknown button, don't process
+            return false;
+    }
+
+    wxMouseEvent event( event_type );
+    InitMouseEvent( win, event, gdk_event, x, y );
+    event.m_synthesized = synthesized;
+
+    AdjustEventButtonState(event);
+
+    win = FindWindowForMouseEvent(win, event.m_x, event.m_y);
+
+    event.SetEventObject( win );
+    event.SetId( win->GetId() );
+
+    return win->GTKProcessEvent(event);
+}
+
 extern "C" {
+
+// GtkGestureClick::pressed(n_press, x, y).
+//
+// Whether to claim the sequence is the crux of this port. Measured behaviour
+// (docs/gtk/probes/gtk4-gesture-semantics.c), clicking a GtkButton that has
+// its own gesture:
+//
+//   phase    claim   wx press   wx release   native control still acts
+//   BUBBLE   no      yes        NO           yes
+//   BUBBLE   yes     yes        yes          no
+//   CAPTURE  no      yes        yes          yes
+//
+// So claiming exactly reproduces GTK3's "handler returned TRUE" (wx consumes
+// the click, the native control does not act), and not claiming reproduces
+// "returned FALSE". Hence: claim if and only if wx handled the press.
+//
+// The cost is the BUBBLE/no-claim row: on a widget that has its own gesture,
+// an unhandled press means the native gesture claims the sequence and ours is
+// cancelled, so no release is delivered -- GTK3 delivered one regardless. This
+// only affects native controls; on ordinary wx windows (wxPizza) nothing
+// competes for the sequence and both events always arrive, which is why
+// CAPTURE is not used instead: it would fix the release at the cost of wx no
+// longer being able to stop a native control acting at all, which is worse.
+static void
+wx_gtk_button_pressed_callback(GtkGestureClick* gesture,
+                               int nPress, double x, double y,
+                               wxWindowGTK* win)
+{
+    GtkEventController* const c = GTK_EVENT_CONTROLLER(gesture);
+
+    const int button = int(gtk_gesture_single_get_current_button(
+                                GTK_GESTURE_SINGLE(gesture)));
+
+    if ( wxGTKImpl::WindowButtonPressCallback(
+                win, gtk_event_controller_get_current_event(c),
+                button, nPress, x, y) )
+    {
+        gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+    }
+}
+
+static void
+wx_gtk_button_released_callback(GtkGestureClick* gesture,
+                                int WXUNUSED(nPress), double x, double y,
+                                wxWindowGTK* win)
+{
+    GtkEventController* const c = GTK_EVENT_CONTROLLER(gesture);
+
+    const int button = int(gtk_gesture_single_get_current_button(
+                                GTK_GESTURE_SINGLE(gesture)));
+
+    if ( wxGTKImpl::WindowButtonReleaseCallback(
+                win, gtk_event_controller_get_current_event(c),
+                button, x, y) )
+    {
+        gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+    }
+}
 
 static void
 wx_gtk_motion_callback(GtkEventControllerMotion* controller,
@@ -4616,7 +4781,12 @@ void wxWindowGesturesData::Reinit(wxWindowGTK* win,
     {
         eventsMask &= ~wxTOUCH_VERTICAL_PAN_GESTURE;
 
+        #ifdef __WXGTK4__
+        m_vertical_pan_gesture = gtk_gesture_pan_new(GTK_ORIENTATION_VERTICAL);
+        gtk_widget_add_controller(widget, GTK_EVENT_CONTROLLER(m_vertical_pan_gesture));
+#else
         m_vertical_pan_gesture = gtk_gesture_pan_new(widget, GTK_ORIENTATION_VERTICAL);
+#endif
 
         gtk_event_controller_set_propagation_phase (GTK_EVENT_CONTROLLER(m_vertical_pan_gesture), GTK_PHASE_TARGET);
 
@@ -4636,7 +4806,12 @@ void wxWindowGesturesData::Reinit(wxWindowGTK* win,
     {
         eventsMask &= ~wxTOUCH_HORIZONTAL_PAN_GESTURE;
 
+        #ifdef __WXGTK4__
+        m_horizontal_pan_gesture = gtk_gesture_pan_new(GTK_ORIENTATION_HORIZONTAL);
+        gtk_widget_add_controller(widget, GTK_EVENT_CONTROLLER(m_horizontal_pan_gesture));
+#else
         m_horizontal_pan_gesture = gtk_gesture_pan_new(widget, GTK_ORIENTATION_HORIZONTAL);
+#endif
 
         // Pan signals are also generated in case of "left mouse down + mouse move". This can be disabled by
         // calling gtk_gesture_single_set_touch_only(GTK_GESTURE_SINGLE(m_horizontal_pan_gesture), TRUE) and
@@ -4661,7 +4836,12 @@ void wxWindowGesturesData::Reinit(wxWindowGTK* win,
     {
         eventsMask &= ~wxTOUCH_ZOOM_GESTURE;
 
+        #ifdef __WXGTK4__
+        m_zoom_gesture = gtk_gesture_zoom_new();
+        gtk_widget_add_controller(widget, GTK_EVENT_CONTROLLER(m_zoom_gesture));
+#else
         m_zoom_gesture = gtk_gesture_zoom_new(widget);
+#endif
 
         gtk_event_controller_set_propagation_phase (GTK_EVENT_CONTROLLER(m_zoom_gesture), GTK_PHASE_TARGET);
 
@@ -4683,7 +4863,12 @@ void wxWindowGesturesData::Reinit(wxWindowGTK* win,
     {
         eventsMask &= ~wxTOUCH_ROTATE_GESTURE;
 
+        #ifdef __WXGTK4__
+        m_rotate_gesture = gtk_gesture_rotate_new();
+        gtk_widget_add_controller(widget, GTK_EVENT_CONTROLLER(m_rotate_gesture));
+#else
         m_rotate_gesture = gtk_gesture_rotate_new(widget);
+#endif
 
         gtk_event_controller_set_propagation_phase (GTK_EVENT_CONTROLLER(m_rotate_gesture), GTK_PHASE_TARGET);
 
@@ -4705,7 +4890,12 @@ void wxWindowGesturesData::Reinit(wxWindowGTK* win,
     {
         eventsMask &= ~wxTOUCH_PRESS_GESTURES;
 
+        #ifdef __WXGTK4__
+        m_long_press_gesture = gtk_gesture_long_press_new();
+        gtk_widget_add_controller(widget, GTK_EVENT_CONTROLLER(m_long_press_gesture));
+#else
         m_long_press_gesture = gtk_gesture_long_press_new(widget);
+#endif
 
         // "pressed" signal is also generated when left mouse is down for some minimum duration of time.
         // This can be disable by calling gtk_gesture_single_set_touch_only(GTK_GESTURE_SINGLE(m_long_press_gesture), TRUE)
@@ -4875,6 +5065,19 @@ void wxWindowGTK::ConnectWidget( GtkWidget *widget )
     // Motion and enter/leave all come from one GtkEventControllerMotion; the
     // coordinates it hands over are already widget-relative.
     {
+        // Buttons: one GtkGestureClick, set to react to any button rather
+        // than only the primary one, since wx reports middle/right/aux
+        // clicks too. It stays in the default BUBBLE phase and claims the
+        // sequence only when wx handles the press -- see the comment on
+        // wx_gtk_button_pressed_callback() for why.
+        GtkGesture* const clickGesture = gtk_gesture_click_new();
+        gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(clickGesture), 0);
+        g_signal_connect (clickGesture, "pressed",
+                          G_CALLBACK (wx_gtk_button_pressed_callback), this);
+        g_signal_connect (clickGesture, "released",
+                          G_CALLBACK (wx_gtk_button_released_callback), this);
+        gtk_widget_add_controller(widget, GTK_EVENT_CONTROLLER(clickGesture));
+
         GtkEventController* const motionController = gtk_event_controller_motion_new();
         g_signal_connect (motionController, "motion",
                           G_CALLBACK (wx_gtk_motion_callback), this);

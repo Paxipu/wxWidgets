@@ -3977,8 +3977,13 @@ void wxWindowGTK::PostCreation()
             g_signal_connect(m_wxwindow, "expose_event", G_CALLBACK(expose_event), this);
 #endif
 
+#ifndef __WXGTK4__
+            // Gone under GTK4, which always redraws a widget on resize --
+            // i.e. behaves as this being unconditionally TRUE. Means
+            // wxFULL_REPAINT_ON_RESIZE cannot be turned off there.
             if (GetLayoutDirection() == wxLayout_LeftToRight)
                 gtk_widget_set_redraw_on_allocate(m_wxwindow, HasFlag(wxFULL_REPAINT_ON_RESIZE));
+#endif
         }
     }
 
@@ -6943,19 +6948,29 @@ void wxWindowGTK::SetDoubleBuffered( bool on )
 {
     wxCHECK_RET( (m_widget != nullptr), wxT("invalid window") );
 
+#ifdef __WXGTK4__
+    // GTK4 always double-buffers and removed the ability to turn it off.
+    wxUnusedVar(on);
+#else
     if ( m_wxwindow )
     {
         wxGCC_WARNING_SUPPRESS(deprecated-declarations)
         gtk_widget_set_double_buffered( m_wxwindow, on );
         wxGCC_WARNING_RESTORE(deprecated-declarations)
     }
+#endif
 }
 
 bool wxWindowGTK::IsDoubleBuffered() const
 {
+#ifdef __WXGTK4__
+    // Always true under GTK4, which has no way to disable it.
+    return true;
+#else
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     return gtk_widget_get_double_buffered( m_wxwindow ) != 0;
     wxGCC_WARNING_RESTORE(deprecated-declarations)
+#endif
 }
 
 void wxWindowGTK::ClearBackground()
@@ -7795,6 +7810,7 @@ void wxWindowGTK::DoReleaseMouse()
 
 void wxWindowGTK::GTKReleaseMouseAndNotify()
 {
+#ifndef __WXGTK4__
     GdkDisplay* display = gtk_widget_get_display(m_widget);
 #if GTK_CHECK_VERSION(3,20,0)
     if (gtk_check_version(3,20,0) == nullptr)
@@ -7806,6 +7822,7 @@ void wxWindowGTK::GTKReleaseMouseAndNotify()
         gdk_display_pointer_ungrab(display, unsigned(GDK_CURRENT_TIME));
         wxGCC_WARNING_RESTORE()
     }
+#endif // !__WXGTK4__
     g_captureWindow = nullptr;
     NotifyCaptureLost();
 }
@@ -8014,6 +8031,12 @@ void wxWindowGTK::GTKScrolledWindowSetBorder(GtkWidget* w, int wxstyle)
     //as well...
     if (!(wxstyle & wxNO_BORDER) && !(wxstyle & wxBORDER_STATIC))
     {
+#ifdef __WXGTK4__
+        // GtkShadowType is gone: GTK4 reduced the scrolled window's border to
+        // a boolean, so the in/out distinction (wxBORDER_RAISED vs the rest)
+        // can no longer be expressed -- any wx border becomes a plain frame.
+        gtk_scrolled_window_set_has_frame( GTK_SCROLLED_WINDOW(w), TRUE );
+#else
         GtkShadowType gtkstyle = GTK_SHADOW_IN;
 
         if(wxstyle & wxBORDER_RAISED)
@@ -8021,6 +8044,7 @@ void wxWindowGTK::GTKScrolledWindowSetBorder(GtkWidget* w, int wxstyle)
 
         gtk_scrolled_window_set_shadow_type( GTK_SCROLLED_WINDOW(w),
                                              gtkstyle );
+#endif
     }
 }
 

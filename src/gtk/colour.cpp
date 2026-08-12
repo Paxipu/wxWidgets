@@ -26,11 +26,14 @@ public:
     wxColourRefData(const GdkRGBA& gdkRGBA)
         : m_gdkRGBA(gdkRGBA)
     {
+#ifndef __WXGTK4__
         m_gdkColor.red   = guint16(wxRound(gdkRGBA.red   * 65535));
         m_gdkColor.green = guint16(wxRound(gdkRGBA.green * 65535));
         m_gdkColor.blue  = guint16(wxRound(gdkRGBA.blue  * 65535));
+#endif
         m_alpha = wxByte(wxRound(gdkRGBA.alpha * 255));
     }
+#ifndef __WXGTK4__
     wxColourRefData(const GdkColor& gdkColor)
         : m_gdkColor(gdkColor)
     {
@@ -40,19 +43,26 @@ public:
         m_gdkRGBA.alpha = 1;
         m_alpha = 255;
     }
+#endif
     wxColourRefData(guchar red, guchar green, guchar blue, guchar alpha)
     {
         m_gdkRGBA.red = red / 255.0;
         m_gdkRGBA.green = green / 255.0;
         m_gdkRGBA.blue = blue / 255.0;
         m_gdkRGBA.alpha = alpha / 255.0;
+#ifndef __WXGTK4__
         m_gdkColor.red = (guint16(red) << 8) + red;
         m_gdkColor.green = (guint16(green) << 8) + green;
         m_gdkColor.blue = (guint16(blue) << 8) + blue;
+#endif
         m_alpha = alpha;
     }
     GdkRGBA m_gdkRGBA;
+#ifndef __WXGTK4__
+    // GdkColor doesn't exist under GTK4; everything below reads m_gdkRGBA
+    // instead, which held the same values all along.
     GdkColor m_gdkColor;
+#endif
 #else
     wxColourRefData(guint16 red, guint16 green, guint16 blue, wxByte alpha = 0xff)
     {
@@ -122,7 +132,12 @@ void wxColourRefData::AllocColour( GdkColormap *cmap )
 // GDK's values are in 0..65535 range, ours are in 0..255
 #define SHIFT  8
 
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+wxColourImpl::wxColourImpl(const GdkRGBA& gdkRGBA)
+{
+    m_refData = new wxColourRefData(gdkRGBA);
+}
+#elif defined(__WXGTK3__)
 wxColourImpl::wxColourImpl(const GdkRGBA& gdkRGBA)
 {
     m_refData = new wxColourRefData(gdkRGBA);
@@ -149,7 +164,11 @@ bool wxColourImpl::operator == ( const wxColourImpl& col ) const
 
     wxColourRefData* refData = M_COLDATA;
     wxColourRefData* that_refData = static_cast<wxColourRefData*>(col.m_refData);
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    return refData->m_gdkRGBA.red == that_refData->m_gdkRGBA.red &&
+           refData->m_gdkRGBA.green == that_refData->m_gdkRGBA.green &&
+           refData->m_gdkRGBA.blue == that_refData->m_gdkRGBA.blue &&
+#elif defined(__WXGTK3__)
     return refData->m_gdkColor.red == that_refData->m_gdkColor.red &&
            refData->m_gdkColor.green == that_refData->m_gdkColor.green &&
            refData->m_gdkColor.blue == that_refData->m_gdkColor.blue &&
@@ -181,7 +200,9 @@ unsigned char wxColourImpl::Red() const
 {
     wxCHECK_MSG( IsOk(), 0, wxT("invalid colour") );
 
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    return wxByte(wxRound(M_COLDATA->m_gdkRGBA.red * 255));
+#elif defined(__WXGTK3__)
     return wxByte(M_COLDATA->m_gdkColor.red >> 8);
 #else
     return wxByte(M_COLDATA->m_red >> SHIFT);
@@ -192,7 +213,9 @@ unsigned char wxColourImpl::Green() const
 {
     wxCHECK_MSG( IsOk(), 0, wxT("invalid colour") );
 
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    return wxByte(wxRound(M_COLDATA->m_gdkRGBA.green * 255));
+#elif defined(__WXGTK3__)
     return wxByte(M_COLDATA->m_gdkColor.green >> 8);
 #else
     return wxByte(M_COLDATA->m_green >> SHIFT);
@@ -203,7 +226,9 @@ unsigned char wxColourImpl::Blue() const
 {
     wxCHECK_MSG( IsOk(), 0, wxT("invalid colour") );
 
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    return wxByte(wxRound(M_COLDATA->m_gdkRGBA.blue * 255));
+#elif defined(__WXGTK3__)
     return wxByte(M_COLDATA->m_gdkColor.blue >> 8);
 #else
     return wxByte(M_COLDATA->m_blue >> SHIFT);
@@ -233,6 +258,7 @@ int wxColourImpl::GetPixel() const
 }
 #endif
 
+#ifndef __WXGTK4__
 const GdkColor *wxColourImpl::GetColor() const
 {
     wxCHECK_MSG( IsOk(), nullptr, wxT("invalid colour") );
@@ -243,6 +269,7 @@ const GdkColor *wxColourImpl::GetColor() const
     return &M_COLDATA->m_color;
 #endif
 }
+#endif // !__WXGTK4__
 
 #ifdef __WXGTK3__
 const GdkRGBA* wxColourImpl::GTKGetRGBA() const

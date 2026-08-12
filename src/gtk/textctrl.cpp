@@ -184,14 +184,26 @@ static void wxGtkTextApplyTagsFromAttr(GtkWidget *text,
     {
         wxGtkTextRemoveTagsWithPrefix(text_buffer, "WXFORECOLOR", start, end);
 
+#ifdef __WXGTK4__
+        // GdkColor is gone; GtkTextTag's "foreground-gdk" property went with it,
+        // leaving the GdkRGBA-based "foreground-rgba".
+        const GdkRGBA* const colFg = attr.GetTextColour().GTKGetRGBA();
+        g_snprintf(buf, sizeof(buf), "WXFORECOLOR %f %f %f",
+                   colFg->red, colFg->green, colFg->blue);
+#else
         const GdkColor *colFg = attr.GetTextColour().GetColor();
         g_snprintf(buf, sizeof(buf), "WXFORECOLOR %d %d %d",
                    colFg->red, colFg->green, colFg->blue);
+#endif
         tag = gtk_text_tag_table_lookup( gtk_text_buffer_get_tag_table( text_buffer ),
                                          buf );
         if (!tag)
             tag = gtk_text_buffer_create_tag( text_buffer, buf,
+#ifdef __WXGTK4__
+                                              "foreground-rgba", colFg, nullptr );
+#else
                                               "foreground-gdk", colFg, nullptr );
+#endif
         gtk_text_buffer_apply_tag (text_buffer, tag, start, end);
     }
 
@@ -199,14 +211,26 @@ static void wxGtkTextApplyTagsFromAttr(GtkWidget *text,
     {
         wxGtkTextRemoveTagsWithPrefix(text_buffer, "WXBACKCOLOR", start, end);
 
+#ifdef __WXGTK4__
+        // GdkColor is gone; GtkTextTag's "background-gdk" property went with it,
+        // leaving the GdkRGBA-based "background-rgba".
+        const GdkRGBA* const colBg = attr.GetBackgroundColour().GTKGetRGBA();
+        g_snprintf(buf, sizeof(buf), "WXBACKCOLOR %f %f %f",
+                   colBg->red, colBg->green, colBg->blue);
+#else
         const GdkColor *colBg = attr.GetBackgroundColour().GetColor();
         g_snprintf(buf, sizeof(buf), "WXBACKCOLOR %d %d %d",
                    colBg->red, colBg->green, colBg->blue);
+#endif
         tag = gtk_text_tag_table_lookup( gtk_text_buffer_get_tag_table( text_buffer ),
                                          buf );
         if (!tag)
             tag = gtk_text_buffer_create_tag( text_buffer, buf,
+#ifdef __WXGTK4__
+                                              "background-rgba", colBg, nullptr );
+#else
                                               "background-gdk", colBg, nullptr );
+#endif
         gtk_text_buffer_apply_tag (text_buffer, tag, start, end);
     }
 

@@ -237,6 +237,16 @@ wxColour wxHyperlinkCtrl::GetVisitedColour() const
     wxColour ret;
     if ( UseNative() )
     {
+#ifdef __WXGTK4__
+        // GdkColor, gtk_widget_style_get() and the "visited-link-color" style
+        // property are all gone under GTK4: link colouring moved to CSS, where
+        // it is applied to the link element rather than exposed as a queryable
+        // property. Fall back to the same hard-coded value the GTK3 path uses
+        // when the theme defines nothing, since there is no longer anything to
+        // query. Known fidelity gap: a theme with custom visited-link colours
+        // will not be followed.
+        ret = wxColour(0x55, 0x1a, 0x8b);
+#else
         GdkColor* link_color;
         GdkColor color = { 0, 0x5555, 0x1a1a, 0x8b8b };
 
@@ -251,6 +261,7 @@ wxColour wxHyperlinkCtrl::GetVisitedColour() const
         }
         wxGCC_WARNING_RESTORE()
         ret = wxColour(color);
+#endif
     }
     else
         ret = base_type::GetVisitedColour();

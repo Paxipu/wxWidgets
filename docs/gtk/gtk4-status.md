@@ -1631,8 +1631,15 @@ is an assumption, not yet verified". Checked, and it is **partly wrong**:
 - **Update regions are gone.** GTK4 gives a widget no damage information and
   removed partial invalidation, so `wxWindow::GetUpdateRegion()` reports the
   whole client area and `wxPaintDC`'s clip to it is a no-op. Correctness holds
-  (repainting more is safe) and GTK4's renderer culls instead, but
-  applications using it as an optimisation lose it.
+  (repainting more is safe) and GTK4's renderer culls by diffing render nodes
+  instead.
+
+  **Less severe than first documented.** wxGTK3 already collapsed any
+  multi-rectangle damage to a single bounding rectangle before an application
+  saw it — `GTKSendPaintEvents()` takes `cairo_clip_extents()` and builds
+  `m_updateRegion` from one rect — and in practice GTK3 tended to damage the
+  whole window regardless. So this narrows an already-coarse guarantee rather
+  than removing a precise one. See the Phase 4 design doc section 3.
 - **Freezing a native control does nothing.** GTK3 intercepted the draw signal
   ahead of the widget's own handler; a GTK4 snapshot vfunc cannot be
   intercepted from outside, so only `wxPizza` widgets can be frozen.

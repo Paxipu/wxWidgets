@@ -81,11 +81,31 @@ Consequences, all of which should be stated in the port's user-facing notes:
 - The early-out above never triggers, so `wxEVT_PAINT` handlers run in full
   every time.
 
-**Correctness is preserved** — repainting more than necessary is always safe —
-but applications that use the update region as an optimisation lose it, and
-any that (incorrectly, but in practice) rely on it being *tight* will behave
-differently. Efficiency is not lost overall, because GTK4's renderer does the
-culling instead; it just happens below wx rather than inside it.
+**Correctness is preserved** — repainting more than necessary is always safe.
+
+The practical severity of this is **lower than it first appears**, and the
+first draft of this document overstated it. Two things temper it:
+
+- **wxGTK3 already discarded most of the precision.** The code above does not
+  read the damage region and hand it to wx. It takes
+  `gdk_window_get_clip_region()` — the *window's* region, not the damage —
+  reduces it to its `extents`, intersects the cairo clip with that, then takes
+  `cairo_clip_extents()` and builds `m_updateRegion` from a **single
+  rectangle**. Any multi-rectangle damage was therefore already collapsed to
+  one bounding box before an application saw it, so a scattered repaint
+  already reported an area far larger than what actually changed.
+- **In practice GTK3 tended to damage the whole window anyway**, so for most
+  applications the reported update region was already the full client area
+  much of the time. (Reported from experience with wxGTK3 by the maintainer of
+  a wxWidgets application; consistent with the coarseness the code shows.)
+
+So the real change is from "bounding box of the damage, often the whole
+window" to "always the whole window" — a narrowing of an already-coarse
+guarantee, not the loss of a precise one. Worth documenting, and worth a line
+in the port's user-facing notes, but not a reason to hold up the phase.
+
+Efficiency is not lost overall either: GTK4's renderer culls by diffing render
+nodes, so the work still gets skipped, just below wx rather than inside it.
 
 ## 4. Work items
 

@@ -279,10 +279,15 @@ bool wxGUIAppTraits::ShowAssertDialog(const wxString& msg)
         GtkWidget *dialog = gtk_assert_dialog_new();
         gtk_assert_dialog_set_message(GTK_ASSERT_DIALOG(dialog), msg.mb_str());
 
-        GdkDisplay* display = gtk_widget_get_display(dialog);
 #ifdef __WXGTK4__
-        gdk_seat_ungrab(gdk_display_get_default_seat(display));
-#elif defined(__WXGTK3__)
+        // Nothing to ungrab: GTK4 removed explicit grabs entirely (see
+        // wxWindowGTK::DoReleaseMouse()). This existed so an assert raised
+        // while the pointer was grabbed could still be dismissed; under GTK4
+        // the implicit grab a gesture holds ends with its own sequence, so
+        // there is nothing here that could block the dialog.
+#else
+        GdkDisplay* display = gtk_widget_get_display(dialog);
+#if defined(__WXGTK3__)
         GdkDevice* const device = wx_get_gdk_device_from_display(display);
 
         wxGCC_WARNING_SUPPRESS(deprecated-declarations)
@@ -290,7 +295,8 @@ bool wxGUIAppTraits::ShowAssertDialog(const wxString& msg)
         wxGCC_WARNING_RESTORE()
 #else
         gdk_display_pointer_ungrab(display, unsigned(GDK_CURRENT_TIME));
-#endif
+#endif // __WXGTK3__/!__WXGTK3__
+#endif // __WXGTK4__/!__WXGTK4__
 
 #if wxUSE_STACKWALKER
         // save the current stack ow...

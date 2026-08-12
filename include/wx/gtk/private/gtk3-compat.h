@@ -158,6 +158,95 @@ static inline void wx_gtk_box_pack_start(GtkBox* box, GtkWidget* child,
 // Plain rename, same signature.
 #define gtk_label_set_line_wrap(label, wrap) gtk_label_set_wrap(label, wrap)
 
+// gtk_dialog_run() and gtk_native_dialog_run() are gone under GTK4: dialogs
+// there are asynchronous, the caller connecting to ::response instead of
+// blocking. wx's API is synchronous (wxDialog::ShowModal() returns the result),
+// so the blocking behaviour has to exist somewhere, and these reproduce what
+// gtk_dialog_run() did internally -- make the dialog modal, show it, and spin
+// a nested main loop until it responds.
+//
+// Faithful to the original in the ways that matter to the call sites: the
+// dialog is not destroyed on return, and a response of GTK_RESPONSE_NONE is
+// produced if it is destroyed while running rather than leaving the loop
+// spinning forever.
+//
+// The nested loop is a real one rather than wx's wxGUIEventLoop because these
+// are called from code (the assert dialog in particular) that must work when
+// wx's own event loop machinery may not be in a usable state.
+
+struct wxGtkDialogRunData
+{
+    GMainLoop* loop;
+    int response;
+};
+
+static inline void wx_gtk_dialog_run_response(void*, int response_id, void* data)
+{
+    wxGtkDialogRunData* const d = static_cast<wxGtkDialogRunData*>(data);
+    d->response = response_id;
+    if ( g_main_loop_is_running(d->loop) )
+        g_main_loop_quit(d->loop);
+}
+
+static inline void wx_gtk_dialog_run_destroy(void*, void* data)
+{
+    wxGtkDialogRunData* const d = static_cast<wxGtkDialogRunData*>(data);
+    d->response = GTK_RESPONSE_NONE;
+    if ( g_main_loop_is_running(d->loop) )
+        g_main_loop_quit(d->loop);
+}
+
+static inline int wx_gtk_dialog_run(GtkDialog* dialog)
+{
+    wxGtkDialogRunData data;
+    data.loop = g_main_loop_new(nullptr, FALSE);
+    data.response = GTK_RESPONSE_NONE;
+
+    const gulong idResponse = g_signal_connect(
+        dialog, "response", G_CALLBACK(wx_gtk_dialog_run_response), &data);
+    const gulong idDestroy = g_signal_connect(
+        dialog, "destroy", G_CALLBACK(wx_gtk_dialog_run_destroy), &data);
+
+    gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
+    gtk_window_present(GTK_WINDOW(dialog));
+
+    g_main_loop_run(data.loop);
+
+    // The dialog may already be gone if it was destroyed rather than answered.
+    if ( g_signal_handler_is_connected(dialog, idResponse) )
+        g_signal_handler_disconnect(dialog, idResponse);
+    if ( g_signal_handler_is_connected(dialog, idDestroy) )
+        g_signal_handler_disconnect(dialog, idDestroy);
+
+    g_main_loop_unref(data.loop);
+
+    return data.response;
+}
+#define gtk_dialog_run(dialog) wx_gtk_dialog_run(dialog)
+
+static inline int wx_gtk_native_dialog_run(GtkNativeDialog* dialog)
+{
+    wxGtkDialogRunData data;
+    data.loop = g_main_loop_new(nullptr, FALSE);
+    data.response = GTK_RESPONSE_NONE;
+
+    const gulong idResponse = g_signal_connect(
+        dialog, "response", G_CALLBACK(wx_gtk_dialog_run_response), &data);
+
+    gtk_native_dialog_set_modal(dialog, TRUE);
+    gtk_native_dialog_show(dialog);
+
+    g_main_loop_run(data.loop);
+
+    if ( g_signal_handler_is_connected(dialog, idResponse) )
+        g_signal_handler_disconnect(dialog, idResponse);
+
+    g_main_loop_unref(data.loop);
+
+    return data.response;
+}
+#define gtk_native_dialog_run(dialog) wx_gtk_native_dialog_run(dialog)
+
 // No widget owns a GdkWindow under GTK4 -- the concept is gone -- so the
 // GTK3 question "does this widget have its own window?" is always answered
 // no. Call sites use it to decide whether coordinates need translating

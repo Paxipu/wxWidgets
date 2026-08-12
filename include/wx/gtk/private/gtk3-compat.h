@@ -158,9 +158,25 @@ static inline void wx_gtk_box_pack_start(GtkBox* box, GtkWidget* child,
 // Plain rename, same signature.
 #define gtk_label_set_line_wrap(label, wrap) gtk_label_set_wrap(label, wrap)
 
+// No widget owns a GdkWindow under GTK4 -- the concept is gone -- so the
+// GTK3 question "does this widget have its own window?" is always answered
+// no. Call sites use it to decide whether coordinates need translating
+// through a child window, which under GTK4 they never do.
+static inline gboolean wx_gtk_widget_get_has_window(GtkWidget*)
+{
+    return FALSE;
+}
+
 #else // !__WXGTK4__
 
 wxGCC_WARNING_SUPPRESS(deprecated-declarations)
+
+// Counterpart of the GTK4 stub above: here the question is real, so just
+// forward to GTK.
+static inline gboolean wx_gtk_widget_get_has_window(GtkWidget* widget)
+{
+    return gtk_widget_get_has_window(widget);
+}
 
 // ----------------------------------------------------------------------------
 // the following were introduced in GTK+ 4, when the text-manipulating parts of

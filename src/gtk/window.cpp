@@ -677,7 +677,7 @@ draw_border(GtkWidget* widget, GdkEventExpose* gdk_event, wxWindow* win)
     const int w = alloc.width;
     const int h = alloc.height;
 #ifdef __WXGTK3__
-    if (!gtk_widget_get_has_window(widget))
+    if (!wx_gtk_widget_get_has_window(widget))
     {
         // cairo_t origin is set to widget's origin, need to adjust
         // coordinates for child when they are not relative to parent
@@ -3702,7 +3702,11 @@ void wxWindowGTK::GTKCreateScrolledWindowWith(GtkWidget* view)
     wxASSERT_MSG( HasFlag(wxHSCROLL) || HasFlag(wxVSCROLL),
                   wxS("Must not be called if scrolling is not needed.") );
 
+    #ifdef __WXGTK4__
+    m_widget = gtk_scrolled_window_new();
+#else
     m_widget = gtk_scrolled_window_new( nullptr, nullptr );
+#endif
 
     GtkScrolledWindow *scrolledWindow = GTK_SCROLLED_WINDOW(m_widget);
 
@@ -5188,7 +5192,11 @@ void wxWindowGTK::DoMoveWindow(int x, int y, int width, int height)
         else
         {
             GtkAllocation a = { x, y, width, height };
+            #ifdef __WXGTK4__
+            gtk_widget_size_allocate(m_widget, &a, -1);
+#else
             gtk_widget_size_allocate(m_widget, &a);
+#endif
         }
 #if GTK_CHECK_VERSION(3,8,0)
         if (wx_is_at_least_gtk3(8))
@@ -5317,7 +5325,11 @@ bool wxWindowGTK::GTKShowFromOnIdle()
         alloc.y = m_y;
         alloc.width = m_width;
         alloc.height = m_height;
-        gtk_widget_size_allocate( m_widget, &alloc );
+        #ifdef __WXGTK4__
+            gtk_widget_size_allocate( m_widget, &alloc , -1);
+#else
+            gtk_widget_size_allocate( m_widget, &alloc );
+#endif
         gtk_widget_show( m_widget );
         wxShowEvent eventShow(GetId(), true);
         eventShow.SetEventObject(this);
@@ -5556,7 +5568,7 @@ void wxWindowGTK::DoClientToScreen( int *x, int *y ) const
 
     if (!m_wxwindow)
     {
-        if (!gtk_widget_get_has_window(m_widget))
+        if (!wx_gtk_widget_get_has_window(m_widget))
         {
             GtkAllocation a;
             gtk_widget_get_allocation(m_widget, &a);
@@ -5627,7 +5639,7 @@ void wxWindowGTK::DoScreenToClient( int *x, int *y ) const
 
     if (!m_wxwindow)
     {
-        if (!gtk_widget_get_has_window(m_widget))
+        if (!wx_gtk_widget_get_has_window(m_widget))
         {
             GtkAllocation a;
             gtk_widget_get_allocation(m_widget, &a);
@@ -7030,7 +7042,11 @@ void wxWindowGTK::GTKApplyCssStyle(GtkCssProvider* provider, const char* style)
     gtk_style_context_remove_provider(gtk_widget_get_style_context(m_widget),
                                       GTK_STYLE_PROVIDER(provider));
 
+    #ifdef __WXGTK4__
+    gtk_css_provider_load_from_data(provider, style, -1);
+#else
     gtk_css_provider_load_from_data(provider, style, -1, nullptr);
+#endif
 
     gtk_style_context_add_provider(gtk_widget_get_style_context(m_widget),
                                    GTK_STYLE_PROVIDER(provider),
@@ -7391,6 +7407,7 @@ struct wxPopupMenuPositionCallbackData
 };
 
 extern "C" {
+#ifndef __WXGTK4__
 static
 void wxPopupMenuPositionCallback( GtkMenu *menu,
                                   gint *x, gint *y,
@@ -7428,6 +7445,7 @@ void wxPopupMenuPositionCallback( GtkMenu *menu,
     *x = pos.x;
     *y = pos.y;
 }
+#endif // !__WXGTK4__
 }
 
 bool wxWindowGTK::DoPopupMenu( wxMenu *menu, int x, int y )

@@ -49,6 +49,7 @@
 #include "wx/gtk/private/event.h"
 #include "wx/gtk/private/wayland.h"
 #include "wx/gtk/private/win_gtk.h"
+#include "wx/gtk/private/stylecontext.h"
 #include "wx/gtk/private/backend.h"
 #include "wx/private/textmeasure.h"
 using namespace wxGTKImpl;
@@ -652,6 +653,7 @@ static gboolean expose_event(GtkWidget*, GdkEventExpose* gdk_event, wxWindow* wi
 // "expose_event"/"draw" from m_wxwindow->parent, for drawing border
 //-----------------------------------------------------------------------------
 
+#ifndef __WXGTK4__
 extern "C" {
 static gboolean
 #ifdef __WXGTK3__
@@ -771,6 +773,7 @@ parent_set(GtkWidget* widget, GtkWidget* old_parent, wxWindow* win)
     }
 }
 }
+#endif // !__WXGTK4__
 #endif // !__WXUNIVERSAL__
 
 //-----------------------------------------------------------------------------
@@ -6731,6 +6734,54 @@ bool wxWindowGTK::DoIsExposed( int x, int y, int w, int h ) const
     return m_updateRegion.Contains(x, y, w, h) != wxOutRegion;
 }
 
+#if defined(__WXGTK4__) && !defined(__WXUNIVERSAL__)
+
+void wxWindowGTK::GTKDrawBorder(cairo_t* cr)
+{
+    if ( !HasFlag(wxPizza::BORDER_STYLES) )
+        return;
+
+    const int w = gtk_widget_get_width(m_wxwindow);
+    const int h = gtk_widget_get_height(m_wxwindow);
+    if ( w <= 0 || h <= 0 )
+        return;
+
+    cairo_save(cr);
+
+    if ( HasFlag(wxBORDER_SIMPLE) )
+    {
+        // The "border-color" property query went away with
+        // gtk_style_context_get(); use the theme's conventional colour name
+        // through the same shared helper as the rest of the port.
+        wxColour colBorder;
+        GtkStyleContext* const sc = gtk_widget_get_style_context(m_wxwindow);
+        if ( !wxGTKLookupThemeColour(sc, "borders", colBorder) )
+            colBorder = *wxBLACK;
+
+        cairo_set_source_rgba(cr,
+                              colBorder.Red() / 255.0,
+                              colBorder.Green() / 255.0,
+                              colBorder.Blue() / 255.0,
+                              colBorder.Alpha() / 255.0);
+        cairo_set_line_width(cr, 1);
+        cairo_rectangle(cr, 0.5, 0.5, w - 1, h - 1);
+        cairo_stroke(cr);
+    }
+    else if ( HasFlag(wxBORDER_RAISED | wxBORDER_SUNKEN | wxBORDER_THEME) )
+    {
+        //TODO: wxBORDER_RAISED and wxBORDER_SUNKEN are not distinguished,
+        //      matching what the GTK3 code did.
+        GtkStyleContext* const
+            sc = gtk_widget_get_style_context(wxGTKPrivate::GetEntryWidget());
+
+        gtk_render_frame(sc, cr, 0, 0, w, h);
+    }
+
+    cairo_restore(cr);
+}
+
+#endif // __WXGTK4__ && !__WXUNIVERSAL__
+
 #ifdef __WXGTK3__
 void wxWindowGTK::GTKSendPaintEvents(cairo_t* cr)
 #else
@@ -6962,6 +7013,19 @@ void wxWindowGTK::GTKSendPaintEvents(const GdkRegion* region)
 #endif
     }
 #endif // wxGTK_HAS_COMPOSITING_SUPPORT
+
+#if defined(__WXGTK4__) && !defined(__WXUNIVERSAL__)
+    // GTK3 painted the border from a handler on the *parent's* draw signal,
+    // connected with connect_after so it overlaid the child's content. GTK4
+    // has neither that signal nor a parent window to distinguish, so wx paints
+    // it here: same "after the content" ordering, with coordinates becoming
+    // child-relative, which works out because the stroke always fell just
+    // inside the child's own bounds anyway.
+    //
+    // This also restores the BORDER_STYLES rendering that went missing when
+    // wxPizza became windowless (status update 8).
+    GTKDrawBorder(cr);
+#endif
 
     m_clipPaintRegion = false;
 #ifdef __WXGTK3__

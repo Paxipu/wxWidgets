@@ -172,6 +172,12 @@ public:
     // It is also responsible for background erase events.
 #ifdef __WXGTK3__
     void GTKSendPaintEvents(cairo_t* cr);
+#if defined(__WXGTK4__) && !defined(__WXUNIVERSAL__)
+    // Paint the wxBORDER_* decoration. GTK3 did this from a handler on the
+    // parent's draw signal; GTK4 has neither that signal nor a per-widget
+    // window, so wx draws it itself at the end of the paint path.
+    void GTKDrawBorder(cairo_t* cr);
+#endif
 #else
     void GTKSendPaintEvents(const GdkRegion* region);
 #endif

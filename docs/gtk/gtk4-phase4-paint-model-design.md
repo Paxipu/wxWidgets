@@ -1,0 +1,124 @@
+# Phase 4 design: the `draw` → `snapshot` paint model
+
+The last unstarted phase, and now the single largest blocker in the port:
+`window.cpp` cannot compile without it (about 30 of its remaining errors are
+here), and `dc.cpp`, `generic/graphicc.cpp`, `overlay.cpp` and `image_gtk.cpp`
+are queued behind the same change. Until it lands, `test_gui` cannot link and
+**nothing in this port can be runtime-verified**, which is why it matters more
+than its error count suggests.
+
+As with the style-context work, the findings below were measured against real
+GTK4 4.14.5 rather than read off headers. The probe is committed as
+`docs/gtk/probes/gtk4-snapshot-cairo.c`.
+
+## 1. What changes
+
+GTK3 widgets implement a `draw` vfunc taking a `cairo_t*`. GTK4 replaced it
+with `snapshot`, taking a `GtkSnapshot*` that accumulates *render nodes* —
+a retained scene graph the renderer diffs and replays, rather than immediate
+drawing commands.
+
+wx's painting is entirely cairo-based: `GTKSendPaintEvents(cairo_t*)` sets up
+the clip and update region, then hands the `cairo_t` to `wxPaintDC` via
+`m_paintContext`. Rewriting that onto render nodes would mean rewriting
+`wxGraphicsContext` and every `wxDC` operation — a far larger job than this
+port.
+
+## 2. The finding that makes this tractable
+
+`gtk_snapshot_append_cairo()` returns a real `cairo_t` that draws into the
+snapshot. Measured:
+
+```
+snapshot #1: widget 200x100
+  cairo clip extents : 0.0,0.0 .. 200.0,100.0
+  user (0,0) maps to device 0.0,0.0  -> widget-relative
+render node produced: yes
+  node bounds: 200x100 at 0,0
+```
+
+Two things matter here:
+
+- **The coordinate space is widget-relative**, identical to what the GTK3
+  `draw` vfunc gave a windowless widget. So `GTKSendPaintEvents(cairo_t*)`,
+  and everything downstream of it, needs no coordinate changes at all.
+- **It rasterises**: a genuine render node comes out, and this worked with the
+  widget merely allocated inside a window — no realization dance required.
+
+So Phase 4 is **not** a rewrite of wx's drawing. It is: give `wxPizza` a
+`snapshot` vfunc, obtain a `cairo_t` from it, and feed the existing paint path.
+
+## 3. The real cost: update regions disappear
+
+This is the part that cannot be preserved, and it should be decided
+deliberately rather than discovered later.
+
+GTK3 handed the `draw` handler a `cairo_t` already clipped to the **damage
+region**. `GTKSendPaintEvents()` reads that back out:
+
+```cpp
+double x1, y1, x2, y2;
+cairo_clip_extents(cr, &x1, &y1, &x2, &y2);
+if (x1 >= x2 || y1 >= y2)
+    return;                       // nothing damaged, skip painting entirely
+m_updateRegion = wxRegion(int(x1), int(y1), int(x2 - x1), int(y2 - y1));
+```
+
+and that becomes `wxWindow::GetUpdateRegion()`, which applications use to
+repaint only what changed.
+
+GTK4 gives a widget no damage information whatsoever. There is no partial
+invalidation API — `gtk_widget_queue_draw_area()` was removed, leaving only
+whole-widget `gtk_widget_queue_draw()` (already encountered in `win_gtk.cpp`,
+status update 8) — and the snapshot vfunc is called to rebuild the widget's
+whole scene, with the *renderer* deciding what actually needs repainting by
+diffing render nodes.
+
+Consequences, all of which should be stated in the port's user-facing notes:
+
+- `wxWindow::GetUpdateRegion()` will report the full client area under GTK4.
+- `wxPaintDC` clipping to the update region becomes a no-op.
+- The early-out above never triggers, so `wxEVT_PAINT` handlers run in full
+  every time.
+
+**Correctness is preserved** — repainting more than necessary is always safe —
+but applications that use the update region as an optimisation lose it, and
+any that (incorrectly, but in practice) rely on it being *tight* will behave
+differently. Efficiency is not lost overall, because GTK4's renderer does the
+culling instead; it just happens below wx rather than inside it.
+
+## 4. Work items
+
+1. **`wxPizza`**: implement `GtkWidgetClass::snapshot`, replacing the `draw`
+   signal connection in `window.cpp` (~line 3975). Chain up so child widgets
+   are still snapshotted (`gtk_widget_snapshot_child()`).
+2. **`GTKSendPaintEvents(cairo_t*)`**: drop the `gdk_window_get_clip_region()`
+   preamble (there is no window and no damage region); set `m_updateRegion`
+   from `gtk_widget_get_width()/get_height()`. The RTL mirroring below it uses
+   `gdk_window_get_width()` and becomes `gtk_widget_get_width()`.
+3. **`draw_border`** (`window.cpp` ~652): drawn on the *parent's* draw signal
+   with `gtk_cairo_should_draw_window()` deciding which window is being
+   painted. With one surface per toplevel that test is meaningless; the border
+   should be drawn by wxPizza's own snapshot instead. This is also what would
+   restore the `BORDER_STYLES` rendering gap left open in status update 8.
+4. **`draw_freeze`** (`window.cpp` ~8096): freezes painting by connecting to
+   `draw` and returning TRUE. Needs a snapshot-vfunc equivalent, or a flag
+   checked in wxPizza's snapshot.
+5. **`dc.cpp` / `graphicc.cpp` / `overlay.cpp` / `image_gtk.cpp`**: expected to
+   be mostly mechanical once the `cairo_t` is flowing, since they consume a
+   `cairo_t` rather than producing one — but this is an assumption, not yet
+   verified, and should be checked before being relied on.
+
+## 5. Recommended order
+
+Items 1 and 2 together are the smallest change that makes `wxPizza` paint at
+all, and they are independently compile-verifiable. Do those first and
+re-measure before touching the rest: if the assumption in item 5 holds, the
+remaining files may fall out cheaply, and if it doesn't, that is much better
+discovered against a working paint path than in the middle of one.
+
+Item 3 is where the risk sits. Border drawing was already broken by wxPizza
+going windowless, and it is the one piece here that cannot be confirmed by
+compilation — it needs a rendered comparison against GTK3, which needs
+`test_gui`, which needs this phase. Expect to have to leave it visibly
+imperfect and documented rather than silently wrong.

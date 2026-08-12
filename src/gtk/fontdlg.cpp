@@ -38,8 +38,11 @@ static void response(GtkDialog* dialog, int response_id, wxFontDialog* win)
             info.description = gtk_font_chooser_get_font_desc(GTK_FONT_CHOOSER(dialog));
             win->GetFontData().SetChosenFont(wxFont(info));
         }
+#ifndef __WXGTK4__
         else
 #endif
+#endif
+#ifndef __WXGTK4__
         {
             wxGCC_WARNING_SUPPRESS(deprecated-declarations)
             GtkFontSelectionDialog* sel = GTK_FONT_SELECTION_DIALOG(dialog);
@@ -47,6 +50,7 @@ static void response(GtkDialog* dialog, int response_id, wxFontDialog* win)
             win->GetFontData().SetChosenFont(wxFont(wxString::FromUTF8(name)));
             wxGCC_WARNING_RESTORE()
         }
+#endif
     }
 
     if (win->IsModal())
@@ -85,8 +89,11 @@ bool wxFontDialog::DoCreate(wxWindow *parent)
 #endif
     if (gtk_check_version(3,2,0) == nullptr)
         m_widget = gtk_font_chooser_dialog_new(message.utf8_str(), gtk_parent);
+#ifndef __WXGTK4__
     else
 #endif
+#endif
+#ifndef __WXGTK4__
     {
         wxGCC_WARNING_SUPPRESS(deprecated-declarations)
         m_widget = gtk_font_selection_dialog_new(message.utf8_str());
@@ -94,6 +101,7 @@ bool wxFontDialog::DoCreate(wxWindow *parent)
             gtk_window_set_transient_for(GTK_WINDOW(m_widget), gtk_parent);
         wxGCC_WARNING_RESTORE()
     }
+#endif
     g_object_ref(m_widget);
 
     g_signal_connect(m_widget, "response", G_CALLBACK(response), this);
@@ -108,8 +116,11 @@ bool wxFontDialog::DoCreate(wxWindow *parent)
 #if GTK_CHECK_VERSION(3,2,0)
             if (gtk_check_version(3,2,0) == nullptr)
                 gtk_font_chooser_set_font_desc(GTK_FONT_CHOOSER(m_widget), info->description);
+#ifndef __WXGTK4__
             else
 #endif
+#endif
+#ifndef __WXGTK4__
             {
                 wxGCC_WARNING_SUPPRESS(deprecated-declarations)
                 const wxString& fontname = info->ToString();
@@ -117,6 +128,7 @@ bool wxFontDialog::DoCreate(wxWindow *parent)
                 gtk_font_selection_dialog_set_font_name(sel, fontname.utf8_str());
                 wxGCC_WARNING_RESTORE()
             }
+#endif
         }
         else
         {

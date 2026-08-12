@@ -113,7 +113,11 @@ void wxCollapsiblePane::AddChildGTK(wxWindowGTK* child)
     // it has been called only once (and in any case we would get a warning
     // from the following call as GtkExpander is a GtkBin and can contain only
     // a single child!).
+#ifdef __WXGTK4__
+    gtk_expander_set_child(GTK_EXPANDER(m_widget), child->m_widget);
+#else
     gtk_container_add(GTK_CONTAINER(m_widget), child->m_widget);
+#endif
 }
 
 //-----------------------------------------------------------------------------
@@ -184,7 +188,14 @@ wxSize wxCollapsiblePane::DoGetBestSize() const
     {
         const wxSize panesz = m_pPane->GetBestSize();
         sz.x = wxMax(sz.x, panesz.x);
+#ifdef __WXGTK4__
+        // GtkExpander has no spacing property under GTK4, the gap between the
+        // expander label and its child is a matter of CSS there and can't be
+        // queried, so just don't account for it.
+        sz.y += panesz.y;
+#else
         sz.y += gtk_expander_get_spacing(GTK_EXPANDER(m_widget)) + panesz.y;
+#endif
     }
 
     return sz;

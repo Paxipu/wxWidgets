@@ -192,7 +192,7 @@ void wxFrame::DetachMenuBar()
     wxASSERT_MSG( (m_wxwindow != nullptr), wxT("invalid frame") );
 
     if ( m_frameMenuBar )
-        gtk_container_remove( GTK_CONTAINER(m_mainWidget), m_frameMenuBar->m_widget );
+        wx_gtk_widget_remove_from_parent( m_frameMenuBar->m_widget );
 
     wxFrameBase::DetachMenuBar();
 
@@ -230,8 +230,7 @@ void wxFrame::SetToolBar(wxToolBar *toolbar)
     m_frameToolBar = toolbar;
     if (toolbar)
     {
-        gtk_container_remove(
-            GTK_CONTAINER(gtk_widget_get_parent(toolbar->m_widget)), toolbar->m_widget);
+        wx_gtk_widget_remove_from_parent(toolbar->m_widget);
         if (toolbar->IsVertical())
         {
             // Vertical toolbar and m_wxwindow go into an hbox, inside the
@@ -243,7 +242,7 @@ void wxFrame::SetToolBar(wxToolBar *toolbar)
                 gtk_widget_show(hbox);
                 gtk_box_pack_start(GTK_BOX(m_mainWidget), hbox, true, true, 0);
                 g_object_ref(m_wxwindow);
-                gtk_container_remove(GTK_CONTAINER(m_mainWidget), m_wxwindow);
+                wx_gtk_widget_remove_from_parent(m_wxwindow);
                 gtk_box_pack_start(GTK_BOX(hbox), m_wxwindow, true, true, 0);
                 g_object_unref(m_wxwindow);
             }
@@ -285,8 +284,7 @@ void wxFrame::SetStatusBar(wxStatusBar *statbar)
     if (statbar)
     {
         // statusbar goes into bottom of vbox (m_mainWidget)
-        gtk_container_remove(
-            GTK_CONTAINER(gtk_widget_get_parent(statbar->m_widget)), statbar->m_widget);
+        wx_gtk_widget_remove_from_parent(statbar->m_widget);
         gtk_box_pack_end(GTK_BOX(m_mainWidget), statbar->m_widget, false, false, 0);
         // make sure next size_allocate on statusbar causes a size event
         statbar->m_useCachedClientSize = false;

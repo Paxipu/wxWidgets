@@ -23,6 +23,7 @@
 #include "wx/private/spinctrl.h"
 
 #include "wx/gtk/private.h"
+#include "wx/gtk/private/gtk3-compat.h"
 
 //-----------------------------------------------------------------------------
 // data
@@ -91,7 +92,7 @@ wx_gtk_spin_output(GtkSpinButton* spin, wxSpinCtrlGTKBase* win)
         return FALSE;
 
     if ( text != win->GetTextValue() )
-        gtk_entry_set_text(GTK_ENTRY(spin), text.utf8_str());
+        gtk_editable_set_text(GTK_EDITABLE(spin), text.utf8_str());
 
     return TRUE;
 }
@@ -214,7 +215,7 @@ bool wxSpinCtrlGTKBase::Create(wxWindow *parent, wxWindowID id,
     else
         align = 0.0;
 
-    gtk_entry_set_alignment(GTK_ENTRY(m_widget), align);
+    gtk_editable_set_alignment(GTK_EDITABLE(m_widget), align);
 
     GtkSetEntryWidth();
 
@@ -262,7 +263,7 @@ double wxSpinCtrlGTKBase::GTKGetValue() const
     int handled = 0;
     g_signal_emit(m_widget, sig_id, 0, &value, &handled);
     if (!handled)
-        value = g_strtod(gtk_entry_get_text(GTK_ENTRY(m_widget)), nullptr);
+        value = g_strtod(gtk_editable_get_text(GTK_EDITABLE(m_widget)), nullptr);
     GtkAdjustment* adj =
         gtk_spin_button_get_adjustment(GTK_SPIN_BUTTON(m_widget));
     const double lower = gtk_adjustment_get_lower(adj);
@@ -306,7 +307,7 @@ wxString wxSpinCtrlGTKBase::GetTextValue() const
 {
     wxCHECK_MSG(m_widget, wxEmptyString, "invalid spin button");
 
-    return wxString::FromUTF8Unchecked(gtk_entry_get_text( GTK_ENTRY(m_widget) ));
+    return wxString::FromUTF8Unchecked(gtk_editable_get_text( GTK_EDITABLE(m_widget) ));
 }
 
 bool wxSpinCtrlGTKBase::GetSnapToTicks() const
@@ -335,7 +336,7 @@ void wxSpinCtrlGTKBase::SetValue( const wxString& value )
     GTKSetTextOverride(value);
 
     wxSpinCtrlEventDisabler disable(this);
-    gtk_entry_set_text( GTK_ENTRY(m_widget), value.utf8_str() );
+    gtk_editable_set_text( GTK_EDITABLE(m_widget), value.utf8_str() );
 }
 
 void wxSpinCtrlGTKBase::DoSetValue( double value )
@@ -469,12 +470,12 @@ wxSize wxSpinCtrlGTKBase::DoGetSizeFromTextSize(int xlen, int ylen) const
     const double widthDigit = GetTextExtent("0123456789").GetWidth() / 10.0;
     const int numDigits = wxRound(xlen / widthDigit);
 
-    const gint widthChars = gtk_entry_get_width_chars(GTK_ENTRY(m_widget));
-    gtk_entry_set_width_chars(GTK_ENTRY(m_widget), numDigits);
+    const gint widthChars = gtk_editable_get_width_chars(GTK_EDITABLE(m_widget));
+    gtk_editable_set_width_chars(GTK_EDITABLE(m_widget), numDigits);
 
     wxSize tsize = GTKGetPreferredSize(m_widget);
 
-    gtk_entry_set_width_chars(GTK_ENTRY(m_widget), widthChars);
+    gtk_editable_set_width_chars(GTK_EDITABLE(m_widget), widthChars);
 
     // Check if the user requested a non-standard height.
     if ( ylen > 0 )
@@ -535,9 +536,9 @@ void wxSpinCtrl::GtkSetEntryWidth()
     const int minVal = static_cast<int>(DoGetMin());
     const int maxVal = static_cast<int>(DoGetMax());
 
-    gtk_entry_set_width_chars
+    gtk_editable_set_width_chars
     (
-        GTK_ENTRY(m_widget),
+        GTK_EDITABLE(m_widget),
         wxSpinCtrlImpl::GetMaxValueLength(minVal, maxVal, GetBase())
     );
 }
@@ -639,7 +640,7 @@ void wxSpinCtrlDouble::GtkSetEntryWidth()
     const int lenMin = wxString::Format("%.*f", digits, GetMin()).length();
     const int lenMax = wxString::Format("%.*f", digits, GetMax()).length();
 
-    gtk_entry_set_width_chars(GTK_ENTRY(m_widget), wxMax(lenMin, lenMax));
+    gtk_editable_set_width_chars(GTK_EDITABLE(m_widget), wxMax(lenMin, lenMax));
 }
 
 void wxSpinCtrlDouble::SetIncrement(double inc)

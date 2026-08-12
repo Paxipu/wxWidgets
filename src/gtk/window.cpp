@@ -2374,8 +2374,122 @@ static void AdjustRangeValue(GtkRange* range, double step)
     }
 }
 
+// Handle a smooth (delta-based) scroll. GTK3 reaches this from the
+// GDK_SCROLL_SMOOTH case of its direction switch; GTK4 has no direction enum
+// on this path at all -- GtkEventControllerScroll reports everything as deltas
+// -- so it is the only path there, which is why this is factored out rather
+// than left inline.
+static bool
+wxGTKProcessScrollDeltas(wxWindow* win, wxMouseEvent& event,
+                         GtkRange* range_h, GtkRange* range_v,
+                         bool is_range_h, bool is_range_v,
+                         double delta_x, double delta_y)
+{
+    // A wheel event landing on an embedded scrollbar scrolls along that
+    // scrollbar's axis, whichever axis the wheel itself reported.
+    if (delta_x == 0)
+    {
+        if (is_range_h)
+        {
+            delta_x = delta_y;
+            delta_y = 0;
+        }
+    }
+    else if (delta_y == 0)
+    {
+        if (is_range_v)
+        {
+            delta_y = delta_x;
+            delta_x = 0;
+        }
+    }
+
+    bool handled = false;
+    if (delta_x != 0)
+    {
+        event.m_wheelAxis = wxMOUSE_WHEEL_HORIZONTAL;
+        event.m_wheelRotation = int(event.m_wheelDelta * delta_x);
+        handled = win->GTKProcessEvent(event);
+        if (!handled && range_h)
+        {
+            AdjustRangeValue(range_h, event.m_columnsPerAction * delta_x);
+            handled = true;
+        }
+    }
+    if (delta_y != 0)
+    {
+        event.m_wheelAxis = wxMOUSE_WHEEL_VERTICAL;
+        event.m_wheelRotation = int(event.m_wheelDelta * -delta_y);
+        handled = win->GTKProcessEvent(event);
+        if (!handled && range_v)
+        {
+            AdjustRangeValue(range_v, event.m_linesPerAction * delta_y);
+            handled = true;
+        }
+    }
+    return handled;
+}
+
 extern "C"
 {
+
+#ifdef __WXGTK4__
+
+// GtkEventControllerScroll::scroll(dx, dy) -> gboolean.
+//
+// The controller is created with BOTH_AXES, so this covers what GTK3 split
+// between discrete direction values and GDK_SCROLL_SMOOTH: GTK4 reports
+// discrete wheel clicks as deltas of +/-1 too.
+static gboolean
+wx_gtk_scroll_callback(GtkEventControllerScroll* controller,
+                       double delta_x, double delta_y, wxWindow* win)
+{
+    GtkEventController* const c = GTK_EVENT_CONTROLLER(controller);
+    GdkEvent* const gdk_event = gtk_event_controller_get_current_event(c);
+    if (!gdk_event)
+        return FALSE;
+
+    GtkWidget* const widget = gtk_event_controller_get_widget(c);
+
+    // Unlike the pointer controllers, the scroll signal carries no
+    // coordinates, so take them from the event. They are surface-relative and
+    // InitMouseEvent() wants them widget-relative.
+    double x = 0, y = 0;
+    gdk_event_get_position(gdk_event, &x, &y);
+    if (GtkNative* const native = gtk_widget_get_native(widget))
+    {
+        // Note GRAPHENE_POINT_INIT() can't be used inline here: it expands to
+        // a compound literal, which is an rvalue in C++, so its address can't
+        // be taken.
+        graphene_point_t in;
+        in.x = float(x);
+        in.y = float(y);
+
+        graphene_point_t out;
+        if (gtk_widget_compute_point(GTK_WIDGET(native), widget, &in, &out))
+        {
+            x = out.x;
+            y = out.y;
+        }
+    }
+
+    wxMouseEvent event(wxEVT_MOUSEWHEEL);
+    wxGTKImpl::InitMouseEvent(win, event, gdk_event, x, y);
+
+    event.m_wheelDelta = 120;
+    event.m_linesPerAction = 3;
+    event.m_columnsPerAction = 3;
+
+    GtkRange* const range_h = win->m_scrollBar[wxWindow::ScrollDir_Horz];
+    GtkRange* const range_v = win->m_scrollBar[wxWindow::ScrollDir_Vert];
+
+    return wxGTKProcessScrollDeltas(win, event, range_h, range_v,
+                                    (void*)widget == range_h,
+                                    (void*)widget == range_v,
+                                    delta_x, delta_y) ? TRUE : FALSE;
+}
+
+#else // !__WXGTK4__
 
 static gboolean
 scroll_event(GtkWidget* widget, GdkEventScroll* gdk_event, wxWindow* win)
@@ -2414,48 +2528,10 @@ scroll_event(GtkWidget* widget, GdkEventScroll* gdk_event, wxWindow* win)
             break;
 #if GTK_CHECK_VERSION(3,4,0)
         case GDK_SCROLL_SMOOTH:
-            double delta_x = gdk_event->delta_x;
-            double delta_y = gdk_event->delta_y;
-            if (delta_x == 0)
-            {
-                if (is_range_h)
-                {
-                    delta_x = delta_y;
-                    delta_y = 0;
-                }
-            }
-            else if (delta_y == 0)
-            {
-                if (is_range_v)
-                {
-                    delta_y = delta_x;
-                    delta_x = 0;
-                }
-            }
-            bool handled = false;
-            if (delta_x != 0)
-            {
-                event.m_wheelAxis = wxMOUSE_WHEEL_HORIZONTAL;
-                event.m_wheelRotation = int(event.m_wheelDelta * delta_x);
-                handled = win->GTKProcessEvent(event);
-                if (!handled && range_h)
-                {
-                    AdjustRangeValue(range_h, event.m_columnsPerAction * delta_x);
-                    handled = true;
-                }
-            }
-            if (delta_y != 0)
-            {
-                event.m_wheelAxis = wxMOUSE_WHEEL_VERTICAL;
-                event.m_wheelRotation = int(event.m_wheelDelta * -delta_y);
-                handled = win->GTKProcessEvent(event);
-                if (!handled && range_v)
-                {
-                    AdjustRangeValue(range_v, event.m_linesPerAction * delta_y);
-                    handled = true;
-                }
-            }
-            return handled;
+            return wxGTKProcessScrollDeltas(win, event, range_h, range_v,
+                                            is_range_h, is_range_v,
+                                            gdk_event->delta_x,
+                                            gdk_event->delta_y);
 #endif // GTK_CHECK_VERSION(3,4,0)
     }
     GtkRange *range;
@@ -2494,6 +2570,8 @@ scroll_event(GtkWidget* widget, GdkEventScroll* gdk_event, wxWindow* win)
 
     return true;
 }
+
+#endif // __WXGTK4__/!__WXGTK4__
 
 //-----------------------------------------------------------------------------
 // "popup-menu"
@@ -4534,6 +4612,30 @@ void wxWindowGTK::ConnectWidget( GtkWidget *widget )
     g_signal_connect (widget, "motion_notify_event",
                       G_CALLBACK (gtk_window_motion_notify_callback), this);
 
+#ifdef __WXGTK4__
+    // One scroll controller per widget that used to carry a "scroll_event"
+    // handler. BOTH_AXES because wx wants horizontal and vertical wheel
+    // events alike, and the axis-swap logic for wheeling over an embedded
+    // scrollbar needs to see whichever axis the wheel actually reported.
+    {
+        GtkWidget* const scrollWidgets[] = {
+            widget,
+            GTK_WIDGET(m_scrollBar[ScrollDir_Horz]),
+            GTK_WIDGET(m_scrollBar[ScrollDir_Vert])
+        };
+        for ( size_t n = 0; n < WXSIZEOF(scrollWidgets); n++ )
+        {
+            if ( !scrollWidgets[n] )
+                continue;
+
+            GtkEventController* const scrollController =
+                gtk_event_controller_scroll_new(GTK_EVENT_CONTROLLER_SCROLL_BOTH_AXES);
+            g_signal_connect(scrollController, "scroll",
+                             G_CALLBACK(wx_gtk_scroll_callback), this);
+            gtk_widget_add_controller(scrollWidgets[n], scrollController);
+        }
+    }
+#else
     g_signal_connect(widget, "scroll_event", G_CALLBACK(scroll_event), this);
     GtkRange* range = m_scrollBar[ScrollDir_Horz];
     if (range)
@@ -4541,6 +4643,7 @@ void wxWindowGTK::ConnectWidget( GtkWidget *widget )
     range = m_scrollBar[ScrollDir_Vert];
     if (range)
         g_signal_connect(range, "scroll_event", G_CALLBACK(scroll_event), this);
+#endif
 
     g_signal_connect (widget, "popup_menu",
                      G_CALLBACK (wxgtk_window_popup_menu_callback), this);

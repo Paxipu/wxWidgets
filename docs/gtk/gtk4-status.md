@@ -8,12 +8,25 @@ source of truth, not a one-time report.
 
 ## How this was produced
 
+**Build out of tree.** wxWidgets' `.gitignore` doesn't cover the
+artifacts an in-tree build scatters through the source tree (and
+upstream declined to add them, on the grounds that nobody builds
+in-tree), so an in-tree build leaves ~1200 untracked files sitting on
+top of your work, which makes `git status` useless for seeing what you
+actually changed:
+
 ```
-./configure --with-gtk=4 --disable-shared --without-opengl \
-            --disable-optimise --disable-stc --disable-tests \
-            --disable-uiactionsim
+mkdir -p ../wxbuild-gtk4 && cd ../wxbuild-gtk4
+../wxWidgets/configure --with-gtk=4 --disable-shared --without-opengl \
+                       --disable-optimise --disable-stc --disable-tests \
+                       --disable-uiactionsim
 make -k -j4
 ```
+
+Earlier updates in this file were produced with the same options run
+in-tree; the out-of-tree build reproduces them exactly (verified:
+identical diagnostic count *and* identical failing-target list), so the
+numbers below are comparable across the switch.
 Environment: Ubuntu 24.04, `libgtk-4-dev` 4.14.5, `libgtk-3-dev` 3.24.41
 (both installed side by side; wx picks GTK4 via pkg-config `gtk4`).
 `configure` succeeds cleanly and reports "Which GUI toolkit should
@@ -925,13 +938,19 @@ does. Re-running the `configure` line at the top of this file and
 fatal, 62 failing targets), which is a useful confirmation that the
 recorded state is real and nothing was lost between sessions.
 
-Also set up a **second, GTK3 configure tree** (`/home/user/wxbuild-gtk3`,
+Also set up a **second, GTK3 configure tree** (`wxbuild-gtk3`,
 `--with-gtk=3`, otherwise identical flags) purely so every file touched
 can be syntax-checked against *both* real GTK4 4.14.5 and real GTK3
 3.24.41 headers before being called done. Previous updates describe doing
 this; having a standing GTK3 tree makes it one command instead of a
 setup step, and it caught nothing this session, which is the point —
 it's the check that says the `#ifdef` split is right.
+
+And **switched the GTK4 build out of tree** as described above. Two
+parallel build trees next to the source tree (`wxbuild-gtk4`,
+`wxbuild-gtk3`) is the arrangement this port wants anyway: neither one
+touches the source tree, so `git status` shows only real changes, and
+the two toolkits' objects can't collide.
 
 ### The structural piece: `GTKGetWindow()` is obsolete, not portable
 

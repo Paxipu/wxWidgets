@@ -447,6 +447,7 @@ proxy_g_signal(GDBusProxy*, const char*, const char* signal_name, GVariant* para
 
 //-----------------------------------------------------------------------------
 
+#ifndef __WXGTK4__
 class wxGtkWidgetPath
 {
 public:
@@ -456,10 +457,163 @@ public:
 private:
     GtkWidgetPath* const m_path;
 };
+#endif // !__WXGTK4__
 
 //-----------------------------------------------------------------------------
 // wxGtkStyleContext
 //-----------------------------------------------------------------------------
+
+#ifdef __WXGTK4__
+
+// GTK4 build: back the context with a real (never shown, never realized)
+// widget hierarchy instead of a synthetic GtkWidgetPath, which no longer
+// exists. See docs/gtk/gtk4-stylecontext-design.md for the reasoning and for
+// the probe programs establishing that this actually reproduces the theme's
+// values.
+
+bool wxGTKLookupThemeColour(GtkStyleContext* sc, const char* name, wxColour& color)
+{
+    GdkRGBA rgba;
+    if (!sc || !gtk_style_context_lookup_color(sc, name, &rgba))
+        return false;
+
+    color = wxColour(rgba);
+    return true;
+}
+
+// Depth-first search for the nearest descendant with the given CSS name.
+//
+// This is deliberately a *descendant* search rather than a direct-child one,
+// matching CSS descendant-selector semantics -- and, more practically,
+// absorbing the places where GTK4 interposes a node the GTK3 synthetic paths
+// didn't name (e.g. GtkScrollbar gained a "range" node between "scrollbar"
+// and "trough").
+static GtkWidget* wxGTKFindCssNode(GtkWidget* parent, const char* name)
+{
+    for (GtkWidget* child = gtk_widget_get_first_child(parent);
+         child; child = gtk_widget_get_next_sibling(child))
+    {
+        const char* const cssName = gtk_widget_get_css_name(child);
+        if (cssName && strcmp(cssName, name) == 0)
+            return child;
+
+        if (GtkWidget* const found = wxGTKFindCssNode(child, name))
+            return found;
+    }
+
+    return nullptr;
+}
+
+void wxGtkStyleContext::PopulateForStyleQuery(GtkWidget* widget)
+{
+    // Some interior CSS nodes don't exist until the widget has content: an
+    // empty GtkNotebook has "header" and "tabs" but no "tab" child, so a
+    // descent looking for "tab" would silently stop at "tabs" and report that
+    // node's padding instead.
+    if (GTK_IS_NOTEBOOK(widget))
+    {
+        gtk_notebook_append_page(GTK_NOTEBOOK(widget),
+                                 gtk_label_new(""), gtk_label_new(""));
+    }
+    else if (GTK_IS_TREE_VIEW(widget))
+    {
+        // Three columns, to match the three-sibling widget path the GTK3 code
+        // built in AddTreeviewHeaderButton(): themes style header buttons with
+        // :first-child/:last-child, so the sibling count is significant.
+        for (int i = 0; i < 3; i++)
+        {
+            GtkTreeViewColumn* const column = gtk_tree_view_column_new();
+            gtk_tree_view_column_set_title(column, "");
+            gtk_tree_view_append_column(GTK_TREE_VIEW(widget), column);
+        }
+    }
+}
+
+void wxGtkStyleContext::AddWidget(GType type)
+{
+    GtkWidget* const widget = GTK_WIDGET(g_object_new(type, nullptr));
+    PopulateForStyleQuery(widget);
+
+    if (m_current == nullptr)
+    {
+        m_root = widget;
+        g_object_ref_sink(m_root);
+    }
+    else
+    {
+        // gtk_widget_set_parent() is the generic low-level attach; verified to
+        // give exactly the same style resolution as the type-specific setters
+        // (gtk_button_set_child() etc.), which don't share a common base class
+        // under GTK4. Safe here because these widgets are never realized or
+        // size-allocated -- we only ever read style values off them.
+        gtk_widget_set_parent(widget, m_current);
+    }
+
+    // Deepest first, so the destructor can unparent in a safe order.
+    m_created = g_slist_prepend(m_created, widget);
+    m_current = widget;
+}
+
+void wxGtkStyleContext::Descend(const char* objectName)
+{
+    GtkWidget* const node = wxGTKFindCssNode(m_current, objectName);
+    if (node)
+    {
+        m_current = node;
+        return;
+    }
+
+    // No such node. This is expected in a few places where GTK4's widget tree
+    // genuinely differs from the GTK3 synthetic paths -- GtkFrame has no
+    // "border" node, for instance, and carries the border on "frame" itself,
+    // so staying put yields the right answer. Staying put is therefore the
+    // deliberate behaviour rather than an error, but it turns a structural
+    // mismatch into a quietly wrong number, so make it visible in debug
+    // builds.
+    wxLogTrace("gtk4style", "no CSS node \"%s\" under \"%s\", staying put",
+               objectName, gtk_widget_get_css_name(m_current));
+}
+
+wxGtkStyleContext::wxGtkStyleContext(double scale)
+    : m_scale(int(scale))
+{
+    m_context = nullptr;
+    m_root = nullptr;
+    m_current = nullptr;
+    m_created = nullptr;
+}
+
+wxGtkStyleContext& wxGtkStyleContext::Add(GType type, const char* objectName, ...)
+{
+    if (m_root == nullptr && type != GTK_TYPE_WINDOW)
+        AddWindow();
+
+    // G_TYPE_NONE means "an interior node of the widget we're already on"
+    // rather than a new widget of its own.
+    if (type == G_TYPE_NONE)
+        Descend(objectName);
+    else
+        AddWidget(type);
+
+    va_list args;
+    va_start(args, objectName);
+    const char* className;
+    while ((className = va_arg(args, char*)))
+        gtk_widget_add_css_class(m_current, className);
+    va_end(args);
+
+    m_context = gtk_widget_get_style_context(m_current);
+    gtk_style_context_set_scale(m_context, m_scale);
+
+    return *this;
+}
+
+wxGtkStyleContext& wxGtkStyleContext::Add(const char* objectName)
+{
+    return Add(G_TYPE_NONE, objectName, nullptr);
+}
+
+#else // !__WXGTK4__
 
 wxGtkStyleContext::wxGtkStyleContext(double scale)
     : m_path(gtk_widget_path_new())
@@ -508,6 +662,40 @@ wxGtkStyleContext& wxGtkStyleContext::Add(const char* objectName)
     return Add(G_TYPE_NONE, objectName, nullptr);
 }
 
+#endif // __WXGTK4__/!__WXGTK4__
+
+#ifdef __WXGTK4__
+
+wxGtkStyleContext::~wxGtkStyleContext()
+{
+    // m_context and m_current are borrowed; only the widgets we created
+    // ourselves need releasing.
+    //
+    // Widgets attached with gtk_widget_set_parent() are not released when the
+    // parent goes away: only a parent that knows about the child unparents it
+    // in dispose, and these ones don't. So unparent each explicitly. The list
+    // is in reverse creation order, i.e. deepest first, which is the order
+    // that leaves no widget holding a dangling child. Unparenting drops the
+    // parent's reference, which is the last one, so the widget is finalized
+    // there and must not be touched afterwards.
+    for (GSList* p = m_created; p; p = p->next)
+    {
+        GtkWidget* const widget = GTK_WIDGET(p->data);
+        if (widget != m_root)
+            gtk_widget_unparent(widget);
+    }
+    g_slist_free(m_created);
+
+    if (m_root)
+    {
+        if (GTK_IS_WINDOW(m_root))
+            gtk_window_destroy(GTK_WINDOW(m_root));
+        g_object_unref(m_root);
+    }
+}
+
+#else // !__WXGTK4__
+
 wxGtkStyleContext::~wxGtkStyleContext()
 {
     gtk_widget_path_free(m_path);
@@ -534,6 +722,8 @@ wxGtkStyleContext::~wxGtkStyleContext()
 #endif
 }
 
+#endif // __WXGTK4__/!__WXGTK4__
+
 wxGtkStyleContext& wxGtkStyleContext::AddButton()
 {
     return Add(GTK_TYPE_BUTTON, "button", "button", nullptr);
@@ -558,12 +748,29 @@ wxGtkStyleContext& wxGtkStyleContext::AddLabel()
 
 wxGtkStyleContext& wxGtkStyleContext::AddMenu()
 {
+#ifdef __WXGTK4__
+    // GtkMenu doesn't exist under GTK4 in any form: menus became GMenuModel
+    // plus GtkPopoverMenu. A plain GtkPopover carries the same "menu surface"
+    // styling (background, border, shadow) that the queries using this
+    // actually want, so it stands in until menu.cpp itself is ported to the
+    // popover model -- at which point this should follow whatever that uses.
+    return AddWindow("popup").Add(GTK_TYPE_POPOVER, "popover", "background", "menu", nullptr);
+#else
     return AddWindow("popup").Add(GTK_TYPE_MENU, "menu", "menu", nullptr);
+#endif
 }
 
 wxGtkStyleContext& wxGtkStyleContext::AddMenuItem()
 {
+#ifdef __WXGTK4__
+    // Likewise GtkMenuItem: GTK4 popover menus use GtkModelButton, which is
+    // not public API, so a GtkButton carrying the same "modelbutton" CSS name
+    // is the closest thing that can be built from outside GTK. Approximate --
+    // see docs/gtk/gtk4-stylecontext-design.md.
+    return AddMenu().Add(GTK_TYPE_BUTTON, "modelbutton", "modelbutton", nullptr);
+#else
     return AddMenu().Add(GTK_TYPE_MENU_ITEM, "menuitem", "menuitem", nullptr);
+#endif
 }
 
 wxGtkStyleContext& wxGtkStyleContext::AddTextview(const char* child1, const char* child2)
@@ -584,6 +791,42 @@ wxGtkStyleContext& wxGtkStyleContext::AddTreeview()
 }
 
 #if GTK_CHECK_VERSION(3,20,0)
+#ifdef __WXGTK4__
+
+wxGtkStyleContext& wxGtkStyleContext::AddTreeviewHeaderButton(int pos)
+{
+    // GTK3 described this as "the pos'th of three sibling buttons" with
+    // gtk_widget_path_append_with_siblings(), so that themes styling
+    // :first-child/:last-child resolved correctly. Here the treeview is a real
+    // widget which PopulateForStyleQuery() has already given three columns, so
+    // the three header buttons genuinely exist as siblings and we just descend
+    // to the right one -- and :first-child/:last-child are real rather than
+    // simulated. (GTK4's treeview has no separate "header" node, so the Add()
+    // below finds nothing and stays put, which is what we want.)
+    AddTreeview().Add("header");
+
+    int index = 0;
+    for (GtkWidget* child = gtk_widget_get_first_child(m_current);
+         child; child = gtk_widget_get_next_sibling(child))
+    {
+        const char* const cssName = gtk_widget_get_css_name(child);
+        if (cssName && strcmp(cssName, "button") == 0)
+        {
+            if (index++ == pos)
+            {
+                m_current = child;
+                m_context = gtk_widget_get_style_context(m_current);
+                gtk_style_context_set_scale(m_context, m_scale);
+                break;
+            }
+        }
+    }
+
+    return *this;
+}
+
+#else // !__WXGTK4__
+
 wxGtkStyleContext& wxGtkStyleContext::AddTreeviewHeaderButton(int pos)
 {
     AddTreeview().Add("header");
@@ -605,10 +848,28 @@ wxGtkStyleContext& wxGtkStyleContext::AddTreeviewHeaderButton(int pos)
     m_context = sc;
     return *this;
 }
+
+#endif // __WXGTK4__/!__WXGTK4__
 #endif // GTK_CHECK_VERSION(3,20,0)
 
 wxGtkStyleContext& wxGtkStyleContext::AddTooltip()
 {
+#ifdef __WXGTK4__
+    wxASSERT(m_root == nullptr);
+
+    // GTK4 paints tooltips with an internal GtkTooltipWindow whose CSS name is
+    // "tooltip"; that type isn't public and a CSS name can't be set per
+    // instance, so a GtkWindow carrying the tooltip classes is as close as
+    // this can get from outside GTK.
+    AddWidget(GTK_TYPE_WINDOW);
+    gtk_widget_add_css_class(m_current, "background");
+    gtk_widget_add_css_class(m_current, "tooltip");
+    gtk_widget_set_name(m_current, "gtk-tooltip");
+
+    m_context = gtk_widget_get_style_context(m_current);
+    gtk_style_context_set_scale(m_context, m_scale);
+    return *this;
+#else
     wxASSERT(m_context == nullptr);
     GtkWidgetPath* path = m_path;
     gtk_widget_path_append_type(path, GTK_TYPE_WINDOW);
@@ -622,6 +883,7 @@ wxGtkStyleContext& wxGtkStyleContext::AddTooltip()
     m_context = gtk_style_context_new();
     gtk_style_context_set_path(m_context, m_path);
     return *this;
+#endif
 }
 
 wxGtkStyleContext& wxGtkStyleContext::AddWindow(const char* className2)
@@ -629,6 +891,7 @@ wxGtkStyleContext& wxGtkStyleContext::AddWindow(const char* className2)
     return Add(GTK_TYPE_WINDOW, "window", "background", className2, nullptr);
 }
 
+#ifndef __WXGTK4__
 static void bg(GtkStyleContext* sc, wxColour& color, int state)
 {
     GdkRGBA* rgba;
@@ -708,6 +971,53 @@ static void bg(GtkStyleContext* sc, wxColour& color, int state)
         cairo_pattern_destroy(pattern);
     }
 }
+#endif // !__WXGTK4__
+
+#ifdef __WXGTK4__
+
+void wxGtkStyleContext::Bg(wxColour& color, int state) const
+{
+    // GTK4 removed gtk_style_context_get(), and with it the only way to ask
+    // what colour a node's background is painted with. There is no
+    // replacement: backgrounds go through render_background() and may be a
+    // gradient or an image rather than a flat colour, which is why the query
+    // was dropped rather than renamed.
+    //
+    // What remains is gtk_style_context_lookup_color(), which resolves the
+    // named colours a theme defines. Adwaita and the themes derived from it
+    // define the three used below, but that is a convention rather than a
+    // guarantee, so this is explicitly an approximation -- see
+    // docs/gtk/gtk4-stylecontext-design.md. Foreground colours (Fg(), below)
+    // are unaffected and remain exact.
+    const char* name = "theme_bg_color";
+
+    if (state & GTK_STATE_FLAG_SELECTED)
+    {
+        name = "theme_selected_bg_color";
+    }
+    else if (m_current)
+    {
+        // Widgets that show a document/list surface are themed with the
+        // "base" colour rather than the general widget background.
+        const char* const cssName = gtk_widget_get_css_name(m_current);
+        if (cssName &&
+                (strcmp(cssName, "textview") == 0 ||
+                 strcmp(cssName, "treeview") == 0 ||
+                 strcmp(cssName, "entry") == 0))
+        {
+            name = "theme_base_color";
+        }
+    }
+
+    if (!wxGTKLookupThemeColour(m_context, name, color))
+    {
+        // Theme doesn't define that name; fall back to the most generic one,
+        // and leave the colour untouched if even that is missing.
+        wxGTKLookupThemeColour(m_context, "theme_bg_color", color);
+    }
+}
+
+#else // !__WXGTK4__
 
 void wxGtkStyleContext::Bg(wxColour& color, int state) const
 {
@@ -730,6 +1040,8 @@ void wxGtkStyleContext::Bg(wxColour& color, int state) const
     }
 }
 
+#endif // __WXGTK4__/!__WXGTK4__
+
 void wxGtkStyleContext::Fg(wxColour& color, int state) const
 {
     GdkRGBA rgba;
@@ -744,10 +1056,19 @@ void wxGtkStyleContext::Fg(wxColour& color, int state) const
 
 void wxGtkStyleContext::Border(wxColour& color) const
 {
+#ifdef __WXGTK4__
+    // As for Bg(): the "border-color" property query went away with
+    // gtk_style_context_get(). "borders" is the name Adwaita-derived themes
+    // conventionally use for it. Note this is only the border *colour* --
+    // border widths come from gtk_style_context_get_border(), which survives
+    // intact and stays exact.
+    wxGTKLookupThemeColour(m_context, "borders", color);
+#else
     GdkRGBA* rgba;
     gtk_style_context_get(m_context, GTK_STATE_FLAG_NORMAL, "border-color", &rgba, nullptr);
     color = wxColour(*rgba);
     gdk_rgba_free(rgba);
+#endif
 }
 
 //-----------------------------------------------------------------------------
@@ -1179,7 +1500,7 @@ static GdkRectangle GetMonitorGeom(GdkWindow* window)
 }
 #endif
 
-#ifdef __WXGTK3__
+#if defined(__WXGTK3__) && !defined(__WXGTK4__)
 static int GetNodeWidth(wxGtkStyleContext& sc)
 {
     int width;
@@ -1194,12 +1515,25 @@ static int GetNodeWidth(wxGtkStyleContext& sc)
 
     return width < 0 ? 0 : width;
 }
-#endif // __WXGTK3__
+#endif // __WXGTK3__ && !__WXGTK4__
 
 static int GetScrollbarWidth()
 {
     int width;
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    // The GTK3 code below sums min-width plus padding/border/margin node by
+    // node down the scrollbar's CSS tree. GTK4 removed the "min-width"
+    // property query along with gtk_style_context_get(), but it also makes
+    // this unnecessary: gtk_widget_measure() on a real scrollbar reports the
+    // minimum width with everything CSS contributes at every nesting level
+    // already accounted for, which is both simpler and more trustworthy than
+    // reconstructing the sum by hand.
+    GtkWidget* const sb = gtk_scrollbar_new(GTK_ORIENTATION_VERTICAL, nullptr);
+    g_object_ref_sink(sb);
+    gtk_widget_measure(sb, GTK_ORIENTATION_HORIZONTAL, -1,
+                       &width, nullptr, nullptr, nullptr);
+    g_object_unref(sb);
+#elif defined(__WXGTK3__)
     if (wx_is_at_least_gtk3(20))
     {
 #if GTK_CHECK_VERSION(3,10,0)

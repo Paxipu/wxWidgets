@@ -195,7 +195,7 @@ protected:
 
     // Override this to use either GtkEntry or GtkTextView IME depending on the
     // kind of control we are.
-    virtual int GTKIMFilterKeypress(GdkEventKey* event) const override;
+    virtual int GTKIMFilterKeypress(wxGTKNativeKeyEvent* event) const override;
 
     virtual wxPoint DoPositionToCoords(long pos) const override;
 

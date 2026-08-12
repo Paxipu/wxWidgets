@@ -22,7 +22,17 @@
     #define WXUNUSED_IN_GTK3(x) x
 #endif
 
+// The native key event passed along the input-method path. GTK4 removed the
+// concrete GdkEventKey struct in favour of an opaque GdkEvent, but the IM
+// context still consumes a native event either way, so the code paths only
+// need the type to differ, not their shape.
+#ifdef __WXGTK4__
+typedef struct _GdkEvent GdkEvent;
+typedef GdkEvent wxGTKNativeKeyEvent;
+#else
 typedef struct _GdkEventKey GdkEventKey;
+typedef GdkEventKey wxGTKNativeKeyEvent;
+#endif
 typedef struct _GtkIMContext GtkIMContext;
 
 WX_DEFINE_EXPORTED_ARRAY_PTR(GdkWindow *, wxArrayGdkWindows);
@@ -325,13 +335,13 @@ public:
 
     // Pointer to the event being currently processed by the IME or nullptr if not
     // inside key handling.
-    GdkEventKey* m_imKeyEvent;
+    wxGTKNativeKeyEvent* m_imKeyEvent;
 
     // This method generalizes gtk_im_context_filter_keypress(): for the
     // generic windows it does just that but it's overridden by the classes
     // wrapping native widgets that use IM themselves and so provide specific
     // methods for accessing it such gtk_entry_im_context_filter_keypress().
-    virtual int GTKIMFilterKeypress(GdkEventKey* event) const;
+    virtual int GTKIMFilterKeypress(wxGTKNativeKeyEvent* event) const;
 
     // This method must be called from the derived classes "insert-text" signal
     // handlers to check if the text is not being inserted by the IM and, if

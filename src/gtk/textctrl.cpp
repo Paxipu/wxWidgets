@@ -968,7 +968,7 @@ GtkEntry *wxTextCtrl::GetEntry() const
     return nullptr;
 }
 
-int wxTextCtrl::GTKIMFilterKeypress(GdkEventKey* event) const
+int wxTextCtrl::GTKIMFilterKeypress(wxGTKNativeKeyEvent* event) const
 {
     if (IsSingleLine())
         return GTKEntryIMFilterKeypress(event);
@@ -1298,7 +1298,7 @@ void wxTextCtrl::WriteText( const wxString &text )
     // this key press -- which is not the case here (but m_imKeyEvent might
     // still be set e.g. because we're called from a menu event handler
     // triggered by a keyboard accelerator), so reset m_imKeyEvent temporarily.
-    GdkEventKey* const imKeyEvent_save = m_imKeyEvent;
+    wxGTKNativeKeyEvent* const imKeyEvent_save = m_imKeyEvent;
     m_imKeyEvent = nullptr;
     wxON_BLOCK_EXIT_SET(m_imKeyEvent, imKeyEvent_save);
 

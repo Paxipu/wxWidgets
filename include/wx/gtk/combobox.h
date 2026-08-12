@@ -149,7 +149,7 @@ protected:
     virtual GtkEntry *GetEntry() const override
         { return m_entry; }
 
-    virtual int GTKIMFilterKeypress(GdkEventKey* event) const override
+    virtual int GTKIMFilterKeypress(wxGTKNativeKeyEvent* event) const override
         { return GTKEntryIMFilterKeypress(event); }
 
 

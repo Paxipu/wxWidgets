@@ -1138,23 +1138,70 @@ static wxString wxDumpUniChar(wxChar unichar)
 }
 #endif // wxDEBUG_LEVEL
 
+// The parts of a native key event that wx actually uses.
+//
+// Under GTK3 these are simply GdkEventKey's fields. Under GTK4 GdkEvent is
+// opaque and GtkEventControllerKey hands these values straight to its signal
+// handlers, so there is no struct to point at -- hence collecting them into a
+// value type, which lets the (large, and entirely value-based) translation
+// logic below stay shared between the two backends instead of being
+// duplicated. Field names deliberately match GdkEventKey's.
+struct wxGTKKeyEventData
+{
+    guint keyval;
+    guint hardware_keycode;
+    guint state;
+    guint32 time;
+    bool isPress;   // GTK3 read this off gdk_event->type
+};
+
+#ifdef __WXGTK4__
+
+// Build the above from an opaque GdkEvent. Needed on the input-method path,
+// which gets a GdkEvent* rather than the signal arguments.
+static wxGTKKeyEventData wxGTKMakeKeyEventData(GdkEvent* gdk_event)
+{
+    wxGTKKeyEventData keyData;
+    keyData.keyval = gdk_key_event_get_keyval(gdk_event);
+    keyData.hardware_keycode = gdk_key_event_get_keycode(gdk_event);
+    keyData.state = gdk_event_get_modifier_state(gdk_event);
+    keyData.time = gdk_event_get_time(gdk_event);
+    keyData.isPress = gdk_event_get_event_type(gdk_event) == GDK_KEY_PRESS;
+    return keyData;
+}
+
+#else // !__WXGTK4__
+
+static wxGTKKeyEventData wxGTKMakeKeyEventData(GdkEventKey* gdk_event)
+{
+    wxGTKKeyEventData keyData;
+    keyData.keyval = gdk_event->keyval;
+    keyData.hardware_keycode = gdk_event->hardware_keycode;
+    keyData.state = gdk_event->state;
+    keyData.time = gdk_event->time;
+    keyData.isPress = gdk_event->type == GDK_KEY_PRESS;
+    return keyData;
+}
+
+#endif // __WXGTK4__/!__WXGTK4__
+
 static void wxFillOtherKeyEventFields(wxKeyEvent& event,
                                       wxWindowGTK *win,
-                                      GdkEventKey *gdk_event)
+                                      const wxGTKKeyEventData& keyData)
 {
-    event.SetTimestamp( gdk_event->time );
+    event.SetTimestamp( keyData.time );
     event.SetId(win->GetId());
 
-    event.m_shiftDown = (gdk_event->state & GDK_SHIFT_MASK) != 0;
-    event.m_controlDown = (gdk_event->state & GDK_CONTROL_MASK) != 0;
-    event.m_altDown = (gdk_event->state & GDK_MOD1_MASK) != 0;
-    event.m_metaDown = (gdk_event->state & GDK_META_MASK) != 0;
+    event.m_shiftDown = (keyData.state & GDK_SHIFT_MASK) != 0;
+    event.m_controlDown = (keyData.state & GDK_CONTROL_MASK) != 0;
+    event.m_altDown = (keyData.state & GDK_MOD1_MASK) != 0;
+    event.m_metaDown = (keyData.state & GDK_META_MASK) != 0;
 
     // At least with current Linux systems, MOD5 corresponds to AltGr key and
     // we represent it, for consistency with Windows, which really allows to
     // use Ctrl+Alt as a replacement for AltGr if this key is not present, as a
     // combination of these two modifiers.
-    if ( gdk_event->state & GDK_MOD5_MASK )
+    if ( keyData.state & GDK_MOD5_MASK )
     {
         event.m_controlDown =
         event.m_altDown = true;
@@ -1176,8 +1223,8 @@ static void wxFillOtherKeyEventFields(wxKeyEvent& event,
     // produced events and it seems better to keep that class code the same
     // among all platforms and fix the discrepancy here instead of adding
     // wxGTK-specific code to wxUIActionSimulator.
-    const bool isPress = gdk_event->type == GDK_KEY_PRESS;
-    switch ( gdk_event->keyval )
+    const bool isPress = keyData.isPress;
+    switch ( keyData.keyval )
     {
         case GDK_KEY_Shift_L:
         case GDK_KEY_Shift_R:
@@ -1202,8 +1249,8 @@ static void wxFillOtherKeyEventFields(wxKeyEvent& event,
             break;
     }
 
-    event.m_rawCode = (wxUint32) gdk_event->keyval;
-    event.m_rawFlags = gdk_event->hardware_keycode;
+    event.m_rawCode = (wxUint32) keyData.keyval;
+    event.m_rawFlags = keyData.hardware_keycode;
 
     event.m_isRepeat = false; // Detecting key repeat not implemented.
 
@@ -1216,9 +1263,9 @@ static void wxFillOtherKeyEventFields(wxKeyEvent& event,
 static void
 wxTranslateGTKKeyEventToWx(wxKeyEvent& event,
                            wxWindowGTK *win,
-                           GdkEventKey *gdk_event)
+                           const wxGTKKeyEventData& keyData)
 {
-    const KeySym keysym = gdk_event->keyval;
+    const KeySym keysym = keyData.keyval;
 
     wxString extraTraceInfo;
 
@@ -1260,7 +1307,7 @@ wxTranslateGTKKeyEventToWx(wxKeyEvent& event,
 #ifdef wxHAS_XKB
             char key_code_str[64];
             xkb_state_key_get_utf8(gs_xkbData.GetState(),
-                                   gdk_event->hardware_keycode,
+                                   keyData.hardware_keycode,
                                    key_code_str,
                                    sizeof(key_code_str));
             if ( strlen(key_code_str) == 1 )
@@ -1334,7 +1381,7 @@ wxTranslateGTKKeyEventToWx(wxKeyEvent& event,
     }
 
     // now fill all the other fields
-    wxFillOtherKeyEventFields(event, win, gdk_event);
+    wxFillOtherKeyEventFields(event, win, keyData);
 }
 
 
@@ -1392,27 +1439,24 @@ bool EventAlreadyProcessed(const EventType* event)
 
 } // anonymous namespace
 
-extern "C" {
-static gboolean
-gtk_window_key_press_callback( GtkWidget *WXUNUSED(widget),
-                               GdkEventKey *gdk_event,
-                               wxWindow *win )
+// The body of key-press handling, shared between the GTK3 signal callback and
+// the GTK4 event-controller callback below. Takes the values it needs plus the
+// native event, which is only used for the input-method path -- opaque under
+// GTK4, but the IM context consumes it either way.
+static bool
+wxGTKHandleKeyPress(wxWindow* win,
+                    const wxGTKKeyEventData& keyData,
+                    wxGTKNativeKeyEvent* nativeEvent)
 {
-    if (g_blockEventsOnDrag)
-        return FALSE;
-
-    if (EventAlreadyProcessed(gdk_event))
-        return FALSE;
-
     wxKeyEvent event( wxEVT_KEY_DOWN );
     bool ret = false;
 
-    wxTranslateGTKKeyEventToWx(event, win, gdk_event);
+    wxTranslateGTKKeyEventToWx(event, win, keyData);
     // Send the CHAR_HOOK event first
     if ( SendCharHookEvent(event, win) )
     {
         // Don't do anything at all with this event any more.
-        return TRUE;
+        return true;
     }
 
     // Next check for accelerators.
@@ -1452,19 +1496,19 @@ gtk_window_key_press_callback( GtkWidget *WXUNUSED(widget),
         // Indicate that IM handling is in process by setting this pointer
         // (which will remain valid for all the code called during IM key
         // handling).
-        win->m_imKeyEvent = gdk_event;
+        win->m_imKeyEvent = nativeEvent;
 
         // We should let GTK+ IM filter key event first. According to GTK+ 2.0 API
         // docs, if IM filter returns true, no further processing should be done.
         // we should send the key_down event anyway.
-        const int intercepted_by_IM = win->GTKIMFilterKeypress(gdk_event);
+        const int intercepted_by_IM = win->GTKIMFilterKeypress(nativeEvent);
 
         win->m_imKeyEvent = nullptr;
 
         if ( intercepted_by_IM )
         {
             wxLogTrace(TRACE_KEYS, wxT("Key event intercepted by IM"));
-            return TRUE;
+            return true;
         }
     }
 
@@ -1475,7 +1519,7 @@ gtk_window_key_press_callback( GtkWidget *WXUNUSED(widget),
     // from it below.
     while ( !ret )
     {
-        KeySym keysym = gdk_event->keyval;
+        KeySym keysym = keyData.keyval;
 
         wxKeyEvent eventChar(wxEVT_CHAR, event);
 
@@ -1546,9 +1590,93 @@ gtk_window_key_press_callback( GtkWidget *WXUNUSED(widget),
 
     return ret;
 }
+
+#ifdef __WXGTK4__
+
+extern "C" {
+
+// GtkEventControllerKey::key-pressed(keyval, keycode, state) -> gboolean.
+// The values the GTK3 code read out of GdkEventKey are handed over directly;
+// the native event is still available from the controller for the IM path.
+static gboolean
+wx_gtk_key_pressed_callback(GtkEventControllerKey* controller,
+                            guint keyval, guint keycode, GdkModifierType state,
+                            wxWindow* win)
+{
+    if (g_blockEventsOnDrag)
+        return FALSE;
+
+    // No EventAlreadyProcessed() check here, deliberately: that guarded
+    // against GTK3 propagating one native event up the widget hierarchy so
+    // that several wxWindows saw it. A controller is attached to one widget
+    // and only fires for it, so the duplication it defended against cannot
+    // arise. See docs/gtk/gtk4-phase3-input-model-design.md section 2.
+
+    GtkEventController* const c = GTK_EVENT_CONTROLLER(controller);
+
+    wxGTKKeyEventData keyData;
+    keyData.keyval = keyval;
+    keyData.hardware_keycode = keycode;
+    keyData.state = state;
+    keyData.time = gtk_event_controller_get_current_event_time(c);
+    keyData.isPress = true;
+
+    return wxGTKHandleKeyPress(win, keyData,
+                               gtk_event_controller_get_current_event(c));
 }
 
-int wxWindowGTK::GTKIMFilterKeypress(GdkEventKey* event) const
+// GtkEventControllerKey::key-released(keyval, keycode, state) -> void.
+//
+// Note this returns void, unlike GTK3's key_release_event which returned a
+// gboolean used to stop further handling. wx's return value from the key-up
+// event therefore cannot suppress GTK's own processing on release any more --
+// a real behavioural difference, but only for key *releases*, which wx code
+// very rarely vetoes.
+static void
+wx_gtk_key_released_callback(GtkEventControllerKey* controller,
+                             guint keyval, guint keycode, GdkModifierType state,
+                             wxWindowGTK* win)
+{
+    if (g_blockEventsOnDrag)
+        return;
+
+    wxGTKKeyEventData keyData;
+    keyData.keyval = keyval;
+    keyData.hardware_keycode = keycode;
+    keyData.state = state;
+    keyData.time = gtk_event_controller_get_current_event_time(
+                        GTK_EVENT_CONTROLLER(controller));
+    keyData.isPress = false;
+
+    wxKeyEvent event( wxEVT_KEY_UP );
+    wxTranslateGTKKeyEventToWx(event, win, keyData);
+    win->GTKProcessEvent(event);
+}
+
+} // extern "C"
+
+#else // !__WXGTK4__
+
+extern "C" {
+static gboolean
+gtk_window_key_press_callback( GtkWidget *WXUNUSED(widget),
+                               GdkEventKey *gdk_event,
+                               wxWindow *win )
+{
+    if (g_blockEventsOnDrag)
+        return FALSE;
+
+    if (EventAlreadyProcessed(gdk_event))
+        return FALSE;
+
+    return wxGTKHandleKeyPress(win, wxGTKMakeKeyEventData(gdk_event), gdk_event)
+                ? TRUE : FALSE;
+}
+}
+
+#endif // __WXGTK4__/!__WXGTK4__
+
+int wxWindowGTK::GTKIMFilterKeypress(wxGTKNativeKeyEvent* event) const
 {
     return m_imContext ? gtk_im_context_filter_keypress(m_imContext, event)
                        : FALSE;
@@ -1573,7 +1701,8 @@ bool wxWindowGTK::GTKDoInsertTextFromIM(const char* str)
     // key_press_event that was fed into Input Method:
     if ( m_imKeyEvent )
     {
-        wxFillOtherKeyEventFields(event, this, m_imKeyEvent);
+        wxFillOtherKeyEventFields(event, this,
+                                  wxGTKMakeKeyEventData(m_imKeyEvent));
     }
     else
     {
@@ -1618,6 +1747,7 @@ bool wxWindowGTK::GTKOnInsertText(const char* text)
 // "key_release_event" from any window
 //-----------------------------------------------------------------------------
 
+#ifndef __WXGTK4__
 extern "C" {
 static gboolean
 gtk_window_key_release_callback( GtkWidget * WXUNUSED(widget),
@@ -1631,11 +1761,12 @@ gtk_window_key_release_callback( GtkWidget * WXUNUSED(widget),
         return FALSE;
 
     wxKeyEvent event( wxEVT_KEY_UP );
-    wxTranslateGTKKeyEventToWx(event, win, gdk_event);
+    wxTranslateGTKKeyEventToWx(event, win, wxGTKMakeKeyEventData(gdk_event));
 
     return win->GTKProcessEvent(event);
 }
 }
+#endif // !__WXGTK4__
 
 // ============================================================================
 // the mouse events
@@ -4377,10 +4508,24 @@ void wxWindowGTK::ConnectWidget( GtkWidget *widget )
     GtkWidget* const focusWidget = widget == m_widget && m_focusWidget
                                     ? m_focusWidget
                                     : widget;
+#ifdef __WXGTK4__
+    // GTK4 delivers key input through a controller attached to the widget
+    // rather than through per-widget signals carrying a GdkEventKey.
+    {
+        GtkEventController* const keyController = gtk_event_controller_key_new();
+        g_signal_connect (keyController, "key-pressed",
+                          G_CALLBACK (wx_gtk_key_pressed_callback), this);
+        g_signal_connect (keyController, "key-released",
+                          G_CALLBACK (wx_gtk_key_released_callback), this);
+        // The widget takes ownership of the controller.
+        gtk_widget_add_controller(focusWidget, keyController);
+    }
+#else
     g_signal_connect (focusWidget, "key_press_event",
                       G_CALLBACK (gtk_window_key_press_callback), this);
     g_signal_connect (focusWidget, "key_release_event",
                       G_CALLBACK (gtk_window_key_release_callback), this);
+#endif
 
     g_signal_connect (widget, "button_press_event",
                       G_CALLBACK (gtk_window_button_press_callback), this);

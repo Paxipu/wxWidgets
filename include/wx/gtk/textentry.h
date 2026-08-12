@@ -10,7 +10,13 @@
 #ifndef _WX_GTK_TEXTENTRY_H_
 #define _WX_GTK_TEXTENTRY_H_
 
+#ifdef __WXGTK4__
+typedef struct _GdkEvent GdkEvent;
+typedef GdkEvent wxGTKNativeKeyEvent;
+#else
 typedef struct _GdkEventKey GdkEventKey;
+typedef GdkEventKey wxGTKNativeKeyEvent;
+#endif
 typedef struct _GtkEditable GtkEditable;
 typedef struct _GtkEntry GtkEntry;
 
@@ -98,7 +104,7 @@ protected:
 
     // Call this from the overridden wxWindow::GTKIMFilterKeypress() to use
     // GtkEntry IM context.
-    int GTKEntryIMFilterKeypress(GdkEventKey* event) const;
+    int GTKEntryIMFilterKeypress(wxGTKNativeKeyEvent* event) const;
 
     // If GTKEntryIMFilterKeypress() is not called (as multiline wxTextCtrl
     // uses its own IM), call this method instead to still notify wxTextEntry

@@ -982,7 +982,7 @@ void wxTextEntry::GTKEntryOnKeypress(GtkWidget* widget) const
     m_coalesceData->StartHandlingKeyPress();
 }
 
-int wxTextEntry::GTKEntryIMFilterKeypress(GdkEventKey* event) const
+int wxTextEntry::GTKEntryIMFilterKeypress(wxGTKNativeKeyEvent* event) const
 {
     GTKEntryOnKeypress(GTK_WIDGET(GetEntry()));
 

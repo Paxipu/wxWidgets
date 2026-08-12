@@ -36,6 +36,59 @@
 namespace wxGTKImpl
 {
 
+#ifdef __WXGTK4__
+
+// Init wxMouseEvent from a GdkEvent.
+//
+// Unlike GTK+ 3, where the event structs carried their own coordinates
+// relative to the GdkWindow the event arrived on, GTK4 events are opaque and
+// their position is relative to the surface, i.e. the toplevel. The event
+// controllers which deliver these events do however hand out coordinates
+// already relative to the widget they're attached to, so those are passed in
+// here rather than extracted from the event: that is both more accurate and
+// avoids the surface-to-widget translation entirely.
+inline void InitMouseEvent(wxWindowGTK *win,
+                           wxMouseEvent& event,
+                           GdkEvent *gdk_event,
+                           double x,
+                           double y)
+{
+    const GdkModifierType state = gdk_event_get_modifier_state(gdk_event);
+
+    event.m_shiftDown = (state & GDK_SHIFT_MASK) != 0;
+    event.m_controlDown = (state & GDK_CONTROL_MASK) != 0;
+    event.m_altDown = (state & GDK_ALT_MASK) != 0;
+    event.m_metaDown = (state & GDK_META_MASK) != 0;
+    event.m_leftDown = (state & GDK_BUTTON1_MASK) != 0;
+    event.m_middleDown = (state & GDK_BUTTON2_MASK) != 0;
+    event.m_rightDown = (state & GDK_BUTTON3_MASK) != 0;
+    event.m_aux1Down = (state & GDK_BUTTON4_MASK) != 0;
+    event.m_aux2Down = (state & GDK_BUTTON5_MASK) != 0;
+
+    const wxPoint pt = win->GetClientAreaOrigin();
+    event.m_x = wxRound(x) - pt.x;
+    event.m_y = wxRound(y) - pt.y;
+
+    // Note that the GTK+ 3 version has an extra correction here for no-window
+    // widgets owning a GdkWindow covering part of their area. That can't
+    // happen under GTK4, where no widget has a window of its own.
+
+    if (win->GetLayoutDirection() == wxLayout_RightToLeft)
+    {
+        // origin in the upper right corner
+        GtkAllocation a;
+        gtk_widget_get_allocation(win->m_wxwindow ? win->m_wxwindow : win->m_widget, &a);
+        int window_width = a.width;
+        event.m_x = window_width - event.m_x;
+    }
+
+    event.SetEventObject( win );
+    event.SetId( win->GetId() );
+    event.SetTimestamp( gdk_event_get_time(gdk_event) );
+}
+
+#else // !__WXGTK4__
+
 // init wxMouseEvent with the info from GdkEventXXX struct
 template<typename T> void InitMouseEvent(wxWindowGTK *win,
                                          wxMouseEvent& event,
@@ -88,11 +141,46 @@ template<typename T> void InitMouseEvent(wxWindowGTK *win,
     event.SetTimestamp( gdk_event->time );
 }
 
+#endif // __WXGTK4__/!__WXGTK4__
+
 // Update the window currently known to be under the mouse pointer.
 //
 // Returns true if it was updated, false if this window was already known to
 // contain the mouse pointer.
 bool SetWindowUnderMouse(wxWindowGTK* win);
+
+#ifdef __WXGTK4__
+
+// Under GTK4 these aren't signal handlers for the widget any more: pointer
+// events are delivered by GtkEventController objects attached to it, which
+// pass the event along with widget-relative coordinates. The controllers
+// themselves are set up by wxWindowGTK, these just turn one GTK4 event into
+// the corresponding wx one.
+//
+// They return true if the event was handled and shouldn't be propagated
+// further, matching what the GTK+ 3 signal handlers returned.
+
+bool
+WindowEnterCallback(wxWindowGTK* win, GdkEvent* event, double x, double y);
+
+bool
+WindowLeaveCallback(wxWindowGTK* win, GdkEvent* event);
+
+bool
+WindowMotionCallback(wxWindowGTK* win, GdkEvent* event, double x, double y,
+                     bool synthesized = false);
+
+bool
+WindowButtonPressCallback(wxWindowGTK* win, GdkEvent* event,
+                          int button, int nPress, double x, double y,
+                          bool synthesized = false);
+
+bool
+WindowButtonReleaseCallback(wxWindowGTK* win, GdkEvent* event,
+                            int button, double x, double y,
+                            bool synthesized = false);
+
+#else // !__WXGTK4__
 
 // Implementation of enter/leave window callbacks.
 gboolean
@@ -122,6 +210,8 @@ WindowButtonReleaseCallback(GtkWidget* widget,
                             GdkEventButton* event,
                             wxWindowGTK* win,
                             bool synthesized = false);
+
+#endif // __WXGTK4__/!__WXGTK4__
 
 } // namespace wxGTKImpl
 

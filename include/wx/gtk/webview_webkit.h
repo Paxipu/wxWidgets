@@ -179,7 +179,9 @@ public:
 protected:
     virtual void DoSetPage(const wxString& html, const wxString& baseUrl) override;
 
+#ifndef __WXGTK4__
     virtual GdkWindow *GTKGetWindow(wxArrayGdkWindows& windows) const override;
+#endif // !__WXGTK4__
 
 private:
 

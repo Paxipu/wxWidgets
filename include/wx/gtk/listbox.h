@@ -106,7 +106,9 @@ protected:
     virtual void DoDeleteOneItem(unsigned int n) override;
     virtual wxSize DoGetBestSize() const override;
     virtual void DoApplyWidgetStyle(GtkRcStyle *style) override;
+#ifndef __WXGTK4__
     virtual GdkWindow *GTKGetWindow(wxArrayGdkWindows& windows) const override;
+#endif // !__WXGTK4__
 
     virtual void DoSetSelection(int n, bool select) override;
 

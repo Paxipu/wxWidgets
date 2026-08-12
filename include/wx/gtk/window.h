@@ -231,6 +231,7 @@ protected:
     virtual bool GTKWidgetNeedsMnemonic() const;
     virtual void GTKWidgetDoSetMnemonic(GtkWidget* w);
 
+#ifndef __WXGTK4__
     // Get the GdkWindows making part of this window: usually there will be
     // only one of them in which case it should be returned directly by this
     // function. If there is more than one GdkWindow (can be the case for
@@ -238,10 +239,16 @@ protected:
     //
     // This is not pure virtual for backwards compatibility but almost
     // certainly must be overridden in any wxControl-derived class!
+    //
+    // This doesn't exist under GTK4, where widgets don't have windows at all:
+    // its only purpose was enumerating the windows to set a cursor on each of
+    // them, and gtk_widget_set_cursor() sets the cursor for a widget and all
+    // of its children in a single call there.
     virtual GdkWindow *GTKGetWindow(wxArrayGdkWindows& windows) const;
 
     // Check if the given window makes part of this widget
     bool GTKIsOwnWindow(GdkWindow *window) const;
+#endif // !__WXGTK4__
 
     // Return the GdkWindow associated with either m_wxwindow or m_widget.
     //
@@ -485,8 +492,10 @@ protected:
     void ConstrainSize();
 
 #ifdef __WXGTK3__
+#ifndef __WXGTK4__
     static GdkWindow* GTKFindWindow(GtkWidget* widget);
     static void GTKFindWindow(GtkWidget* widget, wxArrayGdkWindows& windows);
+#endif // !__WXGTK4__
 
     bool m_needSizeEvent;
 #endif
@@ -510,10 +519,12 @@ private:
     bool DoScrollByUnits(ScrollDir dir, ScrollUnit unit, int units);
     virtual void AddChildGTK(wxWindowGTK* child);
 
+#ifndef __WXGTK4__
     // Set the given (possibly null) cursor for all GdkWindows of this window.
     //
     // Return all windows for which we changed the cursor (may be empty).
     wxArrayGdkWindows GTKSetCursorForAllWindows(GdkCursor* cursor);
+#endif // !__WXGTK4__
 
 #ifdef __WXGTK3__
     // paint context is stashed here so wxPaintDC can use it

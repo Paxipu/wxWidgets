@@ -102,7 +102,9 @@ protected:
     virtual void DoDeleteOneItem(unsigned int n) override;
 
     virtual bool GTKHandleFocusOut() override;
+#ifndef __WXGTK4__
     virtual GdkWindow *GTKGetWindow(wxArrayGdkWindows& windows) const override;
+#endif // !__WXGTK4__
     virtual void DoApplyWidgetStyle(GtkRcStyle *style) override;
 
 private:

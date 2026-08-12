@@ -401,10 +401,12 @@ void wxChoice::GTKEnableEvents()
                                 (gpointer) gtk_choice_changed_callback, this);
 }
 
+#ifndef __WXGTK4__
 GdkWindow *wxChoice::GTKGetWindow(wxArrayGdkWindows& WXUNUSED(windows)) const
 {
     return gtk_widget_get_window(m_widget);
 }
+#endif // !__WXGTK4__
 
 wxSize wxChoice::DoGetBestSize() const
 {

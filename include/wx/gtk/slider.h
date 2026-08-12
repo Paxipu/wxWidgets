@@ -82,7 +82,9 @@ protected:
     // Note the following member is not used in GTK+2 < 2.16.
     int m_tickFreq;
 
+#ifndef __WXGTK4__
     virtual GdkWindow *GTKGetWindow(wxArrayGdkWindows& windows) const override;
+#endif // !__WXGTK4__
 
     // set the slider value unconditionally
     void GTKSetValue(int value);

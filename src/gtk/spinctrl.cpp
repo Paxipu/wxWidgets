@@ -446,6 +446,7 @@ void wxSpinCtrlGTKBase::OnChar( wxKeyEvent &event )
     event.Skip();
 }
 
+#ifndef __WXGTK4__
 GdkWindow *wxSpinCtrlGTKBase::GTKGetWindow(wxArrayGdkWindows& windows) const
 {
 #ifdef __WXGTK3__
@@ -459,6 +460,7 @@ GdkWindow *wxSpinCtrlGTKBase::GTKGetWindow(wxArrayGdkWindows& windows) const
 
     return nullptr;
 }
+#endif // !__WXGTK4__
 
 wxSize wxSpinCtrlGTKBase::DoGetSizeFromTextSize(int xlen, int ylen) const
 {

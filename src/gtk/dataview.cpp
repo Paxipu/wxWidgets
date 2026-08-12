@@ -4834,10 +4834,12 @@ bool wxDataViewCtrl::Create(wxWindow *parent,
     return true;
 }
 
+#ifndef __WXGTK4__
 GdkWindow* wxDataViewCtrl::GTKGetWindow(wxArrayGdkWindows& /* windows */) const
 {
     return gtk_tree_view_get_bin_window(GTK_TREE_VIEW(m_treeview));
 }
+#endif // !__WXGTK4__
 
 wxDataViewItem wxDataViewCtrl::GTKPathToItem(GtkTreePath *path) const
 {

@@ -5632,6 +5632,7 @@ static GdkCursor* wxGetOverrideCursor(wxWindowGTK* w)
     return nullptr;
 }
 
+#ifndef __WXGTK4__
 wxArrayGdkWindows wxWindowGTK::GTKSetCursorForAllWindows(GdkCursor* cursor)
 {
     wxArrayGdkWindows changed;
@@ -5658,9 +5659,32 @@ wxArrayGdkWindows wxWindowGTK::GTKSetCursorForAllWindows(GdkCursor* cursor)
 
     return changed;
 }
+#endif // !__WXGTK4__
+
+#ifdef __WXGTK4__
+
+// Under GTK4 widgets don't have windows, so there is nothing to enumerate:
+// gtk_widget_set_cursor() sets the cursor for a widget and, by inheritance,
+// all of its children, which is exactly what GTKSetCursorForAllWindows() went
+// to the trouble of doing by hand. This is the same simplification already
+// made for SetGlobalCursor() in src/gtk/cursor.cpp.
+static void wxGTKSetWidgetCursor(GtkWidget* widget, GdkCursor* cursor)
+{
+    if (widget)
+        gtk_widget_set_cursor(widget, cursor);
+}
+
+#endif // __WXGTK4__
 
 void wxWindowGTK::GTKSetCursor(const wxCursor& cursor)
 {
+#ifdef __WXGTK4__
+    // A null cursor means "inherit from the parent", which is how the global
+    // override cursor set by SetGlobalCursor() becomes visible here.
+    wxGTKSetWidgetCursor(m_wxwindow ? m_wxwindow : m_widget,
+                         wxGetOverrideCursor(this) ? nullptr
+                                                   : cursor.GetCursor());
+#else
     if (wxGetOverrideCursor(this))
     {
         GTKSetCursorForAllWindows(nullptr);
@@ -5670,6 +5694,7 @@ void wxWindowGTK::GTKSetCursor(const wxCursor& cursor)
     GdkCursor* const gcursor = cursor.GetCursor();
     if (gcursor)
         GTKSetCursorForAllWindows(gcursor);
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 void wxWindowGTK::GTKApplyCursor()
@@ -5697,6 +5722,13 @@ void wxWindowGTK::GTKUpdateCursor(GdkCursor* overrideCursor)
     // the global cursor for them, it's enough to reset the cursor to show it.
     GdkCursor* const cursor = overrideCursor ? nullptr : m_cursor.GetCursor();
 
+#ifdef __WXGTK4__
+    // The loop below only exists to prod native widgets into restoring the
+    // cursors they had set on their own GdkWindows, which they can't do under
+    // GTK4 as they set them on themselves with gtk_widget_set_cursor() and a
+    // cursor set on an ancestor doesn't override that in the first place.
+    wxGTKSetWidgetCursor(m_wxwindow ? m_wxwindow : m_widget, cursor);
+#else
     const wxArrayGdkWindows& windows = GTKSetCursorForAllWindows(cursor);
 
     // We don't need to do anything else if we set a valid cursor or if this is
@@ -5723,6 +5755,7 @@ void wxWindowGTK::GTKUpdateCursor(GdkCursor* overrideCursor)
             g_signal_emit(data, sig_id, 0, state);
         }
     }
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 void wxWindowGTK::WXUpdateCursor()
@@ -6560,6 +6593,7 @@ bool wxWindowGTK::IsTransparentBackgroundSupported(wxString* reason) const
 }
 
 #ifdef __WXGTK3__
+#ifndef __WXGTK4__
 GdkWindow* wxWindowGTK::GTKFindWindow(GtkWidget* widget)
 {
     GdkWindow* window = gtk_widget_get_window(widget);
@@ -6590,6 +6624,7 @@ void wxWindowGTK::GTKFindWindow(GtkWidget* widget, wxArrayGdkWindows& windows)
             windows.push_back(window);
     }
 }
+#endif // !__WXGTK4__
 #endif // __WXGTK3__
 
 // ----------------------------------------------------------------------------
@@ -6778,6 +6813,7 @@ GtkWidget* wxWindowGTK::GetConnectWidget() const
     return m_wxwindow ? m_wxwindow : m_widget;
 }
 
+#ifndef __WXGTK4__
 bool wxWindowGTK::GTKIsOwnWindow(GdkWindow *window) const
 {
     wxArrayGdkWindows windowsThis;
@@ -6791,6 +6827,7 @@ GdkWindow *wxWindowGTK::GTKGetWindow(wxArrayGdkWindows& WXUNUSED(windows)) const
 {
     return GTKGetMainWindow();
 }
+#endif // !__WXGTK4__
 
 GdkWindow* wxWindowGTK::GTKGetMainWindow() const
 {

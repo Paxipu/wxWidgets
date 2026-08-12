@@ -279,6 +279,7 @@ GtkWidget* wxComboBox::GetConnectWidget() const
     return GTK_WIDGET( GetEntry() );
 }
 
+#ifndef __WXGTK4__
 GdkWindow* wxComboBox::GTKGetWindow(wxArrayGdkWindows& /* windows */) const
 {
 #ifdef __WXGTK3__
@@ -287,6 +288,7 @@ GdkWindow* wxComboBox::GTKGetWindow(wxArrayGdkWindows& /* windows */) const
     return gtk_entry_get_text_window(GetEntry());
 #endif
 }
+#endif // !__WXGTK4__
 
 // static
 wxVisualAttributes

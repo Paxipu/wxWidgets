@@ -69,7 +69,9 @@ private:
 
     void OnSize(wxSizeEvent&);
     virtual void AddChildGTK(wxWindowGTK* child) override;
+#ifndef __WXGTK4__
     GdkWindow *GTKGetWindow(wxArrayGdkWindows& windows) const override;
+#endif // !__WXGTK4__
 
     wxDECLARE_DYNAMIC_CLASS(wxCollapsiblePane);
     wxDECLARE_EVENT_TABLE();

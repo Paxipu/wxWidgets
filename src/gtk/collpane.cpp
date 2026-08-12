@@ -250,6 +250,7 @@ void wxCollapsiblePane::OnSize(wxSizeEvent &ev)
 }
 
 
+#ifndef __WXGTK4__
 GdkWindow *wxCollapsiblePane::GTKGetWindow(wxArrayGdkWindows& windows) const
 {
     GtkWidget *label = gtk_expander_get_label_widget( GTK_EXPANDER(m_widget) );
@@ -258,6 +259,7 @@ GdkWindow *wxCollapsiblePane::GTKGetWindow(wxArrayGdkWindows& windows) const
 
     return nullptr;
 }
+#endif // !__WXGTK4__
 
 #endif // wxUSE_COLLPANE && !defined(__WXUNIVERSAL__)
 

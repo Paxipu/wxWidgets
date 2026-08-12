@@ -643,6 +643,7 @@ wxSize wxSlider::DoGetBestSize() const
     return size;
 }
 
+#ifndef __WXGTK4__
 GdkWindow *wxSlider::GTKGetWindow(wxArrayGdkWindows& WXUNUSED(windows)) const
 {
 #ifdef __WXGTK3__
@@ -651,6 +652,7 @@ GdkWindow *wxSlider::GTKGetWindow(wxArrayGdkWindows& WXUNUSED(windows)) const
     return GTK_RANGE(m_scale)->event_window;
 #endif
 }
+#endif // !__WXGTK4__
 
 // static
 wxVisualAttributes

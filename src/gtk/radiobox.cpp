@@ -660,6 +660,7 @@ void wxRadioBox::DoSetItemToolTip(unsigned int n, wxToolTip *tooltip)
 
 #endif // wxUSE_TOOLTIPS
 
+#ifndef __WXGTK4__
 GdkWindow *wxRadioBox::GTKGetWindow(wxArrayGdkWindows& windows) const
 {
     windows.push_back(gtk_widget_get_window(m_widget));
@@ -675,6 +676,7 @@ GdkWindow *wxRadioBox::GTKGetWindow(wxArrayGdkWindows& windows) const
 
     return nullptr;
 }
+#endif // !__WXGTK4__
 
 // static
 wxVisualAttributes

@@ -219,7 +219,9 @@ protected:
     virtual void DoExpand(const wxDataViewItem& item, bool expandChildren) override;
 
     virtual void DoApplyWidgetStyle(GtkRcStyle *style) override;
+#ifndef __WXGTK4__
     virtual GdkWindow* GTKGetWindow(wxArrayGdkWindows& windows) const override;
+#endif // !__WXGTK4__
 
 private:
     void Init();

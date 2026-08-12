@@ -1914,6 +1914,7 @@ GtkWidget* wxTextCtrl::GetConnectWidget() const
     return GTK_WIDGET(m_text);
 }
 
+#ifndef __WXGTK4__
 GdkWindow *wxTextCtrl::GTKGetWindow(wxArrayGdkWindows& WXUNUSED(windows)) const
 {
     if ( IsMultiLine() )
@@ -1930,6 +1931,7 @@ GdkWindow *wxTextCtrl::GTKGetWindow(wxArrayGdkWindows& WXUNUSED(windows)) const
 #endif
     }
 }
+#endif // !__WXGTK4__
 
 // the font will change for subsequent text insertiongs
 bool wxTextCtrl::SetFont( const wxFont &font )

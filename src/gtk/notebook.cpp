@@ -653,6 +653,7 @@ void wxNotebook::DoApplyWidgetStyle(GtkRcStyle *style)
         GTKApplyStyle(GetNotebookPage(i)->m_label, style);
 }
 
+#ifndef __WXGTK4__
 GdkWindow *wxNotebook::GTKGetWindow(wxArrayGdkWindows& windows) const
 {
     windows.push_back(gtk_widget_get_window(m_widget));
@@ -666,6 +667,7 @@ GdkWindow *wxNotebook::GTKGetWindow(wxArrayGdkWindows& windows) const
 
     return nullptr;
 }
+#endif // !__WXGTK4__
 
 // static
 wxVisualAttributes

@@ -301,10 +301,12 @@ wxColour wxHyperlinkCtrl::GetHoverColour() const
     return wxGenericHyperlinkCtrl::GetHoverColour();
 }
 
+#ifndef __WXGTK4__
 GdkWindow *wxHyperlinkCtrl::GTKGetWindow(wxArrayGdkWindows& windows) const
 {
     return UseNative() ? gtk_button_get_event_window(GTK_BUTTON(m_widget))
                        : wxGenericHyperlinkCtrl::GTKGetWindow(windows);
 }
+#endif // !__WXGTK4__
 
 #endif // wxUSE_HYPERLINKCTRL && GTK+ 2.10+

@@ -181,6 +181,7 @@ GtkWidget* wxBitmapComboBox::GetConnectWidget() const
     return wxChoice::GetConnectWidget();
 }
 
+#ifndef __WXGTK4__
 GdkWindow *wxBitmapComboBox::GTKGetWindow(wxArrayGdkWindows& windows) const
 {
     if ( GetEntry() )
@@ -188,6 +189,7 @@ GdkWindow *wxBitmapComboBox::GTKGetWindow(wxArrayGdkWindows& windows) const
 
     return wxChoice::GTKGetWindow(windows);
 }
+#endif // !__WXGTK4__
 
 wxSize wxBitmapComboBox::DoGetBestSize() const
 {

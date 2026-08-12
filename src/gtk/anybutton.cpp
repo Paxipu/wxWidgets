@@ -86,10 +86,12 @@ void wxAnyButton::DoEnable(bool enable)
     GTKUpdateBitmap();
 }
 
+#ifndef __WXGTK4__
 GdkWindow *wxAnyButton::GTKGetWindow(wxArrayGdkWindows& WXUNUSED(windows)) const
 {
     return gtk_button_get_event_window(GTK_BUTTON(m_widget));
 }
+#endif // !__WXGTK4__
 
 // static
 wxVisualAttributes

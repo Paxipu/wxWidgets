@@ -420,6 +420,7 @@ wxSize wxSearchCtrl::DoGetSizeFromTextSize(int xlen, int ylen) const
     return size;
 }
 
+#ifndef __WXGTK4__
 GdkWindow* wxSearchCtrl::GTKGetWindow(wxArrayGdkWindows& windows) const
 {
 #ifdef __WXGTK3__
@@ -430,4 +431,5 @@ GdkWindow* wxSearchCtrl::GTKGetWindow(wxArrayGdkWindows& windows) const
     return gtk_entry_get_text_window(GTK_ENTRY(m_widget));
 #endif
 }
+#endif // !__WXGTK4__
 #endif // wxUSE_SEARCHCTRL

@@ -237,10 +237,12 @@ void wxCheckBox::DoApplyWidgetStyle(GtkRcStyle *style)
     GTKApplyStyle(m_widgetLabel, style);
 }
 
+#ifndef __WXGTK4__
 GdkWindow *wxCheckBox::GTKGetWindow(wxArrayGdkWindows& WXUNUSED(windows)) const
 {
     return gtk_button_get_event_window(GTK_BUTTON(m_widgetCheckbox));
 }
+#endif // !__WXGTK4__
 
 // static
 wxVisualAttributes

@@ -471,10 +471,12 @@ bool wxToolBar::Create( wxWindow *parent,
     return true;
 }
 
+#ifndef __WXGTK4__
 GdkWindow *wxToolBar::GTKGetWindow(wxArrayGdkWindows& WXUNUSED(windows)) const
 {
     return gtk_widget_get_window(GTK_WIDGET(m_toolbar));
 }
+#endif // !__WXGTK4__
 
 void wxToolBar::GtkSetStyle()
 {

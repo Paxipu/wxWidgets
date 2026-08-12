@@ -869,10 +869,12 @@ GtkWidget *wxListBox::GetConnectWidget() const
     return GTK_WIDGET(m_treeview);
 }
 
+#ifndef __WXGTK4__
 GdkWindow *wxListBox::GTKGetWindow(wxArrayGdkWindows& WXUNUSED(windows)) const
 {
     return gtk_tree_view_get_bin_window(m_treeview);
 }
+#endif // !__WXGTK4__
 
 void wxListBox::DoApplyWidgetStyle(GtkRcStyle *style)
 {

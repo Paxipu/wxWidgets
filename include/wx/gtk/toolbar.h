@@ -76,7 +76,9 @@ protected:
     virtual wxBorder GetDefaultBorder() const override { return wxBORDER_DEFAULT; }
 
     virtual wxSize DoGetBestSize() const override;
+#ifndef __WXGTK4__
     virtual GdkWindow *GTKGetWindow(wxArrayGdkWindows& windows) const override;
+#endif // !__WXGTK4__
 
     // implement base class pure virtuals
     virtual bool DoInsertTool(size_t pos, wxToolBarToolBase *tool) override;

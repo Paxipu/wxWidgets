@@ -132,7 +132,9 @@ public:
 
 protected:
     // From wxWindowGTK:
+#ifndef __WXGTK4__
     virtual GdkWindow *GTKGetWindow(wxArrayGdkWindows& windows) const override;
+#endif // !__WXGTK4__
 
     // Widgets that use the style->base colour for the BG colour should
     // override this and return true.

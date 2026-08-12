@@ -239,6 +239,7 @@ void wxSpinButton::GtkEnableEvents() const
         (void*)gtk_value_changed, const_cast<wxSpinButton*>(this));
 }
 
+#ifndef __WXGTK4__
 GdkWindow *wxSpinButton::GTKGetWindow(wxArrayGdkWindows& WXUNUSED_IN_GTK2(windows)) const
 {
 #ifdef __WXGTK3__
@@ -248,6 +249,7 @@ GdkWindow *wxSpinButton::GTKGetWindow(wxArrayGdkWindows& WXUNUSED_IN_GTK2(window
     return GTK_SPIN_BUTTON(m_widget)->panel;
 #endif
 }
+#endif // !__WXGTK4__
 
 wxSize wxSpinButton::DoGetBestSize() const
 {

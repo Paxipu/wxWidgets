@@ -127,7 +127,9 @@ public:
     virtual GtkWidget* GetConnectWidget() const override;
 
 protected:
+#ifndef __WXGTK4__
     virtual GdkWindow *GTKGetWindow(wxArrayGdkWindows& windows) const override;
+#endif // !__WXGTK4__
 
     virtual void GTKCreateComboBoxWidget() override;
 

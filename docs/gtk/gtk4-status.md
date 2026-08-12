@@ -1651,3 +1651,76 @@ the right place, whether children paint in the right order, whether anything
 appears at all -- none of it is confirmed. `test_gui` still cannot link, and
 the remaining blockers for that are `dc.cpp`, `graphicc.cpp`, `overlay.cpp`
 and `image_gtk.cpp`, i.e. the two new deferred items above plus `overlay.cpp`.
+
+## Progress update 19: working the tail toward a link
+
+With Phase 4 started, the goal shifted to *linking* — which needs every
+remaining file to compile, not just the interesting ones. Failing build
+targets **46 → 42**, whole-tree diagnostics 1067 → **1040**, no regressions.
+
+Newly compiling in full: `colour.o`, `scrolbar.o`, `taskbar.o`, `utilsgtk.o`.
+
+### One shim, six files
+
+`gtk_dialog_run()` and `gtk_native_dialog_run()` blocked `assertdlg_gtk`,
+`dirdlg`, `filedlg`, `msgdlg`, `print` and `utilsgtk`. GTK4 removed both
+because its dialogs are asynchronous — the caller connects to `::response`
+instead of blocking — but wx's API is synchronous, so the blocking has to
+live somewhere. The shims reproduce what `gtk_dialog_run()` did internally:
+modal, present, spin a nested main loop until it responds.
+
+Deliberately a plain `GMainLoop` rather than `wxGUIEventLoop`: the assert
+dialog calls this exactly when wx's own event-loop machinery may not be
+usable, which is the situation it exists to survive.
+
+### The gesture finding paying off
+
+`scrolbar.cpp` tracked thumb drags with button press/release on the
+`GtkRange` and deferred its `THUMBRELEASE`/`CHANGED` events through
+`event_after` so handlers could set the scroll position afterwards.
+
+`GtkRange` has its own click gesture. A bubble-phase gesture that doesn't
+claim would have received the press and **never the release** — the trap
+measured in `docs/gtk/probes/gtk4-gesture-semantics.c`. Written the obvious
+way, every thumb-release event would have vanished silently. The port uses
+`GTK_PHASE_CAPTURE` (sees both without claiming, so `GtkRange` still drags)
+and `g_idle_add()` for the deferral.
+
+### Two corrections to earlier entries in this document
+
+- **The `GdkColor` item was over-scoped.** Update at "Newly-scoped deferred
+  item: colour.cpp" recorded it as touching roughly a dozen files, because
+  that many call `GetColor()`. Only **three** are live under GTK4
+  (`colour.cpp`, `textctrl.cpp`, `hyperlink.cpp`); the rest sit in
+  `!__WXGTK3__` blocks and have been dead there all along. Counting call
+  sites rather than *live* call sites made the task look far worse than it
+  was and kept it deferred longer than it deserved. Now done.
+- **Update regions**: severity corrected in place, see Phase 4 design §3.
+
+### Latent bugs surfaced, not caused
+
+Two things GTK4 exposed that were already wrong:
+
+- `taskbar.cpp`'s no-`GtkStatusIcon` fallback declared
+  `SetIcon(const wxIcon&, ...)` while the header has taken `wxBitmapBundle`
+  for some time. That branch had apparently never been compiled; GTK4 is
+  simply the first configuration to select it.
+- An `#ifndef __WXGTK4__` from the touch batch spanned an anonymous
+  namespace's opening but not its closing brace (fixed in update 17).
+
+### New gaps recorded
+
+- `hyperlink.cpp`: the `visited-link-color` style property is gone — link
+  colouring moved to CSS, applied to the element rather than exposed as
+  queryable. Uses the hard-coded fallback the GTK3 path already had, so a
+  theme with custom visited-link colours is not followed.
+- `textctrl.cpp`: `GtkTextTag`'s `foreground-gdk`/`background-gdk` gave way
+  to the `-rgba` variants.
+
+### What actually gates the samples
+
+Six deferred subsystems dominate what is left, and each is a rewrite rather
+than a translation: `toolbar` (141 errors), `toplevel` (138), `clipbrd` (62),
+`radiobox` (58), `dataview` (55), `menu` (53). Linking needs all of them, so
+they set the timeline — the remaining small files are comparatively quick but
+do not, by themselves, get anything to link.

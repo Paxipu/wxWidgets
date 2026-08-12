@@ -128,7 +128,13 @@ bool wxStaticBox::DoCreate(wxWindow *parent,
     else if ( style & wxALIGN_RIGHT )
         xalign = 1.0;
 
+#ifdef __WXGTK4__
+    // GTK4 dropped the yalign parameter: the label is always vertically
+    // centred on the frame's top edge, which is what 0.5 asked for anyway.
+    gtk_frame_set_label_align(GTK_FRAME(m_widget), xalign);
+#else
     gtk_frame_set_label_align(GTK_FRAME(m_widget), xalign, 0.5);
+#endif
 
 #ifndef __WXGTK3__
     if (!wx_is_at_least_gtk2(12))
@@ -232,10 +238,19 @@ void wxStaticBox::GetBordersForSizer(int *borderTop, int *borderOther) const
     }
 #endif
     GtkBorder border;
+#ifdef __WXGTK4__
+    // These take no state under GTK4, querying the context's current state,
+    // which is the normal one for a context just obtained from a widget.
+    gtk_style_context_get_border(sc, &border);
+    *borderOther += border.left;
+    *borderTop += border.top;
+    gtk_style_context_get_padding(sc, &border);
+#else
     gtk_style_context_get_border(sc, GTK_STATE_FLAG_NORMAL, &border);
     *borderOther += border.left;
     *borderTop += border.top;
     gtk_style_context_get_padding(sc, GTK_STATE_FLAG_NORMAL, &border);
+#endif
     *borderOther += border.left;
     *borderTop += border.top;
 #else

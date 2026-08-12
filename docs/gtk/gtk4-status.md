@@ -1507,3 +1507,74 @@ where GTK4 genuinely cannot do what GTK3 did:
 still cannot link, so the event *plumbing* is confirmed to compile and the
 gesture *semantics* are confirmed by injection, but nothing has exercised
 wx's own handlers end to end.
+
+## Progress update 17: `window.cpp`'s non-input remainder
+
+With the input model done (update 16), the rest of `window.cpp` turned out to
+be a long tail of unrelated removals rather than another subsystem. **206 →
+51 errors** overall for this file; whole-tree 1133 → 1084 at the last full
+rebuild, no regressions, GTK3 verified clean after every batch.
+
+Handled, grouped by what GTK4 replaced them with:
+
+**A different call**
+- `gtk_im_context_set_client_window()` → `set_client_widget()`.
+- `GDK_MOD1_MASK` → `GDK_ALT_MASK`.
+- `gtk_widget_size_allocate()` gained a baseline parameter;
+  `gtk_scrolled_window_new()` lost its adjustments;
+  `gtk_css_provider_load_from_data()` lost its `GError**`.
+- `gtk_scrolled_window_set_shadow_type()` → `set_has_frame()`.
+
+**A constant** — these are the interesting ones, because the replacement is
+"the answer is now always X", which changes behaviour rather than spelling:
+- `gtk_widget_get_has_window()` is always false: no widget owns a window under
+  GTK4. Made a shim rather than three `#ifdef`s, since call sites use it to
+  decide whether coordinates need translating through a child window, which
+  there they never do.
+- `gtk_widget_get/set_double_buffered()`: always on, no toggle, so
+  `wxWindow::SetDoubleBuffered()` is a no-op under GTK4.
+- `gtk_widget_set_redraw_on_allocate()`: gone, GTK4 always redraws on resize,
+  so `wxFULL_REPAINT_ON_RESIZE` can't be turned off.
+
+**Nothing at all**
+- **Pointer grabs.** `gdk_seat_grab()`, `gdk_pointer_grab()` and
+  `gtk_grab_add()` are all gone, deliberately: GTK4 grabs implicitly, a
+  gesture that claims a pointer sequence keeping it until the sequence ends.
+  `DoCaptureMouse()`/`DoReleaseMouse()` therefore keep only their bookkeeping.
+  This covers the dominant use — tracking a drag between button-down and
+  button-up — but **not** capturing outside a pointer sequence (from a hover
+  or a timer), which has no GTK4 equivalent at all.
+- **`GDK_MOD5_MASK`.** GTK4 trimmed the modifier enum to named modifiers, so
+  the convention of reporting AltGr as Ctrl+Alt cannot be detected. Left as a
+  gap rather than substituted, since a plausible-looking guess here would
+  misbehave on European keyboard layouts specifically.
+- **`GtkShadowType`'s in/out distinction**, per above.
+- **`DoPopupMenu()`.** `GtkMenu`, the `gtk_menu_popup*()` family,
+  `GtkMenuPositionFunc` and `gtk_main_iteration()` are all gone, and the modal
+  spin-the-loop idiom has no popover equivalent. Needs the `menu.cpp` rewrite
+  it is already deferred behind, so the GTK4 path reports failure — checkable
+  behaviour rather than a silent no-op.
+
+### A guard bug worth recording
+
+The earlier touch-event batch left an `#ifndef __WXGTK4__` that opened before
+an anonymous namespace and closed before its brace, so under GTK4 the
+namespace was never opened while its closing brace remained. It surfaced only
+as a stray-brace error whose message pointed at the brace rather than the
+guard. Fixed at the guard. Worth noting because conditional compilation that
+spans a scope boundary fails in a way the compiler describes unhelpfully, and
+this file now has a lot of such guards.
+
+### What's left in `window.cpp`
+
+The remaining ~51 errors are no longer a tail: ~30 are `GdkWindow`-based
+geometry, invalidation and clipping (`gdk_window_get_origin/get_width`,
+`gdk_window_invalidate_rect`, `gdk_window_get_clip_region`,
+`gtk_cairo_should_draw_window`), which belong to the **Phase 4 draw →
+snapshot redesign** that has not been started and has no design document yet.
+The rest are assorted single items (`GtkBindingSet` → `GtkShortcut`,
+`gdk_device_warp`, `gdk_window_raise/lower`, `gtk_widget_style_get`).
+
+`window.cpp` will therefore not compile — and `window.o` will not leave the
+failing-target list — until Phase 4 is designed and implemented. That is now
+the single largest blocker in the port.

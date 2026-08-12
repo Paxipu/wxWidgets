@@ -47,6 +47,45 @@ static inline GdkDisplay* GetDisplay()
     return wxGetTopLevelGdkDisplay();
 }
 
+// GTK+ 4 replaced indexed monitor access (gdk_display_get_n_monitors() and
+// gdk_display_get_monitor()) with a GListModel of GdkMonitor objects. These
+// helpers restore the count/index shape used by wxDisplayFactory.
+
+static inline unsigned wxGtkGetMonitorCount(GdkDisplay* display)
+{
+    return g_list_model_get_n_items(gdk_display_get_monitors(display));
+}
+
+// Returns a new reference which must be released by the caller, or nullptr if
+// the index is out of range.
+static inline GdkMonitor* wxGtkGetMonitor(GdkDisplay* display, unsigned i)
+{
+    return static_cast<GdkMonitor*>(
+                g_list_model_get_item(gdk_display_get_monitors(display), i));
+}
+
+// Index of the given monitor in the display's monitor list or wxNOT_FOUND.
+static int wxGtkFindMonitorIndex(GdkDisplay* display, GdkMonitor* monitor)
+{
+    if (monitor == nullptr)
+        return wxNOT_FOUND;
+
+    GListModel* const monitors = gdk_display_get_monitors(display);
+    for (unsigned i = g_list_model_get_n_items(monitors); i--;)
+    {
+        // The list model keeps its own reference, so the object remains valid
+        // after we drop ours and it's safe to compare the pointers.
+        GdkMonitor* const m =
+            static_cast<GdkMonitor*>(g_list_model_get_item(monitors, i));
+        g_object_unref(m);
+
+        if (m == monitor)
+            return int(i);
+    }
+
+    return wxNOT_FOUND;
+}
+
 // This class is always defined as it's used for the main display even when
 // wxUSE_DISPLAY == 0.
 class wxDisplayImplGTK : public wxDisplayImpl
@@ -54,13 +93,18 @@ class wxDisplayImplGTK : public wxDisplayImpl
     typedef wxDisplayImpl base_type;
 public:
     wxDisplayImplGTK(unsigned i);
+    virtual ~wxDisplayImplGTK();
     virtual wxRect GetGeometry() const override;
     virtual wxRect GetClientArea() const override;
     virtual int GetDepth() const override;
     virtual double GetScaleFactor() const override;
+    virtual wxSize GetRawPPI() const override;
 
 #if wxUSE_DISPLAY
-    virtual bool IsPrimary() const override;
+    // Note that IsPrimary() is not overridden here: GTK+ 4 removed the notion
+    // of a primary monitor entirely (gdk_monitor_is_primary() is gone), so the
+    // base class version, which considers the first monitor to be the primary
+    // one, is the best approximation available.
     virtual wxArrayVideoModes GetModes(const wxVideoMode& mode) const override;
     virtual wxVideoMode GetCurrentMode() const override;
     virtual bool ChangeMode(const wxVideoMode& mode) override;
@@ -87,22 +131,28 @@ wxDisplayImpl* wxDisplayFactoryGTK::CreateDisplay(unsigned n)
 
 unsigned wxDisplayFactoryGTK::GetCount()
 {
-    return gdk_display_get_n_monitors(::GetDisplay());
+    return wxGtkGetMonitorCount(::GetDisplay());
 }
 
 int wxDisplayFactoryGTK::GetFromPoint(const wxPoint& pt)
 {
-    GdkRectangle rect;
-    GdkDisplay* display = ::GetDisplay();
-    GdkMonitor* monitor = gdk_display_get_monitor_at_point(display, pt.x, pt.y);
-    gdk_monitor_get_geometry(monitor, &rect);
-    if (wxRect(rect.x, rect.y, rect.width, rect.height).Contains(pt))
+    // GTK+ 4 removed gdk_display_get_monitor_at_point(), so scan the monitors
+    // ourselves. This also subsumes the containment check done separately by
+    // the GTK+ 3 code above, which was needed because that function returned
+    // the monitor merely closest to the point if none actually contained it.
+    GdkDisplay* const display = ::GetDisplay();
+    GListModel* const monitors = gdk_display_get_monitors(display);
+    for (unsigned i = g_list_model_get_n_items(monitors); i--;)
     {
-        for (unsigned i = gdk_display_get_n_monitors(display); i--;)
-        {
-            if (gdk_display_get_monitor(display, i) == monitor)
-                return i;
-        }
+        GdkMonitor* const monitor =
+            static_cast<GdkMonitor*>(g_list_model_get_item(monitors, i));
+
+        GdkRectangle rect;
+        gdk_monitor_get_geometry(monitor, &rect);
+        g_object_unref(monitor);
+
+        if (wxRect(rect.x, rect.y, rect.width, rect.height).Contains(pt))
+            return int(i);
     }
     return wxNOT_FOUND;
 }
@@ -111,26 +161,24 @@ int wxDisplayFactoryGTK::GetFromWindow(const wxWindow* win)
 {
     if (win && win->m_widget)
     {
-        GdkDisplay* display = gtk_widget_get_display(win->m_widget);
-        GdkMonitor* monitor;
-#ifdef __WXGTK4__
-        GtkNative* native = gtk_widget_get_native(win->m_widget);
-        if (native)
-            monitor = gdk_display_get_monitor_at_surface(display, gtk_native_get_surface(native));
-        else
-            monitor = gdk_display_get_primary_monitor(display);
-#else
-        if (GdkWindow* window = gtk_widget_get_window(win->m_widget))
-            monitor = gdk_display_get_monitor_at_window(display, window);
-        else
-            monitor = gdk_display_get_primary_monitor(display);
-#endif // __WXGTK4__/!__WXGTK4__
+        GdkDisplay* const display = gtk_widget_get_display(win->m_widget);
 
-        for (unsigned i = gdk_display_get_n_monitors(display); i--;)
+        // Only a widget belonging to a realized native, i.e. a toplevel, has a
+        // surface which can be looked up.
+        GdkSurface* surface = nullptr;
+        if (GtkNative* const native = gtk_widget_get_native(win->m_widget))
+            surface = gtk_native_get_surface(native);
+
+        if (surface == nullptr)
         {
-            if (gdk_display_get_monitor(display, i) == monitor)
-                return i;
+            // The GTK+ 3 code fell back to the primary monitor here, but GTK+ 4
+            // has no primary monitor concept, so use the first one instead,
+            // consistently with wxDisplayImpl::IsPrimary().
+            return wxGtkGetMonitorCount(display) ? 0 : wxNOT_FOUND;
         }
+
+        return wxGtkFindMonitorIndex(
+                    display, gdk_display_get_monitor_at_surface(display, surface));
     }
     return wxNOT_FOUND;
 }
@@ -138,8 +186,17 @@ int wxDisplayFactoryGTK::GetFromWindow(const wxWindow* win)
 
 wxDisplayImplGTK::wxDisplayImplGTK(unsigned i)
     : base_type(i)
-    , m_monitor(gdk_display_get_monitor(GetDisplay(), i))
+      // Note that this is an owned reference, unlike the unowned GdkScreen
+      // used by the GTK+ 3 version of this class, as GTK+ 4's list model
+      // returns a new reference for each item.
+    , m_monitor(wxGtkGetMonitor(GetDisplay(), i))
 {
+}
+
+wxDisplayImplGTK::~wxDisplayImplGTK()
+{
+    if (m_monitor)
+        g_object_unref(m_monitor);
 }
 
 wxRect wxDisplayImplGTK::GetGeometry() const
@@ -151,9 +208,21 @@ wxRect wxDisplayImplGTK::GetGeometry() const
 
 wxRect wxDisplayImplGTK::GetClientArea() const
 {
-    GdkRectangle rect;
-    gdk_monitor_get_workarea(m_monitor, &rect);
-    return wxRect(rect.x, rect.y, rect.width, rect.height);
+    // gdk_monitor_get_workarea() was removed in GTK+ 4 because the work area
+    // simply can't be determined under Wayland. It does remain available in
+    // the X11 backend however, so still use it when running under X11 and fall
+    // back to the full monitor geometry otherwise -- meaning that the client
+    // area will wrongly include any panels or docks under Wayland.
+#if defined(GDK_WINDOWING_X11)
+    if ( wxGTKImpl::IsX11(m_monitor) )
+    {
+        GdkRectangle rect;
+        gdk_x11_monitor_get_workarea(m_monitor, &rect);
+        return wxRect(rect.x, rect.y, rect.width, rect.height);
+    }
+#endif // GDK_WINDOWING_X11
+
+    return GetGeometry();
 }
 
 int wxDisplayImplGTK::GetDepth() const
@@ -166,12 +235,23 @@ double wxDisplayImplGTK::GetScaleFactor() const
     return gdk_monitor_get_scale_factor(m_monitor);
 }
 
-#if wxUSE_DISPLAY
-bool wxDisplayImplGTK::IsPrimary() const
+wxSize wxDisplayImplGTK::GetRawPPI() const
 {
-    return gdk_monitor_is_primary(m_monitor) != 0;
+    auto const widthInMM = gdk_monitor_get_width_mm(m_monitor);
+    auto const heightInMM = gdk_monitor_get_height_mm(m_monitor);
+
+    // Don't use manifestly invalid values.
+    if ( widthInMM <= 0 && heightInMM <= 0 )
+        return wxDisplay::GetStdPPI();
+
+    const wxRect geometry = GetGeometry();
+    const double ppiX = geometry.width * 25.4 / widthInMM;
+    const double ppiY = geometry.height * 25.4 / heightInMM;
+
+    return wxSize(wxRound(ppiX), wxRound(ppiY));
 }
 
+#if wxUSE_DISPLAY
 wxArrayVideoModes
 wxDisplayImplGTK::GetModes(const wxVideoMode& WXUNUSED(mode)) const
 {

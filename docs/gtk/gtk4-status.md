@@ -1090,14 +1090,84 @@ ones:
   backend yet, and uses style context junction sides, gone with the rest
   of the pre-CSS styling API.
 
+### Also ported
+
+- **`private.cpp`** — `GetRadioButtonWidget()`'s scratch widget, used only
+  for theme queries, becomes a plain `GtkCheckButton` (GTK4 has no
+  `GtkRadioButton`; a radio button is a grouped check button there).
+- **`splash.cpp`** — window type hints are gone, see the Wayland section
+  below.
+- **`utilsx11.cpp`** — `GDK_MOD1_MASK` → `GDK_ALT_MASK`;
+  `wxQueryWMspecSupport()` switched to the plain X11 implementation
+  already present in the file (see the Wayland section);
+  `gtk_show_uri_on_window()`, which the never-compiled GTK4 branch here
+  invented, replaced with GTK4's fire-and-forget `gtk_show_uri()`. That
+  last one **loses failure detection**: it reports errors by showing its
+  own dialog rather than to the caller, so the xdg-open fallback can no
+  longer run on failure without risking opening the URL twice on success.
+- **`statusbr.cpp`** — the size grip is **not shown** under GTK4, a
+  deliberate deferral rather than a fix; see the commit and the deferred
+  list.
+
+### On Wayland, and why some fixes are still X11-specific
+
+Worth stating explicitly, since "port to GTK4" and "be ready for
+Wayland" are related but not the same goal, and a couple of changes in
+this update look like they point the wrong way.
+
+**They don't, in the one case where it matters most.** `utilsx11.cpp` is
+an X11 backend file by construction — `Display*`, `XSync()`,
+`XInternAtom()`, `wxGetFullScreenMethodX11()` — and its
+`wxQueryWMspecSupport()` asks whether the window manager advertises an
+EWMH hint in `_NET_SUPPORTED`, a protocol which simply has no Wayland
+counterpart. Both the old and new implementations are X11-only: the GDK
+helper that was being used, `gdk_x11_screen_supports_net_wm_hint()`,
+lives in `gdk/x11/` too. Nothing became *more* X11-bound; a GDK X11 call
+whose signature changed incompatibly was swapped for a raw Xlib one. Its
+only caller is additionally guarded by a runtime `wxGTKImpl::IsX11()`
+check (and is currently `!defined(__WXGTK4__)` anyway), so under Wayland
+it is never reached.
+
+**`display.cpp`'s `GetClientArea()` is the case where the concern is
+real**, and the tradeoff was made deliberately. GTK4 removed
+`gdk_monitor_get_workarea()` *because* the work area can't be known
+under Wayland — the compositor doesn't tell clients where panels and
+docks are, by design. It survives only as the X11-specific
+`gdk_x11_monitor_get_workarea()`. The options were to lose the work area
+on every backend, or keep it where it's still knowable and degrade where
+it isn't. This takes the latter: correct under X11, full monitor
+geometry under Wayland. That is a **Wayland fidelity gap, not a solved
+problem** — `wxDisplay::GetClientArea()` will overlap panels there.
+
+More generally, GTK4 is the right target for being future-proof, but it
+does not make these gaps go away; it mostly makes them *visible*, by
+removing the X11-shaped APIs that used to paper over them. The running
+list of things that are strictly worse under Wayland than under X11:
+
+| Gap | Where | Status |
+|---|---|---|
+| No global pointer position, only position relative to the surface under it | `wxGetMousePosition()`/`wxGetMouseState()`, `utilsgtk.cpp` | Accepted, documented (earlier update) |
+| No work area, so client area includes panels/docks | `wxDisplay::GetClientArea()`, `display.cpp` | X11 keeps real behaviour, Wayland degrades (this update) |
+| No window type hints, so a splash screen isn't marked as one for the WM | `splash.cpp`, and `toplevel.cpp`'s deferred WM hints | Accepted, documented (this update) |
+| No shaped windows at all | `wxNonOwnedWindow::SetShape`, `nonownedwnd.cpp` | Newly scoped, needs a decision (this update) |
+| WM decoration/function hints work through CSD instead | `toplevel.cpp`'s `GTKHandleRealized()` | Deferred whole-subsystem redesign |
+| Input synthesis has no equivalent | `uiactionx11.cpp` | Deferred; X11-only by nature, excluded from the build today |
+
+None of these are reasons to prefer GTK3 — they're the same gaps GTK3
+apps hit the moment they run on Wayland, just surfaced at compile time
+instead of silently misbehaving. But a wxGTK4 that is *only* correct
+under XWayland would miss the point of the exercise, so it's worth
+keeping this table honest as the port continues.
+
 ### Numbers
 
 Every batch verified by a full `make -k -j4` and a failing-**target**
 diff (the update 10 methodology), with zero regressions at each step:
-1447 → 1410 → 1386 → 1350 → **1329** diagnostics; failing build targets
-62 → 59 → 58 → 54 → **52**. Ten targets fully cleared: `display.o`,
-`frame.o`, `spinctrl.o`, `collpane.o`, `addremovectrl.o`, `artgtk.o`,
-`aboutdlg.o`, `mimetype.o`, `checkbox.o`, `fontdlg.o`.
+1447 → 1410 → 1386 → 1350 → 1329 → 1322 → **1312** diagnostics; failing
+build targets 62 → 59 → 58 → 54 → 52 → 49 → **48**. Fourteen targets
+fully cleared: `display.o`, `frame.o`, `spinctrl.o`, `collpane.o`,
+`addremovectrl.o`, `artgtk.o`, `aboutdlg.o`, `mimetype.o`, `checkbox.o`,
+`fontdlg.o`, `private.o`, `splash.o`, `utilsx11.o`, `statusbr.o`.
 
 ### What the next session should probably pick up
 
@@ -1115,12 +1185,21 @@ already-deferred subsystem: `msgdlg.cpp` and `dirdlg.cpp` need the
 easy fixes plus one Phase 3 one (`gtk_entry_im_context_filter_keypress`),
 and `hyperlink.cpp` needs the `colour.cpp` `GdkColor` work scoped below.
 
-One genuinely new deferred item found this session:
-**`nonownedwnd.cpp`'s `gdk_window_shape_combine_region()`** (3 call
-sites). GTK4 removed shaped windows outright — there is no replacement,
-as compositors handle transparency instead. `wxNonOwnedWindow::SetShape`
-is public API, so this needs a real decision (report failure? approximate
-with an alpha-masked CSS/snapshot render?) rather than a mechanical fix.
+Two genuinely new deferred items found this session:
+
+- **`nonownedwnd.cpp`'s `gdk_window_shape_combine_region()`** (3 call
+  sites). GTK4 removed shaped windows outright — there is no
+  replacement, as compositors handle transparency instead.
+  `wxNonOwnedWindow::SetShape` is public API, so this needs a real
+  decision (report failure? approximate with an alpha-masked
+  CSS/snapshot render?) rather than a mechanical fix.
+- **The status bar size grip** (`statusbr.cpp`), disabled rather than
+  ported this session. `gtk_window_begin_resize_drag()`/`begin_move_drag()`
+  became `gdk_toplevel_begin_resize()`/`begin_move()`, which need the
+  pointer position in *surface* coordinates plus the `GdkDevice`, so this
+  is blocked on the same Phase 2 coordinate-translation and Phase 3
+  input-device questions as everything else in those buckets. Cheap to
+  revisit once either lands.
 
 ## Newly-scoped deferred item: `colour.cpp`'s `GdkColor`/`GetColor()` removal
 

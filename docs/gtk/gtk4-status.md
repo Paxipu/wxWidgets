@@ -1220,6 +1220,108 @@ Two genuinely new deferred items found this session:
   input-device questions as everything else in those buckets. Cheap to
   revisit once either lands.
 
+## Progress update 16: decision to drive for a link, and Phase 3 started
+
+### The deadlock, and the decision
+
+Worth stating plainly, because it now governs the whole port:
+
+- Runtime verification needs `test_gui` to **link**.
+- Linking needs **all** remaining targets to compile.
+- The remaining targets are exactly the behaviour-heavy subsystems
+  (input, painting, menus, toolbar, clipboard) that most **need**
+  runtime verification.
+
+The Phase 3 design doc explicitly stopped short of implementing for that
+reason, which was right at the time but is self-perpetuating: meanwhile
+the pile of never-executed behaviour changes keeps growing — cursor
+handling, tab-order Z-order, the `wxWindowGTK` destructor, icon sizing,
+the checkbox label, and everything in update 15.
+
+**Decision: drive for a link.** Implement the remaining subsystems
+GTK4-idiomatically but accept that they're unverified, flagging each,
+so that `test_gui` links and the real Catch2 GUI suite can run under
+`xvfb-run`. Getting a test harness executing is now worth more than
+getting any individual subsystem provably right, because it's what
+retroactively validates everything already landed.
+
+### Done: `event.h` (the single most-included blocker)
+
+`wx/gtk/private/event.h` is included by **75 translation units** and was
+contributing 50 errors to each one that got far enough to see it, so it
+came first. Now 0, with GTK3 unaffected.
+
+`GdkEventButton`/`GdkEventMotion`/`GdkEventCrossing` don't exist under
+GTK4 — there's one opaque `GdkEvent` plus accessors, all of which are
+`GDK_AVAILABLE_IN_ALL` (`gdk_event_get_modifier_state()`,
+`gdk_event_get_time()`, `gdk_event_get_position()`). So `InitMouseEvent()`
+stops being a template over event-struct types and becomes a plain
+function.
+
+**The coordinate handling gets genuinely better, not just different.**
+GTK+ 3 event structs carried coordinates relative to whichever
+`GdkWindow` the event landed on, which is why the old code needs a
+correction for no-window widgets that own a `GdkWindow` covering part of
+their area. GTK4 events report a position relative to the *surface*, but
+the event controllers that deliver them hand out coordinates **already
+relative to the widget they're attached to** — so those are passed in
+rather than dug out of the event. That's more accurate and sidesteps the
+surface-to-widget translation entirely, which is the concrete form of
+the Phase 2 doc's claim that the input model is *easier* under GTK4.
+The no-window correction is dropped: it can't arise when no widget has a
+window.
+
+### Next, fully scoped: `window.cpp`'s mouse pipeline
+
+This is the immediate next unit and the analysis is done, so it can be
+executed directly. `wxWindowGTK::GTKConnectWidget()` (`window.cpp:4380`
+onwards) connects the GTK+ 3 signals; under GTK4 each becomes a
+controller added with `gtk_widget_add_controller()`:
+
+| GTK+ 3 signal | GTK4 controller and signal |
+|---|---|
+| `button_press_event` / `button_release_event` | `GtkGestureClick`, `pressed`/`released`; call `gtk_gesture_single_set_button(..., 0)` to get all buttons |
+| `motion_notify_event` | `GtkEventControllerMotion`, `motion` |
+| `enter_notify_event` / `leave_notify_event` | `GtkEventControllerMotion`, `enter`/`leave` |
+| `scroll_event` | `GtkEventControllerScroll` (`GTK_EVENT_CONTROLLER_SCROLL_BOTH_AXES`), `scroll` |
+| `key_press_event` / `key_release_event` | `GtkEventControllerKey`, `key-pressed`/`key-released` |
+| `popup_menu` | removed outright; needs a separate decision |
+
+Three pieces of GTK+ 3 machinery **should be deleted rather than
+ported**, which is why the GTK4 versions come out shorter:
+
+1. **The double-click filter.** `WindowButtonPressCallback()` peeks the
+   event queue (`gdk_event_peek()`) to suppress the surplus button-down
+   GDK sends before a double click, and GTK2 additionally pokes
+   `display->button_click_time[]` to defeat triple clicks.
+   `GtkGestureClick` reports `n_press` directly (1/2/3), so all of this
+   goes away and the down/dclick mapping reads off `n_press`.
+2. **`EventAlreadyProcessed()`.** It memcmp's the event against the last
+   one seen to deduplicate the same event being delivered to several
+   widgets in the hierarchy. GTK4's controllers have explicit
+   capture/bubble propagation phases, which is the supported way to
+   express this, so the hack shouldn't be carried over.
+3. **The `GDK_BUTTON1_MASK` touchscreen fixup**, which mutates
+   `gdk_event->state` in place — impossible on an opaque event, and
+   unnecessary since the state is read fresh via the accessor.
+
+`SetLastMouseEvent` needs only a `GdkEvent*` constructor under GTK4
+(the two struct-typed ones collapse into one). The three synthesized
+call sites around `window.cpp:3947-3975` pass their own coordinates and
+map over directly.
+
+Everything wx-level must be preserved as-is: `AdjustEventButtonState()`,
+`FindWindowForMouseEvent()` re-targeting and the event object/id reset
+after it, the focus-on-left-down rule, and right-down generating
+`WXSendContextMenuEvent()` with screen coordinates.
+
+After the mouse pipeline, `window.cpp`'s remaining blockers are the key
+events (`GdkEventKey`, 13 errors, same controller treatment via
+`GtkEventControllerKey`), the paint path (Phase 4, `draw` → `snapshot`),
+and a small tail of signature changes
+(`gtk_css_provider_load_from_data()` lost its length argument,
+`gtk_widget_size_allocate()` gained `baseline`).
+
 ## Newly-scoped deferred item: `colour.cpp`'s `GdkColor`/`GetColor()` removal
 
 Investigated while looking for the next small fix; turned out much bigger

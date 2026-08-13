@@ -31,6 +31,8 @@
 #include "wx/modalhook.h"
 #include "wx/gtk/private.h"
 #include "wx/gtk/private/mnemonics.h"
+#include "wx/gtk/private/object.h"
+#include "wx/gtk/private/string.h"
 #include "wx/gtk/private/gtk3-compat.h"
 #include "wx/stockitem.h"
 
@@ -151,9 +153,16 @@ bool wxDirDialog::Create(wxWindow* parent,
     gtk_file_chooser_set_select_multiple(m_fileChooser, HasFlag(wxDD_MULTIPLE));
     gtk_file_chooser_set_select_multiple((GtkFileChooser*)m_widget, HasFlag(wxDD_MULTIPLE));
 
-    // Enable show hidden folders if desired
+#ifndef __WXGTK4__
+    // Enable show hidden folders if desired.
+    //
+    // GTK4 removed gtk_file_chooser_set_show_hidden(): whether hidden files
+    // are listed is the user's choice there (Ctrl+H, or the chooser's own
+    // menu) and an application can no longer force it, so wxDD_SHOW_HIDDEN
+    // has no effect.
     gtk_file_chooser_set_show_hidden(m_fileChooser, HasFlag(wxDD_SHOW_HIDDEN));
     gtk_file_chooser_set_show_hidden((GtkFileChooser*)m_widget, HasFlag(wxDD_SHOW_HIDDEN));
+#endif
 
     // local-only property could be set to false to allow non-local files to be loaded.
     // In that case get/set_uri(s) should be used instead of get/set_filename(s) everywhere
@@ -178,6 +187,18 @@ wxDirDialog::~wxDirDialog()
 
 void wxDirDialog::GTKAccept()
 {
+#ifdef __WXGTK4__
+    // GTK4 replaced the GSList of path strings with a GListModel of GFile.
+    wxGtkObject<GListModel> files(gtk_file_chooser_get_files(m_fileChooser));
+    const guint n = g_list_model_get_n_items(files);
+    for ( guint i = 0; i < n; i++ )
+    {
+        wxGtkObject<GFile> file(static_cast<GFile*>(g_list_model_get_item(files, i)));
+        wxGtkString path(g_file_get_path(file));
+        if ( path )
+            m_paths.Add(wxString::FromUTF8(path));
+    }
+#else
     GSList *fnamesi = gtk_file_chooser_get_filenames(m_fileChooser);
     GSList *fnames = fnamesi;
 
@@ -191,6 +212,7 @@ void wxDirDialog::GTKAccept()
     }
 
     g_slist_free(fnames);
+#endif // __WXGTK4__/!__WXGTK4__
 
     // change to the directory where the user went if asked
     if (HasFlag(wxDD_CHANGE_DIR))
@@ -275,9 +297,21 @@ void wxDirDialog::SetPath(const wxString& dir)
 {
     if (wxDirExists(dir))
     {
+#ifdef __WXGTK4__
+        wxGtkObject<GFile> folder(g_file_new_for_path(wxGTK_CONV_FN(dir)));
+        gtk_file_chooser_set_current_folder(m_fileChooser, folder, nullptr);
+#else
         gtk_file_chooser_set_current_folder(m_fileChooser, wxGTK_CONV_FN(dir));
+#endif
         if (m_fileChooser != (GtkFileChooser*)m_widget)
+#ifdef __WXGTK4__
+        {
+            wxGtkObject<GFile> folder(g_file_new_for_path(wxGTK_CONV_FN(dir)));
+            gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(m_widget), folder, nullptr);
+        }
+#else
             gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(m_widget), wxGTK_CONV_FN(dir));
+#endif
     }
 }
 

@@ -22,6 +22,7 @@
 #include "wx/modalhook.h"
 
 #include "wx/gtk/private.h"
+#include "wx/gtk/private/gtk3-compat.h"
 #include "wx/gtk/private/list.h"
 #include "wx/gtk/private/messagetype.h"
 #include "wx/gtk/private/mnemonics.h"
@@ -181,10 +182,15 @@ void wxMessageDialog::GTKCreateMsgDialog()
 
     GtkDialog * const dlg = GTK_DIALOG(m_widget);
 
+#ifndef __WXGTK4__
+    // GTK4 removed gtk_window_set_keep_above(): window stacking is the
+    // compositor's business there and applications can no longer request it,
+    // so wxSTAY_ON_TOP has no effect on this dialog.
     if ( m_dialogStyle & wxSTAY_ON_TOP )
     {
         gtk_window_set_keep_above(GTK_WINDOW(m_widget), TRUE);
     }
+#endif
 
 #if GTK_CHECK_VERSION(2,22,0)
     // A GTKMessageDialog usually displays its labels without selection enabled,
@@ -195,6 +201,13 @@ void wxMessageDialog::GTKCreateMsgDialog()
         GtkMessageDialog * const msgdlg = GTK_MESSAGE_DIALOG(m_widget);
 
         GtkWidget* const area = gtk_message_dialog_get_message_area(msgdlg);
+#ifdef __WXGTK4__
+        for ( GtkWidget* widget = gtk_widget_get_first_child(area);
+              widget != nullptr;
+              widget = gtk_widget_get_next_sibling(widget) )
+        {
+            if ( GTK_IS_LABEL(widget) )
+#else
         wxGtkList labels(gtk_container_get_children(GTK_CONTAINER(area)));
 
         for ( GList* elem = labels; elem; elem = elem->next )
@@ -202,6 +215,7 @@ void wxMessageDialog::GTKCreateMsgDialog()
             GtkWidget* const widget = GTK_WIDGET( elem->data );
 
             if ( GTK_IS_LABEL(widget) )
+#endif
             {
                 gtk_label_set_selectable(GTK_LABEL(widget), TRUE);
             }
@@ -291,7 +305,11 @@ int wxMessageDialog::ShowModal()
 
     gint result = gtk_dialog_run(GTK_DIALOG(m_widget));
     GTKDisconnect(m_widget);
+#ifdef __WXGTK4__
+    gtk_window_destroy(GTK_WINDOW(m_widget));
+#else
     gtk_widget_destroy(m_widget);
+#endif
     g_object_unref(m_widget);
     m_widget = nullptr;
 

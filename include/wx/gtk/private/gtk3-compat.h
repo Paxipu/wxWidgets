@@ -158,6 +158,13 @@ static inline void wx_gtk_box_pack_start(GtkBox* box, GtkWidget* child,
 // Plain rename, same signature.
 #define gtk_label_set_line_wrap(label, wrap) gtk_label_set_wrap(label, wrap)
 
+// gtk_true()/gtk_false() were dropped from GTK4's public API. They exist only
+// to be used as signal handlers that unconditionally return a value.
+static inline gboolean wx_gtk_true(...)
+{
+    return TRUE;
+}
+
 // gtk_dialog_run() and gtk_native_dialog_run() are gone under GTK4: dialogs
 // there are asynchronous, the caller connecting to ::response instead of
 // blocking. wx's API is synchronous (wxDialog::ShowModal() returns the result),
@@ -246,6 +253,48 @@ static inline int wx_gtk_native_dialog_run(GtkNativeDialog* dialog)
     return data.response;
 }
 #define gtk_native_dialog_run(dialog) wx_gtk_native_dialog_run(dialog)
+
+// GTK4 dropped the GdkWMDecoration/GdkWMFunction hints along with the rest of
+// the GdkWindow API: a GTK4 application cannot tell the window manager which
+// decorations or which window-menu entries it wants. What it *can* still do is
+// turn its own decorations off entirely (gtk_window_set_decorated()) and, when
+// drawing them itself, choose which buttons the header bar shows
+// (gtk_header_bar_set_decoration_layout()).
+//
+// The flags are kept as plain wx-internal bits so that the style-to-hints
+// translation in wxTopLevelWindowGTK::Create() and wxMiniFrame stays one body
+// of code across GTK versions; what changes is only how much of the result can
+// be acted on. See docs/gtk/gtk4-status.md for the resulting fidelity gaps.
+enum
+{
+    GDK_DECOR_ALL       = 1 << 0,
+    GDK_DECOR_BORDER    = 1 << 1,
+    GDK_DECOR_RESIZEH   = 1 << 2,
+    GDK_DECOR_TITLE     = 1 << 3,
+    GDK_DECOR_MENU      = 1 << 4,
+    GDK_DECOR_MINIMIZE  = 1 << 5,
+    GDK_DECOR_MAXIMIZE  = 1 << 6
+};
+
+enum
+{
+    GDK_FUNC_ALL        = 1 << 0,
+    GDK_FUNC_RESIZE     = 1 << 1,
+    GDK_FUNC_MOVE       = 1 << 2,
+    GDK_FUNC_MINIMIZE   = 1 << 3,
+    GDK_FUNC_MAXIMIZE   = 1 << 4,
+    GDK_FUNC_CLOSE      = 1 << 5
+};
+
+// The GdkSurface of the toplevel a widget belongs to, or null if it isn't
+// realized yet. This is as close as GTK4 gets to GTK3's
+// gtk_widget_get_window(): only natives (toplevels and popups) have a surface,
+// and every widget inside one shares it.
+static inline GdkSurface* wx_gtk_widget_get_surface(GtkWidget* widget)
+{
+    GtkNative* const native = gtk_widget_get_native(widget);
+    return native ? gtk_native_get_surface(native) : nullptr;
+}
 
 // No widget owns a GdkWindow under GTK4 -- the concept is gone -- so the
 // GTK3 question "does this widget have its own window?" is always answered

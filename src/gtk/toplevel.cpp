@@ -88,18 +88,25 @@ static bool HasClientDecor(GtkWidget* widget)
     if (wxGTKImpl::IsX11(display))
         return false;
 
+#ifdef __WXGTK4__
+    // gdk_wayland_display_prefers_ssd() is gone under GTK4, and nothing
+    // replaces it: whether the compositor takes over the decorations is
+    // negotiated internally by the xdg-decoration protocol and not exposed.
+    // Assuming client-side decorations matches GTK4's own default and what
+    // every mainstream Wayland compositor actually does.
+    return true;
+#else
     // Contrary to the annotation in the header, this function has become
     // available only in 3.22.25 and not 3.22.0.
 #if defined(GDK_WINDOWING_WAYLAND) && GTK_CHECK_VERSION(3,22,25)
     if (wxGTKImpl::IsWayland(display))
     {
-#ifndef __WXGTK4__
         if (gtk_check_version(3, 22, 25) == nullptr)
-#endif
             return !gdk_wayland_display_prefers_ssd(display);
     }
 #endif
     return true;
+#endif // __WXGTK4__/!__WXGTK4__
 }
 #else
 static inline bool HasClientDecor(GtkWidget*)
@@ -112,22 +119,42 @@ static inline bool HasClientDecor(GtkWidget*)
 // RequestUserAttention related functions
 //-----------------------------------------------------------------------------
 
-#ifndef __WXGTK3__
+#if !defined(__WXGTK3__) || defined(__WXGTK4__)
+
+// GTK4 removed gtk_window_set_urgency_hint() with nothing in its place -- as
+// with the other window-manager hints, "demand attention" is now the
+// compositor's business. Setting the X11 urgency hint by hand still works
+// though, and is exactly what GTK+ 2 did before the wrapper existed, so the
+// pre-2.8 fallback below serves GTK4 too. Under Wayland this is silently a
+// no-op, which is the honest answer: the protocol has no equivalent.
 static void wxgtk_window_set_urgency_hint (GtkWindow *win,
                                            gboolean setting)
 {
-#if GTK_CHECK_VERSION(2,7,0)
+#if !defined(__WXGTK4__) && GTK_CHECK_VERSION(2,7,0)
     if (wx_is_at_least_gtk2(7))
         gtk_window_set_urgency_hint(win, setting);
     else
 #endif
     {
 #ifdef GDK_WINDOWING_X11
-        GdkWindow* window = gtk_widget_get_window(GTK_WIDGET(win));
+        GtkWidget* const widget = GTK_WIDGET(win);
+#ifdef __WXGTK4__
+        GdkDisplay* const display = gtk_widget_get_display(widget);
+        if (!wxGTKImpl::IsX11(display))
+            return;
+
+        GdkSurface* const surface = wx_gtk_widget_get_surface(widget);
+        wxCHECK_RET(surface, "wxgtk_window_set_urgency_hint: not realized");
+
+        Display* dpy = GDK_DISPLAY_XDISPLAY(display);
+        Window xid = gdk_x11_surface_get_xid(surface);
+#else
+        GdkWindow* window = gtk_widget_get_window(widget);
         wxCHECK_RET(window, "wxgtk_window_set_urgency_hint: GdkWindow not realized");
 
         Display* dpy = GDK_WINDOW_XDISPLAY(window);
         Window xid = GDK_WINDOW_XID(window);
+#endif
         wxX11Ptr<XWMHints> wm_hints(XGetWMHints(dpy, xid));
 
         if (!wm_hints)
@@ -139,6 +166,9 @@ static void wxgtk_window_set_urgency_hint (GtkWindow *win,
             wm_hints->flags &= ~XUrgencyHint;
 
         XSetWMHints(dpy, xid, const_cast<XWMHints*>(wm_hints.get()));
+#else // !GDK_WINDOWING_X11
+        wxUnusedVar(win);
+        wxUnusedVar(setting);
 #endif // GDK_WINDOWING_X11
     }
 }
@@ -156,13 +186,13 @@ static gboolean gtk_frame_urgency_timer_callback( wxTopLevelWindowGTK *win )
 }
 
 //-----------------------------------------------------------------------------
-// "focus_in_event"
+// window activation
 //-----------------------------------------------------------------------------
 
-extern "C" {
-static gboolean gtk_frame_focus_in_callback( GtkWidget *widget,
-                                         GdkEvent *WXUNUSED(event),
-                                         wxTopLevelWindowGTK *win )
+// Common bodies of the activation handlers, shared by the GTK+ 3
+// focus-in/focus-out event handlers and the GTK4 "notify::is-active" one.
+
+static void wxgtk_tlw_activated(wxTopLevelWindowGTK* win)
 {
     g_activeFrame = win;
 
@@ -174,7 +204,7 @@ static gboolean gtk_frame_focus_in_callback( GtkWidget *widget,
             // no break, fallthrough to remove hint too
             wxFALLTHROUGH;
         case -1:
-            gtk_window_set_urgency_hint(GTK_WINDOW(widget), false);
+            gtk_window_set_urgency_hint(GTK_WINDOW(win->m_widget), false);
             win->m_urgency_hint = -2;
             break;
 
@@ -184,6 +214,55 @@ static gboolean gtk_frame_focus_in_callback( GtkWidget *widget,
     wxActivateEvent event(wxEVT_ACTIVATE, true, g_activeFrame->GetId());
     event.SetEventObject(g_activeFrame);
     g_activeFrame->HandleWindowEvent(event);
+}
+
+static void wxgtk_tlw_deactivated()
+{
+    if (g_activeFrame)
+    {
+        wxActivateEvent event(wxEVT_ACTIVATE, false, g_activeFrame->GetId());
+        event.SetEventObject(g_activeFrame);
+        g_activeFrame->HandleWindowEvent(event);
+
+        g_activeFrame = nullptr;
+    }
+}
+
+#ifdef __WXGTK4__
+
+//-----------------------------------------------------------------------------
+// "notify::is-active"
+//-----------------------------------------------------------------------------
+
+// GTK4 has no focus-in-event/focus-out-event on a toplevel: keyboard focus
+// changes are reported through controllers, and whether the *window* has the
+// focus is exposed as GtkWindow's "is-active" property instead. Since the two
+// GTK+ 3 handlers only ever cared about that one bit, watching the property
+// covers both of them.
+
+extern "C" {
+static void
+wxgtk_tlw_notify_is_active(GObject*, GParamSpec*, wxTopLevelWindowGTK* win)
+{
+    if (gtk_window_is_active(GTK_WINDOW(win->m_widget)))
+        wxgtk_tlw_activated(win);
+    else
+        wxgtk_tlw_deactivated();
+}
+}
+
+#else // !__WXGTK4__
+
+//-----------------------------------------------------------------------------
+// "focus_in_event"
+//-----------------------------------------------------------------------------
+
+extern "C" {
+static gboolean gtk_frame_focus_in_callback( GtkWidget *WXUNUSED(widget),
+                                         GdkEvent *WXUNUSED(event),
+                                         wxTopLevelWindowGTK *win )
+{
+    wxgtk_tlw_activated(win);
 
     return FALSE;
 }
@@ -199,14 +278,7 @@ gboolean gtk_frame_focus_out_callback(GtkWidget * WXUNUSED(widget),
                                       GdkEventFocus *WXUNUSED(gdk_event),
                                       wxTopLevelWindowGTK * WXUNUSED(win))
 {
-    if (g_activeFrame)
-    {
-        wxActivateEvent event(wxEVT_ACTIVATE, false, g_activeFrame->GetId());
-        event.SetEventObject(g_activeFrame);
-        g_activeFrame->HandleWindowEvent(event);
-
-        g_activeFrame = nullptr;
-    }
+    wxgtk_tlw_deactivated();
 
     return FALSE;
 }
@@ -243,6 +315,8 @@ wxgtk_tlw_key_press_event(GtkWidget *widget, GdkEventKey *event)
     return true;
 }
 }
+
+#endif // __WXGTK4__/!__WXGTK4__
 
 //-----------------------------------------------------------------------------
 // "size_allocate" from m_wxwindow

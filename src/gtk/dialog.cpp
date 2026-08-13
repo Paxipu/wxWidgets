@@ -117,7 +117,14 @@ realize_hook(GSignalInvocationHint*, unsigned, const GValue* param_values, void*
             if (group != group_parent)
             {
                 gtk_window_group_add_window(group_parent, toplevel);
+#ifndef __WXGTK4__
+                // gtk_grab_add() is gone with the rest of GTK4's explicit
+                // grabs. This whole hook works around a GTK bug in which a
+                // scrollbar's grab escaped its window group (seen on Ubuntu
+                // 12.04/12.10), so it is very unlikely to be needed against
+                // GTK4 at all -- and there is no way to express it there.
                 gtk_grab_add(GTK_WIDGET(toplevel));
+#endif
             }
         }
     }
@@ -165,8 +172,15 @@ int wxDialog::ShowModal()
     // Prevent the widget from being destroyed if the user closes the window.
     // Needed for derived classes which bypass wxTLW::Create(), and therefore
     // the wxTLW "delete-event" handler is not connected
+#ifdef __WXGTK4__
+    // "delete-event" became "close-request" and gtk_true() is gone; the
+    // handler's only job is to return TRUE so the window isn't destroyed.
+    gulong handler_id = g_signal_connect(
+        m_widget, "close-request", G_CALLBACK(wx_gtk_true), this);
+#else
     gulong handler_id = g_signal_connect(
         m_widget, "delete-event", G_CALLBACK(gtk_true), this);
+#endif
 
     // Run modal dialog event loop.
     {

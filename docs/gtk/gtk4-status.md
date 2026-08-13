@@ -1724,3 +1724,83 @@ than a translation: `toolbar` (141 errors), `toplevel` (138), `clipbrd` (62),
 `radiobox` (58), `dataview` (55), `menu` (53). Linking needs all of them, so
 they set the timeline — the remaining small files are comparatively quick but
 do not, by themselves, get anything to link.
+
+## Progress update 19: working down the tail toward a link
+
+With `window.cpp` no longer the bottleneck, the goal shifted to reducing the
+*failing-target count*, since linking `test_gui` — and therefore any runtime
+verification at all — needs every one of them to compile, not just the
+interesting ones.
+
+**Failing targets 46 → 39; diagnostics 1133 → 998.** No regressions in any
+batch; GTK3 checked after each.
+
+Now compiling fully: `colour.o`, `scrolbar.o`, `taskbar.o`, `utilsgtk.o`,
+`dialog.o`, `msgdlg.o`, `dirdlg.o`.
+
+### The highest-leverage piece: `gtk_dialog_run()`
+
+Six files were blocked on `gtk_dialog_run()`/`gtk_native_dialog_run()`
+(`assertdlg_gtk`, `dirdlg`, `filedlg`, `msgdlg`, `print`, `utilsgtk`). GTK4
+removed both because its dialogs are asynchronous — the caller connects to
+`::response` instead of blocking — but wx's API is synchronous
+(`wxDialog::ShowModal()` returns the result), so the blocking has to exist
+somewhere. The shims in `gtk3-compat.h` reproduce what `gtk_dialog_run()` did
+internally: make the dialog modal, show it, spin a nested main loop until it
+responds.
+
+Deliberately a plain `GMainLoop` rather than `wxGUIEventLoop`: the assert
+dialog calls this precisely when wx's own event loop machinery may not be in a
+usable state.
+
+### Two corrections to earlier entries in this document
+
+- **`GdkColor`'s removal was scoped far too widely.** Update 14 recorded it as
+  touching about a dozen files because that is how many call `GetColor()`.
+  Only **three** are actually rejected by GTK4 (`colour.cpp`, `textctrl.cpp`,
+  `hyperlink.cpp`); every other caller sits inside a `!__WXGTK3__` block and
+  has been dead code under GTK4 all along. The scoping counted call sites
+  rather than live ones, which made the task look far more forbidding than it
+  was — it took one batch.
+- **The update-region loss was overstated** — see the correction in update 18
+  and the Phase 4 design doc.
+
+### A latent bug this surfaced
+
+`taskbar.cpp`'s no-`GtkStatusIcon` fallback declared
+`SetIcon(const wxIcon&, ...)` while the header has taken `wxBitmapBundle` for
+some time. That branch appears never to have been compiled by any
+configuration; GTK4 is simply the first to select it. Not a GTK4 issue at all,
+just one this port happened to expose.
+
+### Capability losses recorded this batch
+
+All cases where GTK4 deliberately took control away from applications, so
+there is nothing to work around:
+
+- `wxSTAY_ON_TOP` on message dialogs — `gtk_window_set_keep_above()` is gone;
+  stacking is the compositor's business.
+- `wxDD_SHOW_HIDDEN` — whether hidden files are listed is the user's choice
+  (Ctrl+H or the chooser's menu), not the application's.
+- Mouse capture outside a pointer sequence, and freezing a native control
+  (updates 17 and 18).
+- `hyperlink.cpp`'s visited-link colour — link colouring moved to CSS, applied
+  to the element rather than exposed as a queryable property.
+
+### What is left, and what sets the timeline
+
+Of the 39, roughly a dozen sit at 1–5 errors and should fall the same way.
+The timeline is set by six genuine subsystem rewrites, not by the tail:
+
+| File | Errors | Why |
+|---|---|---|
+| `toolbar.cpp` | 141 | `GtkToolbar`/`GtkToolItem` removed outright |
+| `toplevel.cpp` | 138 | WM hints, `GdkWindow` geometry |
+| `clipbrd.cpp` | 62 | `GdkAtom`/selection model replaced by `GdkClipboard` |
+| `radiobox.cpp` | 58 | `GtkRadioButton` removed |
+| `dataview.cpp` | 55 | cell renderers, `GdkWindow` |
+| `menu.cpp` | 53 | `GMenuModel`/`GtkPopoverMenu` |
+
+`test_gui` cannot link until all of them are done, so **nothing in this port
+is runtime-verified yet** and that remains the largest risk, not the error
+count.

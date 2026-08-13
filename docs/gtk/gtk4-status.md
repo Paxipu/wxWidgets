@@ -1804,3 +1804,138 @@ The timeline is set by six genuine subsystem rewrites, not by the tail:
 `test_gui` cannot link until all of them are done, so **nothing in this port
 is runtime-verified yet** and that remains the largest risk, not the error
 count.
+
+---
+
+## Progress update 20: the menu subsystem, rewritten
+
+**998 -> 944 diagnostics, 39 -> 38 failing targets, no regressions.**
+`menu.cpp` went from 53 errors to zero. That is one file out of the six
+subsystem rewrites that gate the link, and the first of them to be done.
+
+Full design: `docs/gtk/gtk4-phase-menu-design.md`. Probe:
+`docs/gtk/probes/gtk4-menu-actions.c`.
+
+### Not a port, a replacement
+
+Every GTK type `menu.cpp` was built on is gone: `GtkMenu`, `GtkMenuBar`,
+`GtkMenuItem` and all its subclasses, `GtkSeparatorMenuItem`,
+`GtkTearoffMenuItem`, `GtkAccelGroup`, and the whole `gtk_menu_popup_at_*()`
+family. GTK4 menus are declarative -- a `GMenuModel` describes the structure,
+`GAction`s carry the behaviour, and `GtkPopoverMenu`/`GtkPopoverMenuBar` are
+views that render a model. There are no per-item widgets at all.
+
+So the GTK3 backend's central data structure, `wxMenuItem::m_menuItem` (a
+`GtkWidget*`), has no counterpart. Everything downstream of that had to be
+re-derived rather than translated.
+
+### The finding that made it tractable
+
+Before writing anything I checked whether per-item `GtkWidget*`s had leaked out
+of `menu.cpp`. They had not:
+
+* `wxMenuItem::GetMenuItem()` returning `GtkWidget*` is referenced **only
+  inside `src/gtk/menu.cpp`**. The other matches in the tree
+  (`framecmn.cpp`, `accel.cpp`, `event.h`, `accel.h`) are a *different*
+  `GetMenuItem()` that returns `wxMenuItem*`.
+* `wxMenu::m_menu`, `m_owner` and `m_accel` are used outside `menu.cpp` in
+  exactly one place, `wxWindowGTK::DoPopupMenu()`, which was already
+  `#ifdef`ed out for GTK4.
+
+That is what turned this from "needs a compatibility shim" into "rewrite the
+backend freely". Worth stating because the opposite result would have changed
+the plan for the whole file, and it is not something to assume.
+
+### Measured, not assumed
+
+Seven mechanics were probed against GTK 4.14.5 under Xvfb before any code was
+written. The load-bearing one:
+
+> a `GtkShortcutController` on the frame, holding a `GtkShortcut` whose action
+> is a `GtkNamedAction`, **does** resolve names against an action group
+> installed with `gtk_widget_insert_action_group()` on that same frame.
+
+It was not obvious that it would, and menu accelerators under GTK4 have no
+other route. If it had failed, accelerators would have had to be routed through
+wx's own key handling instead, which is a materially different design.
+
+A second probe corrected something I had written down wrongly. My first note on
+per-item bitmaps said `GMenuItem` accepts "only a `GIcon`, not an arbitrary
+`wxBitmap` surface", and I had it queued as a fidelity gap. That is wrong:
+**`GdkTexture` implements `GIcon`**, so `wxBitmap -> GdkPixbuf -> GdkTexture`
+is a perfectly good menu icon and `SetBitmap()` keeps working. One line of test
+code was enough to check; had I not, the port would have dropped a feature that
+did not need dropping.
+
+### Rebuild rather than patch
+
+`GMenu` copies a `GMenuItem`'s attributes on insertion -- there is no
+"change item 3's label". Mutation means remove-then-insert. And because
+separators are modelled as *sections*, wx item position N is not model
+position N.
+
+Rather than maintain a wx-position-to-model-path mapping across every insert,
+remove and separator change, every structural change calls
+`wxMenu::GTKRebuildModel()`, which regenerates the model and the actions from
+the wx item list. Menus have tens of items; this is O(n) per edit and it
+removes a whole class of index-mapping bugs. State-only changes (`Enable()`,
+`Check()`) still go straight to the `GAction`, so an open menu stays
+responsive.
+
+A pleasant consequence: the GTK3 backend's hand-rolled "look at the previous
+item, then the next item" radio-group joining logic disappears. Radio runs are
+just recomputed on each rebuild.
+
+### Capability losses
+
+- **`wxEVT_MENU_HIGHLIGHT` is not emitted.** GTK3 had `select`/`deselect` per
+  item widget. A `GMenuModel` has no concept of a highlighted item and
+  `GtkPopoverMenu` does not publish the `GtkModelButton`s it builds.
+- **`wxEVT_MENU_OPEN`/`wxEVT_MENU_CLOSE` only fire for popup menus.** There wx
+  owns the `GtkPopoverMenu` and watches its `show`/`closed` signals.
+  `GtkPopoverMenuBar` creates its drop-down popovers internally and does not
+  expose them. `UpdateUI()` on menu open is likewise popup-only.
+- **Disabling one radio item disables its whole group**, because a GTK4 radio
+  group is a single action and the enabled state lives on the action.
+- **`wxMENU_TEAROFF` and `wxMB_DOCKABLE`** are accepted and ignored;
+  `GtkTearoffMenuItem` and `GtkHandleBox` are both gone.
+- **Stock accelerators.** `gtk_stock_lookup()` is gone, so `wxID_COPY` no
+  longer picks up GTK's default `Ctrl+C` by itself. Explicit accelerators in
+  the item label still work.
+
+Two things GTK4 makes *harder* were worked around rather than dropped: a
+`GMenuModel` submenu item has no action, so both `EnableTop()` and
+`Enable()` on a submenu item re-emit that entry as a plain item bound to a
+never-enabled action -- the label still shows, greyed, and does nothing.
+
+### `PopupMenu()` works again
+
+`wxWindow::PopupMenu()` had been reporting failure since the Phase 2 batch. It
+is now implemented: a `GtkPopoverMenu` parented on the invoking window, with a
+nested `GMainLoop` to preserve the documented "blocks until dismissed"
+contract -- the same trick already used for `gtk_dialog_run()`.
+
+### Tests
+
+Four checks added to `build/tools/gtk4-invariants.c`, which CI runs before the
+build: named-action resolution through an inserted action group, the `accel`
+attribute round-tripping through a `GMenu`, a stateful action reporting the
+activated target, and a live menu bar surviving its model being emptied and
+refilled. All four were verified against negative controls -- deliberately
+breaking each mechanism does make its check fail.
+
+As with everything else in this port, these assert GTK's own behaviour. None of
+the wx code above is runtime-verified yet, and cannot be until the remaining
+five rewrites let `test_gui` link.
+
+### What is left
+
+| File | Errors | Why |
+|---|---|---|
+| `toolbar.cpp` | 141 | `GtkToolbar`/`GtkToolItem` removed outright |
+| `toplevel.cpp` | 138 | WM hints, `GdkWindow` geometry |
+| `clipbrd.cpp` | 62 | `GdkAtom`/selection model replaced by `GdkClipboard` |
+| `radiobox.cpp` | 58 | `GtkRadioButton` removed |
+| `dataview.cpp` | 55 | cell renderers, `GdkWindow` |
+
+Plus the ~12-file tail at 1-5 errors each.

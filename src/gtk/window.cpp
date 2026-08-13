@@ -7557,19 +7557,13 @@ void wxPopupMenuPositionCallback( GtkMenu *menu,
 bool wxWindowGTK::DoPopupMenu( wxMenu *menu, int x, int y )
 {
 #ifdef __WXGTK4__
-    // GtkMenu and the whole gtk_menu_popup*() family are gone under GTK4;
+    // GtkMenu and the whole gtk_menu_popup*() family are gone under GTK4:
     // menus are GMenuModel + GtkPopoverMenu now, and the modal "spin the main
-    // loop until the menu closes" idiom below has no equivalent either
-    // (gtk_main_iteration() is also gone, and popovers are not modal in that
-    // sense). Porting this needs the menu subsystem rewrite that menu.cpp is
-    // already deferred behind, so rather than fake it, this reports failure --
-    // the documented, checkable behaviour for "no popup menu support yet".
-    wxUnusedVar(menu);
-    wxUnusedVar(x);
-    wxUnusedVar(y);
+    // loop until the menu closes" idiom below has no equivalent either. All of
+    // this is handled by the menu backend itself, see menu.cpp.
+    wxCHECK_MSG( m_widget != nullptr, false, wxT("invalid window") );
 
-    wxLogDebug("wxWindow::PopupMenu() is not implemented under GTK4 yet");
-    return false;
+    return menu->GTKShowPopup(this, x, y);
 #else
     wxCHECK_MSG( m_widget != nullptr, false, wxT("invalid window") );
 

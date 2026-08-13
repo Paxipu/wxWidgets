@@ -462,6 +462,151 @@ static void test_gesture_claim_semantics(void)
 
 #endif /* HAVE_XTEST */
 
+/* ------------------------------------------------------------------------
+ * Menus.
+ *
+ * The GTK4 menu backend in src/gtk/menu.cpp is built on four behaviours of
+ * GTK's own menu model machinery. None of them is a pixel or a metric, so
+ * they are all hard checks. See docs/gtk/gtk4-phase-menu-design.md.
+ * ------------------------------------------------------------------------ */
+
+static int g_namedActionRan = 0;
+
+static void on_named_action(GSimpleAction* a, GVariant* p, gpointer d)
+{
+    (void)a; (void)p; (void)d;
+    g_namedActionRan++;
+}
+
+static void on_radio_state(GSimpleAction* a, GVariant* value, gpointer d)
+{
+    char** seen = d;
+    g_free(*seen);
+    *seen = g_strdup(g_variant_get_string(value, NULL));
+    g_simple_action_set_state(a, value);
+}
+
+static void test_menu_model_mechanics(void)
+{
+    GtkWidget* win;
+    GtkWidget* box;
+    GtkWidget* menubar;
+    GSimpleActionGroup* group;
+    GSimpleAction* act;
+    GSimpleAction* radio;
+    GtkEventController* shortcuts;
+    GtkShortcut* shortcut;
+    GMenu* model;
+    GMenu* bar;
+    GMenuItem* item;
+    GVariant* accel;
+    char* radioSeen = NULL;
+    int i;
+
+    printf("Menu model mechanics:\n");
+
+    win = gtk_window_new();
+    box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_window_set_child(GTK_WINDOW(win), box);
+
+    group = g_simple_action_group_new();
+
+    act = g_simple_action_new("i1", NULL);
+    g_signal_connect(act, "activate", G_CALLBACK(on_named_action), NULL);
+    g_action_map_add_action(G_ACTION_MAP(group), G_ACTION(act));
+
+    radio = g_simple_action_new_stateful("r1", G_VARIANT_TYPE_STRING,
+                                         g_variant_new_string("0"));
+    g_signal_connect(radio, "change-state", G_CALLBACK(on_radio_state),
+                     &radioSeen);
+    g_action_map_add_action(G_ACTION_MAP(group), G_ACTION(radio));
+
+    /* wxMenu::GTKInstallActions() installs the group on the frame; the
+     * shortcut controller for the accelerators is attached to the same widget
+     * and must be able to resolve names against it. If this stops holding,
+     * every menu accelerator silently stops working. */
+    gtk_widget_insert_action_group(win, "wxm0", G_ACTION_GROUP(group));
+
+    shortcuts = gtk_shortcut_controller_new();
+    gtk_shortcut_controller_set_scope(GTK_SHORTCUT_CONTROLLER(shortcuts),
+                                      GTK_SHORTCUT_SCOPE_GLOBAL);
+    gtk_widget_add_controller(win, shortcuts);
+
+    shortcut = gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_q,
+                                                       GDK_CONTROL_MASK),
+                                gtk_named_action_new("wxm0.i1"));
+    gtk_shortcut_controller_add_shortcut(GTK_SHORTCUT_CONTROLLER(shortcuts),
+                                         shortcut);
+
+    gtk_window_present(GTK_WINDOW(win));
+    for (i = 0; i < 200; i++)
+        g_main_context_iteration(NULL, FALSE);
+
+    gtk_shortcut_action_activate(gtk_shortcut_get_action(shortcut),
+                                 GTK_SHORTCUT_ACTION_EXCLUSIVE, win, NULL);
+    for (i = 0; i < 50; i++)
+        g_main_context_iteration(NULL, FALSE);
+
+    check(g_namedActionRan == 1,
+          "named action resolves against an inserted action group",
+          "menu accelerators cannot reach their items any more");
+
+    /* wxMenu::GTKRebuildModel() puts the accelerator text into this attribute
+     * instead of into the label, which is where GTK3 kept it. */
+    model = g_menu_new();
+    item = g_menu_item_new("_Quit", "wxm0.i1");
+    g_menu_item_set_attribute(item, "accel", "s", "<Control>q");
+    g_menu_append_item(model, item);
+    g_object_unref(item);
+
+    accel = g_menu_model_get_item_attribute_value(G_MENU_MODEL(model), 0,
+                                                  "accel",
+                                                  G_VARIANT_TYPE_STRING);
+    check(accel && strcmp(g_variant_get_string(accel, NULL), "<Control>q") == 0,
+          "the accel attribute round-trips through a GMenu",
+          "accelerators are no longer displayed next to menu item labels");
+    if (accel)
+        g_variant_unref(accel);
+
+    /* Radio groups are one stateful action shared by the group, with each
+     * member identified by its target: GTK only reports which target was
+     * activated, and wxMenu::GTKOnRadioSelected() maps it back to the item. */
+    g_action_group_activate_action(G_ACTION_GROUP(group), "r1",
+                                   g_variant_new_string("2"));
+    for (i = 0; i < 20; i++)
+        g_main_context_iteration(NULL, FALSE);
+
+    check(radioSeen && strcmp(radioSeen, "2") == 0,
+          "a stateful action reports the activated target",
+          "radio menu items can no longer tell which one was selected");
+    g_free(radioSeen);
+
+    /* Every structural change rebuilds the model wholesale rather than
+     * patching it, which happens underneath a menu bar that is already
+     * showing that model. */
+    bar = g_menu_new();
+    g_menu_append_submenu(bar, "_File", G_MENU_MODEL(model));
+    menubar = gtk_popover_menu_bar_new_from_model(G_MENU_MODEL(bar));
+    gtk_box_append(GTK_BOX(box), menubar);
+    for (i = 0; i < 100; i++)
+        g_main_context_iteration(NULL, FALSE);
+
+    g_menu_remove_all(model);
+    g_menu_append(model, "Something else", "wxm0.i1");
+    g_menu_remove(bar, 0);
+    g_menu_append_submenu(bar, "_Renamed", G_MENU_MODEL(model));
+    for (i = 0; i < 100; i++)
+        g_main_context_iteration(NULL, FALSE);
+
+    check(gtk_widget_get_realized(menubar),
+          "a live menu bar survives its model being emptied and refilled",
+          "menus cannot be modified after being shown");
+
+    g_object_unref(model);
+    g_object_unref(bar);
+    gtk_window_destroy(GTK_WINDOW(win));
+}
+
 int main(void)
 {
     if (!gtk_init_check())
@@ -487,6 +632,8 @@ int main(void)
     test_scratch_hierarchy_lifecycle();
     printf("\n");
     test_theme_colour_names();
+    printf("\n");
+    test_menu_model_mechanics();
 #ifdef HAVE_XTEST
     printf("\n");
     test_gesture_claim_semantics();

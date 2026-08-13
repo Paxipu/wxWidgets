@@ -32,7 +32,12 @@
 #include "wx/stockitem.h"
 
 #include "wx/gtk/private.h"
-#include "wx/gtk/private/image.h"
+#ifndef __WXGTK4__
+    // wxGtkImage derives from GtkImage, which is an opaque type under GTK4;
+    // it is only used for the bitmap of a GtkImageMenuItem here anyway, and
+    // GTK4 menu item bitmaps are GIcons, see wxMenu::GTKRebuildModel().
+    #include "wx/gtk/private/image.h"
+#endif
 #include "wx/gtk/private/mnemonics.h"
 
 // we use normal item but with a special id for the menu title
@@ -56,8 +61,17 @@ public:
 
     bool IsOk() const { return m_key != 0; }
 
+#ifdef __WXGTK4__
+    // GTK4 has no GtkAccelGroup: accelerators are GtkShortcuts built from the
+    // key and modifiers, and displayed from the "accel" menu item attribute,
+    // so the accelerator is used directly instead of being installed on a
+    // widget.
+    guint GetKey() const { return m_key; }
+    GdkModifierType GetMods() const { return m_mods; }
+#else
     void Add(GtkWidget* widget, GtkAccelGroup* accelGroup, GtkAccelFlags accelFlags);
     void Remove(GtkWidget* widget, GtkAccelGroup* accelGroup);
+#endif // __WXGTK4__/!__WXGTK4__
 
 private:
     static wxString GetGtkHotKey(const wxAcceleratorEntry*);
@@ -111,6 +125,308 @@ static wxMenu* GetRootParentMenu(wxMenu* menu)
 
     return menu;
 }
+
+#ifdef __WXGTK4__
+
+// ============================================================================
+// GTK4: GMenuModel + GAction
+// ============================================================================
+//
+// GTK4 removed every menu widget class there was -- GtkMenu, GtkMenuBar,
+// GtkMenuItem and all its subclasses, GtkAccelGroup and the gtk_menu_popup*()
+// family -- and replaced them with something of a different shape: a
+// GMenuModel describes the structure, GActions carry the behaviour and
+// GtkPopoverMenu/GtkPopoverMenuBar are views rendering a model. There are no
+// per-item widgets at all, so this is a rewrite of the backend rather than a
+// translation of it. See docs/gtk/gtk4-phase-menu-design.md for the design and
+// docs/gtk/probes/gtk4-menu-actions.c for the probe it is based on.
+
+#include <string.h>
+
+namespace
+{
+
+// Every menu gets a process-unique action group prefix and every item action a
+// process-unique name: a menu may contain several items with the same wx ID
+// and an item may be moved between menus, so wx IDs can't be used for this.
+unsigned int gs_menuSerial = 0;
+unsigned int gs_actionSerial = 0;
+
+// Name of the never-enabled action used for the entries GTK4 can't disable by
+// itself, see the design document.
+const char* const wxGTK_DISABLED_ACTION = "disabled";
+
+// Build a GIcon for a menu item bitmap. GMenuItem only accepts a GIcon, which
+// looks at first like it rules out arbitrary bitmaps, but GdkTexture does
+// implement GIcon, so it doesn't.
+GIcon* MakeMenuIcon(const wxBitmapBundle& bundle, wxWindow* win)
+{
+    if ( !bundle.IsOk() )
+        return nullptr;
+
+    int scale = 1;
+    if ( win )
+    {
+        const double factor = win->GetContentScaleFactor();
+        if ( factor > 1 )
+            scale = int(factor + 0.5);
+    }
+
+    const wxBitmap bmp = bundle.GetBitmap(bundle.GetDefaultSize() * scale);
+    if ( !bmp.IsOk() )
+        return nullptr;
+
+    GdkPixbuf* const pixbuf = bmp.GetPixbuf();
+    if ( !pixbuf )
+        return nullptr;
+
+    // gdk_texture_new_for_pixbuf() takes its own reference to the pixels, so
+    // the pixbuf owned by the bitmap doesn't need to be kept alive here.
+    return G_ICON(gdk_texture_new_for_pixbuf(pixbuf));
+}
+
+// Return the GSimpleAction backing this item, if it has one: separators and
+// sub menu items don't, and neither does an item not added to a menu yet.
+GSimpleAction* FindItemAction(const wxMenuItem* item)
+{
+    wxMenu* const menu = item->GetMenu();
+    if ( !menu || item->GTKGetActionName().empty() )
+        return nullptr;
+
+    GAction* const action =
+        g_action_map_lookup_action(G_ACTION_MAP(menu->GTKGetActionGroup()),
+                                   item->GTKGetActionName().utf8_str());
+
+    return action ? G_SIMPLE_ACTION(action) : nullptr;
+}
+
+// Common part of the action callbacks below: send the wx event for this item.
+void ActivateMenuItem(wxMenuItem* item, int checked)
+{
+    if ( !item->IsEnabled() )
+        return;
+
+    if ( !IsMenuEventAllowed(item->GetMenu()) )
+        return;
+
+    const int id = item->GetId();
+    if ( id == wxGTK_TITLE_ID )
+    {
+        // ignore events from the menu title
+        return;
+    }
+
+    item->GetMenu()->SendEvent(id, checked);
+
+    // A lot of existing code, including any program that closes its main
+    // window from a menu handler and expects the program to exit -- as our own
+    // minimal sample -- relies on getting an idle event after a menu event.
+    wxWakeUpIdle();
+}
+
+// Data shared with the popover callbacks for the duration of a popup menu.
+struct PopupData
+{
+    wxMenu* menu;
+    GMainLoop* loop;
+};
+
+} // anonymous namespace
+
+extern "C" {
+
+// "activate" of the action of a normal menu item
+static void wx_menu_item_activate(GSimpleAction*, GVariant*, gpointer user_data)
+{
+    ActivateMenuItem(static_cast<wxMenuItem*>(user_data), -1);
+}
+
+// "change-state" of the action of a check menu item: connecting to this rather
+// than to "activate" means that wxMenuItem::Check() can update the state with
+// g_simple_action_set_state(), which doesn't emit it, without sending an event
+static void wx_menu_check_state(GSimpleAction* action,
+                                GVariant* value,
+                                gpointer user_data)
+{
+    wxMenuItem* const item = static_cast<wxMenuItem*>(user_data);
+
+    g_simple_action_set_state(action, value);
+
+    const bool checked = g_variant_get_boolean(value) != 0;
+
+    // Ensure that the internal state is always consistent with what is shown.
+    item->wxMenuItemBase::Check(checked);
+
+    ActivateMenuItem(item, checked);
+}
+
+// "change-state" of the action shared by a whole radio group
+static void wx_menu_radio_state(GSimpleAction* action,
+                                GVariant* value,
+                                gpointer user_data)
+{
+    wxMenu* const menu = static_cast<wxMenu*>(user_data);
+
+    g_simple_action_set_state(action, value);
+
+    menu->GTKOnRadioSelected(g_action_get_name(G_ACTION(action)),
+                             wxString::FromUTF8(g_variant_get_string(value,
+                                                                     nullptr)));
+}
+
+// "show" of the popover used for a popup menu
+static void wx_menu_popover_show(GtkWidget*, gpointer user_data)
+{
+    PopupData* const data = static_cast<PopupData*>(user_data);
+
+    data->menu->UpdateUI();
+
+    wxMenuEvent event(wxEVT_MENU_OPEN, -1, data->menu);
+    DoCommonMenuCallbackCode(data->menu, event);
+}
+
+// "closed" of the popover used for a popup menu
+static void wx_menu_popover_closed(GtkPopover*, gpointer user_data)
+{
+    PopupData* const data = static_cast<PopupData*>(user_data);
+
+    if ( g_main_loop_is_running(data->loop) )
+        g_main_loop_quit(data->loop);
+}
+
+} // extern "C"
+
+//-----------------------------------------------------------------------------
+// wxMenuBar
+//-----------------------------------------------------------------------------
+
+wxMenuBar::~wxMenuBar()
+{
+    g_object_unref(m_barModel);
+}
+
+void wxMenuBar::Init(size_t n, wxMenu *menus[], const wxString titles[], long style)
+{
+    // Do this before the check below: the dtor unrefs the model unconditionally
+    // and creation can fail.
+    m_barModel = g_menu_new();
+    m_shortcuts = nullptr;
+
+    if (!PreCreation( nullptr, wxDefaultPosition, wxDefaultSize ) ||
+        !CreateBase( nullptr, -1, wxDefaultPosition, wxDefaultSize, style, wxDefaultValidator, wxT("menubar") ))
+    {
+        wxFAIL_MSG( wxT("wxMenuBar creation failed") );
+        return;
+    }
+
+    // Note that wxMB_DOCKABLE is silently ignored: it was implemented using
+    // GtkHandleBox, which is gone, and it was already ignored with
+    // GTK+ >= 3.19.7 because using it prevented the menu bar from drawing.
+    m_menubar = gtk_popover_menu_bar_new_from_model(G_MENU_MODEL(m_barModel));
+    m_widget = m_menubar;
+
+    PostCreation();
+
+    g_object_ref_sink(m_widget);
+
+    for (size_t i = 0; i < n; ++i )
+        Append(menus[i], titles[i]);
+}
+
+wxMenuBar::wxMenuBar(size_t n, wxMenu *menus[], const wxString titles[], long style)
+{
+    Init(n, menus, titles, style);
+}
+
+wxMenuBar::wxMenuBar(long style)
+{
+    Init(0, nullptr, nullptr, style);
+}
+
+wxMenuBar::wxMenuBar()
+{
+    Init(0, nullptr, nullptr, 0);
+}
+
+namespace
+{
+
+// Return the widget the menu actions must be installed on. Named actions are
+// resolved by walking up the widget hierarchy from the widget using them, so
+// this has to be an ancestor of both the menu bar and the shortcut controller,
+// i.e. the TLW: note that the frame may be an MDI child frame, which is a fake
+// frame and not a TLW at all, hence wxGetTopLevelParent().
+GtkWidget* GetActionTarget(wxWindow* frame)
+{
+    wxWindow* const tlw = frame ? wxGetTopLevelParent(frame) : nullptr;
+
+    return tlw ? tlw->m_widget : nullptr;
+}
+
+} // anonymous namespace
+
+void wxMenuBar::GTKRebuildModel()
+{
+    // The model is regenerated from scratch rather than patched, see the
+    // design document: GMenu copies item attributes when the item is inserted,
+    // so there is nothing to update in place.
+    g_menu_remove_all(m_barModel);
+
+    for ( wxMenuList::compatibility_iterator node = m_menus.GetFirst();
+          node;
+          node = node->GetNext() )
+    {
+        wxMenu* const menu = node->GetData();
+        const wxString title(wxConvertMnemonicsToGTK(menu->GetTitle()));
+
+        if ( menu->GTKIsEnabledTop() )
+        {
+            g_menu_append_submenu(m_barModel, title.utf8_str(),
+                                  G_MENU_MODEL(menu->GTKGetMenuModel()));
+        }
+        else
+        {
+            // A GMenuModel sub menu item has no action of its own, so there is
+            // nothing to disable: show a plain item with the same label bound
+            // to the menu's never-enabled action instead.
+            GMenuItem* const item = g_menu_item_new(title.utf8_str(), nullptr);
+            const wxString action = menu->GTKGetActionPrefix() + "." +
+                                        wxGTK_DISABLED_ACTION;
+            g_menu_item_set_detailed_action(item, action.utf8_str());
+            g_menu_append_item(m_barModel, item);
+            g_object_unref(item);
+        }
+    }
+
+    // The items, and hence their accelerators, may have changed together with
+    // the model, so the shortcuts have to be regenerated as well.
+    GtkWidget* const target = GetActionTarget(m_menuBarFrame);
+    if ( !target )
+        return;
+
+    if ( m_shortcuts )
+    {
+        gtk_widget_remove_controller(target, m_shortcuts);
+        m_shortcuts = nullptr;
+    }
+
+#if wxUSE_ACCEL
+    m_shortcuts = gtk_shortcut_controller_new();
+    gtk_shortcut_controller_set_scope(GTK_SHORTCUT_CONTROLLER(m_shortcuts),
+                                      GTK_SHORTCUT_SCOPE_GLOBAL);
+    gtk_widget_add_controller(target, m_shortcuts);
+
+    for ( wxMenuList::compatibility_iterator node = m_menus.GetFirst();
+          node;
+          node = node->GetNext() )
+    {
+        node->GetData()->
+            GTKAddShortcuts(GTK_SHORTCUT_CONTROLLER(m_shortcuts));
+    }
+#endif // wxUSE_ACCEL
+}
+
+#else // !__WXGTK4__
 
 // Call SetGtkLabel() to update the labels of all the items in this items sub
 // menu, recursively.
@@ -258,6 +574,8 @@ AttachToFrame(wxMenu* menu, wxFrame* frame)
 
 } // anonymous namespace
 
+#endif // __WXGTK4__/!__WXGTK4__
+
 void wxMenuBar::SetLayoutDirection(wxLayoutDirection dir)
 {
     if ( dir == wxLayout_Default )
@@ -295,6 +613,85 @@ wxLayoutDirection wxMenuBar::GetLayoutDirection() const
     return GTKGetLayout(m_menubar);
 }
 
+#ifdef __WXGTK4__
+
+void wxMenuBar::Attach(wxFrame *frame)
+{
+    wxMenuBarBase::Attach(frame);
+
+    if ( GtkWidget* const target = GetActionTarget(frame) )
+    {
+        for ( wxMenuList::compatibility_iterator node = m_menus.GetFirst();
+              node;
+              node = node->GetNext() )
+        {
+            wxMenu* const menu = node->GetData();
+            menu->GTKInstallActions(target);
+            menu->SetupBitmaps(frame);
+        }
+    }
+
+    // This also registers the shortcuts for our accelerators, which could only
+    // be done once we knew which widget to install them on.
+    GTKRebuildModel();
+
+    SetLayoutDirection(wxLayout_Default);
+}
+
+void wxMenuBar::Detach()
+{
+    if ( GtkWidget* const target = GetActionTarget(m_menuBarFrame) )
+    {
+        if ( m_shortcuts )
+        {
+            gtk_widget_remove_controller(target, m_shortcuts);
+            m_shortcuts = nullptr;
+        }
+
+        for ( wxMenuList::compatibility_iterator node = m_menus.GetFirst();
+              node;
+              node = node->GetNext() )
+        {
+            node->GetData()->GTKUninstallActions(target);
+        }
+    }
+
+    wxMenuBarBase::Detach();
+}
+
+void wxMenuBar::GtkAppend(wxMenu* menu, const wxString& title, int pos)
+{
+    // The position is not used: the model is regenerated from the menu list,
+    // which the base class has already updated.
+    wxUnusedVar(pos);
+
+    menu->SetTitle( title );
+
+    if ( GtkWidget* const target = GetActionTarget(m_menuBarFrame) )
+    {
+        menu->GTKInstallActions(target);
+        menu->SetupBitmaps(m_menuBarFrame);
+    }
+
+    GTKRebuildModel();
+}
+
+wxMenu *wxMenuBar::Remove(size_t pos)
+{
+    wxMenu *menu = wxMenuBarBase::Remove(pos);
+    if ( !menu )
+        return nullptr;
+
+    if ( GtkWidget* const target = GetActionTarget(m_menuBarFrame) )
+        menu->GTKUninstallActions(target);
+
+    GTKRebuildModel();
+
+    return menu;
+}
+
+#else // !__WXGTK4__
+
 void wxMenuBar::Attach(wxFrame *frame)
 {
     wxMenuBarBase::Attach(frame);
@@ -325,6 +722,8 @@ void wxMenuBar::Detach()
     wxMenuBarBase::Detach();
 }
 
+#endif // __WXGTK4__/!__WXGTK4__
+
 bool wxMenuBar::Append( wxMenu *menu, const wxString &title )
 {
     if (wxMenuBarBase::Append(menu, title))
@@ -334,6 +733,8 @@ bool wxMenuBar::Append( wxMenu *menu, const wxString &title )
     }
     return false;
 }
+
+#ifndef __WXGTK4__
 
 void wxMenuBar::GtkAppend(wxMenu* menu, const wxString& title, int pos)
 {
@@ -362,6 +763,8 @@ void wxMenuBar::GtkAppend(wxMenu* menu, const wxString& title, int pos)
         AttachToFrame( menu, m_menuBarFrame );
 }
 
+#endif // !__WXGTK4__
+
 bool wxMenuBar::Insert(size_t pos, wxMenu *menu, const wxString& title)
 {
     if (wxMenuBarBase::Insert(pos, menu, title))
@@ -384,6 +787,8 @@ wxMenu *wxMenuBar::Replace(size_t pos, wxMenu *menu, const wxString& title)
     // either Insert() succeeded or Remove() failed and menuOld is null
     return menuOld;
 }
+
+#ifndef __WXGTK4__
 
 wxMenu *wxMenuBar::Remove(size_t pos)
 {
@@ -410,6 +815,8 @@ wxMenu *wxMenuBar::Remove(size_t pos)
 
     return menu;
 }
+
+#endif // !__WXGTK4__
 
 static int FindMenuItemRecursive( const wxMenu *menu, const wxString &menuString, const wxString &itemString )
 {
@@ -486,6 +893,36 @@ wxMenuItem* wxMenuBar::FindItem( int id, wxMenu **menuForItem ) const
     return result;
 }
 
+#ifdef __WXGTK4__
+
+void wxMenuBar::EnableTop( size_t pos, bool flag )
+{
+    wxMenuList::compatibility_iterator node = m_menus.Item( pos );
+
+    wxCHECK_RET( node, wxT("menu not found") );
+
+    wxMenu* const menu = node->GetData();
+    if ( menu->GTKIsEnabledTop() == flag )
+        return;
+
+    // There is no GTK state to set here: a GMenuModel sub menu item has no
+    // action, so the model itself has to change, see GTKRebuildModel().
+    menu->GTKSetEnabledTop(flag);
+
+    GTKRebuildModel();
+}
+
+bool wxMenuBar::IsEnabledTop(size_t pos) const
+{
+    wxMenuList::compatibility_iterator node = m_menus.Item( pos );
+    wxCHECK_MSG( node, false, wxS("invalid index in IsEnabledTop") );
+
+    // Unlike with GTK3, this can't be read back from GTK, see above.
+    return node->GetData()->GTKIsEnabledTop();
+}
+
+#else // !__WXGTK4__
+
 void wxMenuBar::EnableTop( size_t pos, bool flag )
 {
     wxMenuList::compatibility_iterator node = m_menus.Item( pos );
@@ -506,6 +943,8 @@ bool wxMenuBar::IsEnabledTop(size_t pos) const
     wxCHECK_MSG( menu->m_owner, true, wxS("no menu owner?") );
     return gtk_widget_get_sensitive( menu->m_owner ) != 0;
 }
+
+#endif // __WXGTK4__/!__WXGTK4__
 
 wxString wxMenuBar::GetMenuLabel( size_t pos ) const
 {
@@ -528,10 +967,18 @@ void wxMenuBar::SetMenuLabel( size_t pos, const wxString& label )
 
     menu->SetTitle( label );
 
+#ifdef __WXGTK4__
+    // The label is an attribute of the model item, which GMenu copied when it
+    // was inserted, so it can only be changed by regenerating the model.
+    GTKRebuildModel();
+#else
     const wxString str(wxConvertMnemonicsToGTK(label));
     if (menu->m_owner)
         gtk_label_set_text_with_mnemonic(GTK_LABEL(gtk_bin_get_child(GTK_BIN(menu->m_owner))), str.utf8_str());
+#endif
 }
+
+#ifndef __WXGTK4__
 
 //-----------------------------------------------------------------------------
 // "activate"
@@ -614,6 +1061,8 @@ static void menuitem_deselect(GtkWidget*, wxMenuItem* item)
 }
 }
 
+#endif // !__WXGTK4__
+
 //-----------------------------------------------------------------------------
 // wxMenuItem
 //-----------------------------------------------------------------------------
@@ -627,6 +1076,184 @@ wxMenuItem *wxMenuItemBase::New(wxMenu *parentMenu,
 {
     return new wxMenuItem(parentMenu, id, name, help, kind, subMenu);
 }
+
+#ifdef __WXGTK4__
+
+wxMenuItem::wxMenuItem(wxMenu *parentMenu,
+                       int id,
+                       const wxString& text,
+                       const wxString& help,
+                       wxItemKind kind,
+                       wxMenu *subMenu)
+          : wxMenuItemBase(parentMenu, id, text, help, kind, subMenu)
+{
+    m_bitmapWin = nullptr;
+}
+
+wxMenuItem::~wxMenuItem()
+{
+    // Nothing to do: our action belongs to the action group of our menu and is
+    // dropped when the menu regenerates its model without us in it.
+}
+
+void wxMenuItem::SetItemLabel( const wxString& str )
+{
+    wxMenuItemBase::SetItemLabel(str);
+
+    SetGtkLabel();
+}
+
+void wxMenuItem::SetGtkLabel()
+{
+    // Both the label and the accelerator shown next to it are attributes of
+    // the menu model item, which GMenu copied when the item was inserted, so
+    // the model has to be regenerated for the change to be visible.
+    if ( m_parentMenu )
+        m_parentMenu->GTKRebuildModel();
+}
+
+#if wxUSE_ACCEL
+
+void wxMenuItem::GTKSetExtraAccels()
+{
+    // Nothing to do here: unlike GTK3, which needed each accelerator to be
+    // added to the item widget, GTK4 shortcuts are all (re)created together by
+    // wxMenuBar::GTKRebuildModel() from wxMenuItem::GetExtraAccels().
+}
+
+void wxMenuItem::AddExtraAccel(const wxAcceleratorEntry& accel)
+{
+    wxMenuItemBase::AddExtraAccel(accel);
+
+    if ( m_parentMenu )
+        m_parentMenu->GTKRebuildModel();
+}
+
+void wxMenuItem::ClearExtraAccels()
+{
+    wxMenuItemBase::ClearExtraAccels();
+
+    if ( m_parentMenu )
+        m_parentMenu->GTKRebuildModel();
+}
+
+#endif // wxUSE_ACCEL
+
+void wxMenuItem::SetupBitmaps(wxWindow *win)
+{
+    // Just remember the window: the icon is only put into the model when it is
+    // (re)built, as GMenuItem attributes can't be changed after insertion.
+    // wxMenu::SetupBitmaps() triggers that rebuild once for the whole menu.
+    m_bitmapWin = win;
+}
+
+void wxMenuItem::Check( bool check )
+{
+    if (check == m_isChecked)
+        return;
+
+    switch ( GetKind() )
+    {
+        case wxITEM_RADIO:
+            // It doesn't make sense to uncheck a radio item.
+            if ( !check )
+                return;
+
+            wxFALLTHROUGH;
+        case wxITEM_CHECK:
+            wxMenuItemBase::Check( check );
+
+            if ( GSimpleAction* const action = FindItemAction(this) )
+            {
+                // Set the state directly instead of going through the action
+                // group: this must not emit "change-state" and so must not
+                // result in a wx event being sent from here.
+                if ( GetKind() == wxITEM_RADIO )
+                {
+                    g_simple_action_set_state(
+                        action, g_variant_new_string(m_radioTarget.utf8_str()));
+
+                    // The rest of the group is implicitly unchecked now as far
+                    // as GTK is concerned, so keep our own flags in sync.
+                    if ( m_parentMenu )
+                    {
+                        for ( auto* sibling : m_parentMenu->GetMenuItems() )
+                        {
+                            if ( sibling != this &&
+                                 sibling->GetKind() == wxITEM_RADIO &&
+                                 sibling->m_actionName == m_actionName )
+                            {
+                                sibling->wxMenuItemBase::Check(false);
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    g_simple_action_set_state(action,
+                                              g_variant_new_boolean(check));
+                }
+            }
+            break;
+
+        default:
+            wxFAIL_MSG( wxT("can't check this item") );
+    }
+}
+
+void wxMenuItem::Enable( bool enable )
+{
+    wxMenuItemBase::Enable( enable );
+
+    if ( GSimpleAction* const action = FindItemAction(this) )
+    {
+        // Note that disabling a radio item disables its whole group: GTK4
+        // radio items in a group share a single action and it is the action
+        // which carries the enabled state.
+        g_simple_action_set_enabled(action, enable);
+    }
+    else if ( m_parentMenu && IsSubMenu() )
+    {
+        // A sub menu item has no action to disable, so the model itself has to
+        // change: wxMenu::GTKRebuildModel() emits a disabled sub menu as a
+        // plain item bound to the menu's never-enabled action.
+        m_parentMenu->GTKRebuildModel();
+    }
+}
+
+bool wxMenuItem::IsChecked() const
+{
+    wxCHECK_MSG( IsCheckable(), false,
+                 wxT("can't get state of uncheckable item!") );
+
+    GSimpleAction* const action = FindItemAction(this);
+    if ( !action )
+    {
+        // Not added to a menu yet, so all we have is our own flag.
+        return wxMenuItemBase::IsChecked();
+    }
+
+    GVariant* const state = g_action_get_state(G_ACTION(action));
+    if ( !state )
+        return wxMenuItemBase::IsChecked();
+
+    bool checked;
+    if ( GetKind() == wxITEM_RADIO )
+    {
+        checked = m_radioTarget ==
+                    wxString::FromUTF8(g_variant_get_string(state, nullptr));
+    }
+    else
+    {
+        checked = g_variant_get_boolean(state) != 0;
+    }
+
+    g_variant_unref(state);
+
+    return checked;
+}
+
+#else // !__WXGTK4__
 
 wxMenuItem::wxMenuItem(wxMenu *parentMenu,
                        int id,
@@ -802,9 +1429,440 @@ bool wxMenuItem::IsChecked() const
     return gtk_check_menu_item_get_active(GTK_CHECK_MENU_ITEM(m_menuItem)) != 0;
 }
 
+#endif // __WXGTK4__/!__WXGTK4__
+
 //-----------------------------------------------------------------------------
 // wxMenu
 //-----------------------------------------------------------------------------
+
+#ifdef __WXGTK4__
+
+void wxMenu::Init()
+{
+    m_popupShown = false;
+    m_popover = nullptr;
+    m_popupLoop = nullptr;
+    m_enabledTop = true;
+
+    m_menuModel = g_menu_new();
+    m_actionGroup = g_simple_action_group_new();
+    m_actionPrefix = wxString::Format("wxm%u", gs_menuSerial++);
+
+    // An action which is never enabled, used for the entries GTK4 provides no
+    // other way of disabling because they have no action of their own: sub
+    // menu items, including the top level ones of a menu bar.
+    GSimpleAction* const disabled =
+        g_simple_action_new(wxGTK_DISABLED_ACTION, nullptr);
+    g_simple_action_set_enabled(disabled, FALSE);
+    g_action_map_add_action(G_ACTION_MAP(m_actionGroup), G_ACTION(disabled));
+    g_object_unref(disabled);
+
+    // Note that wxMENU_TEAROFF is silently ignored: tear-off menus were
+    // implemented with GtkTearoffMenuItem, which is gone, and GTK4 has no
+    // equivalent concept.
+
+    // append the title as the very first entry if we have it
+    if ( !m_title.empty() )
+    {
+        Append(wxGTK_TITLE_ID, m_title);
+        AppendSeparator();
+    }
+}
+
+wxMenu::~wxMenu()
+{
+    if ( m_popupLoop )
+    {
+        // We're being destroyed while popped up: don't leave GTKShowPopup()
+        // spinning its nested main loop forever.
+        g_main_loop_quit(m_popupLoop);
+        m_popupLoop = nullptr;
+    }
+
+    if ( m_popover )
+    {
+        gtk_widget_unparent(m_popover);
+        m_popover = nullptr;
+    }
+
+    g_object_unref(m_menuModel);
+    g_object_unref(m_actionGroup);
+}
+
+void wxMenu::GTKRebuildModel()
+{
+    // Everything is regenerated rather than patched: GMenu copies a GMenuItem's
+    // attributes when the item is inserted, so nothing can be updated in
+    // place, and separators are modelled as sections, so wx item positions
+    // don't correspond to model positions either. See the design document.
+    g_menu_remove_all(m_menuModel);
+
+    gchar** const names = g_action_group_list_actions(G_ACTION_GROUP(m_actionGroup));
+    for ( gchar** p = names; *p; ++p )
+    {
+        if ( strcmp(*p, wxGTK_DISABLED_ACTION) != 0 )
+            g_action_map_remove_action(G_ACTION_MAP(m_actionGroup), *p);
+    }
+    g_strfreev(names);
+
+    const wxString disabledAction =
+        m_actionPrefix + "." + wxGTK_DISABLED_ACTION;
+
+    // Items between two separators form a section, which is how GTK4 draws
+    // separators between them.
+    GMenu* section = g_menu_new();
+
+    // wx puts consecutive radio items into the same group and GTK4 needs a
+    // single stateful action shared by the whole group, with each member
+    // identified by its own target value.
+    wxString radioAction;
+    int radioIndex = 0;
+
+    for ( wxMenuItemList::compatibility_iterator node = m_items.GetFirst();
+          node;
+          node = node->GetNext() )
+    {
+        wxMenuItem* const item = node->GetData();
+
+        if ( item->GetKind() != wxITEM_RADIO )
+            radioAction.clear();
+
+        if ( item->IsSeparator() )
+        {
+            g_menu_append_section(m_menuModel, nullptr, G_MENU_MODEL(section));
+            g_object_unref(section);
+            section = g_menu_new();
+            continue;
+        }
+
+        // GTK4 shows the accelerator from the item's "accel" attribute, so it
+        // must not be part of the label.
+        const wxString label(
+            wxConvertMnemonicsToGTK(item->GetItemLabel().BeforeFirst('\t')));
+
+        GMenuItem* gitem;
+
+        if ( item->IsSubMenu() && item->IsEnabled() )
+        {
+            gitem = g_menu_item_new_submenu(
+                        label.utf8_str(),
+                        G_MENU_MODEL(item->GetSubMenu()->GTKGetMenuModel()));
+
+            item->GTKSetActionName(wxString());
+            item->GTKSetRadioTarget(wxString());
+        }
+        else if ( item->IsSubMenu() )
+        {
+            // See wxMenuItem::Enable(): a disabled sub menu becomes a plain,
+            // permanently disabled item with the same label.
+            gitem = g_menu_item_new(label.utf8_str(), nullptr);
+            g_menu_item_set_detailed_action(gitem, disabledAction.utf8_str());
+
+            item->GTKSetActionName(wxString());
+            item->GTKSetRadioTarget(wxString());
+        }
+        else
+        {
+            wxString actionName;
+            wxString target;
+
+            switch ( item->GetKind() )
+            {
+                case wxITEM_CHECK:
+                    actionName = wxString::Format("i%u", gs_actionSerial++);
+                    {
+                        GSimpleAction* const action =
+                            g_simple_action_new_stateful(
+                                actionName.utf8_str(), nullptr,
+                                g_variant_new_boolean(
+                                    item->wxMenuItemBase::IsChecked()));
+                        g_signal_connect(action, "change-state",
+                                         G_CALLBACK(wx_menu_check_state), item);
+                        g_action_map_add_action(G_ACTION_MAP(m_actionGroup),
+                                                G_ACTION(action));
+                        g_object_unref(action);
+                    }
+                    break;
+
+                case wxITEM_RADIO:
+                    if ( radioAction.empty() )
+                    {
+                        radioAction = wxString::Format("r%u", gs_actionSerial++);
+                        radioIndex = 0;
+
+                        GSimpleAction* const action =
+                            g_simple_action_new_stateful(
+                                radioAction.utf8_str(), G_VARIANT_TYPE_STRING,
+                                g_variant_new_string(""));
+                        g_signal_connect(action, "change-state",
+                                         G_CALLBACK(wx_menu_radio_state), this);
+                        g_action_map_add_action(G_ACTION_MAP(m_actionGroup),
+                                                G_ACTION(action));
+                        g_object_unref(action);
+                    }
+
+                    actionName = radioAction;
+                    target = wxString::Format("%d", radioIndex++);
+                    break;
+
+                default:
+                    wxFAIL_MSG("unexpected menu item kind");
+                    wxFALLTHROUGH;
+
+                case wxITEM_NORMAL:
+                    actionName = wxString::Format("i%u", gs_actionSerial++);
+                    {
+                        GSimpleAction* const action =
+                            g_simple_action_new(actionName.utf8_str(), nullptr);
+                        g_signal_connect(action, "activate",
+                                         G_CALLBACK(wx_menu_item_activate), item);
+                        g_action_map_add_action(G_ACTION_MAP(m_actionGroup),
+                                                G_ACTION(action));
+                        g_object_unref(action);
+                    }
+                    break;
+            }
+
+            item->GTKSetActionName(actionName);
+            item->GTKSetRadioTarget(target);
+
+            GSimpleAction* const action = FindItemAction(item);
+
+            if ( item->GetKind() == wxITEM_RADIO &&
+                    item->wxMenuItemBase::IsChecked() )
+            {
+                g_simple_action_set_state(
+                    action, g_variant_new_string(target.utf8_str()));
+            }
+
+            if ( !item->IsEnabled() )
+                g_simple_action_set_enabled(action, FALSE);
+
+            gitem = g_menu_item_new(label.utf8_str(), nullptr);
+
+            const wxString fullName = m_actionPrefix + "." + actionName;
+            if ( target.empty() )
+            {
+                g_menu_item_set_detailed_action(gitem, fullName.utf8_str());
+            }
+            else
+            {
+                // An item with a target and an action with state is what makes
+                // GTK4 draw the item as a radio rather than as a check.
+                g_menu_item_set_action_and_target_value(
+                    gitem, fullName.utf8_str(),
+                    g_variant_new_string(target.utf8_str()));
+            }
+
+#if wxUSE_ACCEL
+            const GtkAccel accel(item);
+            if ( accel.IsOk() )
+            {
+                wxGtkString name(gtk_accelerator_name(accel.GetKey(),
+                                                      accel.GetMods()));
+                g_menu_item_set_attribute(gitem, "accel", "s", name.c_str());
+            }
+#endif // wxUSE_ACCEL
+
+            if ( GIcon* const icon = MakeMenuIcon(item->GetBitmapBundle(),
+                                                  item->GTKGetBitmapWindow()) )
+            {
+                g_menu_item_set_icon(gitem, icon);
+                g_object_unref(icon);
+            }
+        }
+
+        g_menu_append_item(section, gitem);
+        g_object_unref(gitem);
+    }
+
+    g_menu_append_section(m_menuModel, nullptr, G_MENU_MODEL(section));
+    g_object_unref(section);
+
+    GTKRefreshShortcuts();
+}
+
+void wxMenu::GTKRefreshShortcuts()
+{
+    // Only the menu bar knows the widget the shortcuts are installed on, and
+    // it registers them for all the items of all its menus at once.
+    if ( wxMenuBar* const menubar = GetRootParentMenu(this)->GetMenuBar() )
+        menubar->GTKRebuildModel();
+}
+
+void wxMenu::GTKInstallActions(GtkWidget* widget)
+{
+    gtk_widget_insert_action_group(widget, m_actionPrefix.utf8_str(),
+                                   G_ACTION_GROUP(m_actionGroup));
+
+    for ( auto* item : m_items )
+    {
+        if ( wxMenu* const submenu = item->GetSubMenu() )
+            submenu->GTKInstallActions(widget);
+    }
+}
+
+void wxMenu::GTKUninstallActions(GtkWidget* widget)
+{
+    gtk_widget_insert_action_group(widget, m_actionPrefix.utf8_str(), nullptr);
+
+    for ( auto* item : m_items )
+    {
+        if ( wxMenu* const submenu = item->GetSubMenu() )
+            submenu->GTKUninstallActions(widget);
+    }
+}
+
+void wxMenu::GTKAddShortcuts(GtkShortcutController* controller)
+{
+#if wxUSE_ACCEL
+    for ( auto* item : m_items )
+    {
+        if ( wxMenu* const submenu = item->GetSubMenu() )
+        {
+            submenu->GTKAddShortcuts(controller);
+            continue;
+        }
+
+        if ( item->GTKGetActionName().empty() )
+            continue;
+
+        const wxString fullName = m_actionPrefix + "." + item->GTKGetActionName();
+        const wxString& target = item->GTKGetRadioTarget();
+
+        // Collect the item's own accelerator, if any, and all its extra ones.
+        wxVector<GtkAccel> accels;
+
+        const GtkAccel accel(item);
+        if ( accel.IsOk() )
+            accels.push_back(accel);
+
+        for ( const auto& extra : item->GetExtraAccels() )
+        {
+            const GtkAccel extraAccel(extra);
+            if ( extraAccel.IsOk() )
+                accels.push_back(extraAccel);
+        }
+
+        for ( const auto& a : accels )
+        {
+            GtkShortcut* const shortcut =
+                gtk_shortcut_new(gtk_keyval_trigger_new(a.GetKey(), a.GetMods()),
+                                 gtk_named_action_new(fullName.utf8_str()));
+
+            if ( !target.empty() )
+            {
+                gtk_shortcut_set_arguments(
+                    shortcut, g_variant_new_string(target.utf8_str()));
+            }
+
+            gtk_shortcut_controller_add_shortcut(controller, shortcut);
+        }
+    }
+#else // !wxUSE_ACCEL
+    wxUnusedVar(controller);
+#endif // wxUSE_ACCEL/!wxUSE_ACCEL
+}
+
+void wxMenu::GTKOnRadioSelected(const char* actionName, const wxString& target)
+{
+    // GTK only tells us which item of the group is selected now, so update the
+    // state of the whole group before sending the event for the new selection.
+    const wxString name = wxString::FromUTF8(actionName);
+
+    wxMenuItem* selected = nullptr;
+    for ( auto* item : m_items )
+    {
+        if ( item->GetKind() != wxITEM_RADIO ||
+                item->GTKGetActionName() != name )
+            continue;
+
+        const bool isThisOne = item->GTKGetRadioTarget() == target;
+        item->wxMenuItemBase::Check(isThisOne);
+        if ( isThisOne )
+            selected = item;
+    }
+
+    if ( selected )
+        ActivateMenuItem(selected, 1);
+}
+
+bool wxMenu::GTKShowPopup(wxWindow* win, int x, int y)
+{
+    wxCHECK_MSG( win, false, wxT("no window to show the popup menu over") );
+
+    GtkWidget* const parent = win->m_wxwindow ? win->m_wxwindow : win->m_widget;
+    wxCHECK_MSG( parent, false, wxT("invalid window") );
+
+    SetupBitmaps(win);
+    GTKInstallActions(parent);
+
+    m_popover = gtk_popover_menu_new_from_model(G_MENU_MODEL(m_menuModel));
+    gtk_widget_set_parent(m_popover, parent);
+    gtk_popover_set_has_arrow(GTK_POPOVER(m_popover), FALSE);
+    gtk_widget_set_halign(m_popover, GTK_ALIGN_START);
+
+    if ( x == -1 && y == -1 )
+    {
+        const wxPoint pt = win->ScreenToClient(wxGetMousePosition());
+        x = pt.x;
+        y = pt.y;
+    }
+
+    const GdkRectangle rect = { x, y, 1, 1 };
+    gtk_popover_set_pointing_to(GTK_POPOVER(m_popover), &rect);
+
+    PopupData data;
+    data.menu = this;
+    data.loop = g_main_loop_new(nullptr, FALSE);
+
+    m_popupLoop = data.loop;
+    m_popupShown = true;
+
+    g_signal_connect(m_popover, "show",
+                     G_CALLBACK(wx_menu_popover_show), &data);
+    g_signal_connect(m_popover, "closed",
+                     G_CALLBACK(wx_menu_popover_closed), &data);
+
+    gtk_popover_popup(GTK_POPOVER(m_popover));
+
+    // wxWindow::PopupMenu() is documented to return only once the menu has
+    // been dismissed, but GTK4 popovers are not modal in the sense GtkMenu
+    // was, so run a nested main loop, as we do for modal dialogs.
+    g_main_loop_run(data.loop);
+
+    m_popupShown = false;
+    m_popupLoop = nullptr;
+    g_main_loop_unref(data.loop);
+
+    if ( m_popover )
+    {
+        g_signal_handlers_disconnect_by_data(m_popover, &data);
+        gtk_widget_unparent(m_popover);
+        m_popover = nullptr;
+    }
+
+    wxMenuEvent event(wxEVT_MENU_CLOSE, -1, this);
+    DoCommonMenuCallbackCode(this, event);
+
+    GTKUninstallActions(parent);
+
+    return true;
+}
+
+void wxMenu::SetLayoutDirection(wxLayoutDirection dir)
+{
+    // There are no per-item widgets under GTK4 to set the direction on: it is
+    // set on the menu bar or popover widget and inherited from there.
+    wxUnusedVar(dir);
+}
+
+wxLayoutDirection wxMenu::GetLayoutDirection() const
+{
+    return wxLayout_Default;
+}
+
+#else // !__WXGTK4__
 
 extern "C" {
 // "map" from m_menu
@@ -924,6 +1982,8 @@ wxLayoutDirection wxMenu::GetLayoutDirection() const
     return wxWindow::GTKGetLayout(m_owner);
 }
 
+#endif // __WXGTK4__/!__WXGTK4__
+
 wxString wxMenu::GetTitle() const
 {
     return wxConvertMnemonicsFromGTK(wxMenuBase::GetTitle());
@@ -933,6 +1993,20 @@ void wxMenu::SetTitle(const wxString& title)
 {
     wxMenuBase::SetTitle(wxConvertMnemonicsToGTK(title));
 }
+
+#ifdef __WXGTK4__
+
+void wxMenu::GtkAppend(wxMenuItem* mitem, int pos)
+{
+    // Neither is used: the model is regenerated from the item list, which the
+    // base class has already updated for us.
+    wxUnusedVar(mitem);
+    wxUnusedVar(pos);
+
+    GTKRebuildModel();
+}
+
+#else // !__WXGTK4__
 
 void wxMenu::GtkAppend(wxMenuItem* mitem, int pos)
 {
@@ -1063,6 +2137,8 @@ void wxMenu::GtkAppend(wxMenuItem* mitem, int pos)
     }
 }
 
+#endif // __WXGTK4__/!__WXGTK4__
+
 wxMenuItem* wxMenu::DoAppend(wxMenuItem *mitem)
 {
     if (wxMenuBase::DoAppend(mitem))
@@ -1082,6 +2158,25 @@ wxMenuItem* wxMenu::DoInsert(size_t pos, wxMenuItem *item)
     }
     return nullptr;
 }
+
+#ifdef __WXGTK4__
+
+wxMenuItem *wxMenu::DoRemove(wxMenuItem *item)
+{
+    if ( !wxMenuBase::DoRemove(item) )
+        return nullptr;
+
+    // The item's action is dropped by the rebuild below, so make sure the item
+    // doesn't keep referring to it.
+    item->GTKSetActionName(wxString());
+    item->GTKSetRadioTarget(wxString());
+
+    GTKRebuildModel();
+
+    return item;
+}
+
+#else // !__WXGTK4__
 
 wxMenuItem *wxMenu::DoRemove(wxMenuItem *item)
 {
@@ -1104,6 +2199,8 @@ wxMenuItem *wxMenu::DoRemove(wxMenuItem *item)
     return item;
 }
 
+#endif // __WXGTK4__/!__WXGTK4__
+
 void wxMenu::Attach(wxMenuBarBase *menubar)
 {
     wxMenuBase::Attach(menubar);
@@ -1114,6 +2211,14 @@ void wxMenu::Attach(wxMenuBarBase *menubar)
 
 void wxMenu::SetupBitmaps(wxWindow *win)
 {
+#ifdef __WXGTK4__
+    // Under GTK4 the item bitmaps are icon attributes of the menu model, so
+    // they can only be updated by regenerating it -- but only do this if there
+    // is at least one bitmap to show, as this function is called for every
+    // menu whenever a menu bar is attached to a frame.
+    bool anyBitmap = false;
+#endif // __WXGTK4__
+
     wxMenuItemList::compatibility_iterator node = GetMenuItems().GetFirst();
     while (node)
     {
@@ -1121,9 +2226,20 @@ void wxMenu::SetupBitmaps(wxWindow *win)
         if (menuitem->IsSubMenu())
             menuitem->GetSubMenu()->SetupBitmaps(win);
         if (!menuitem->IsSeparator())
+        {
             menuitem->SetupBitmaps(win);
+#ifdef __WXGTK4__
+            if ( menuitem->GetBitmapBundle().IsOk() )
+                anyBitmap = true;
+#endif // __WXGTK4__
+        }
         node = node->GetNext();
     }
+
+#ifdef __WXGTK4__
+    if ( anyBitmap )
+        GTKRebuildModel();
+#endif // __WXGTK4__
 }
 
 // ----------------------------------------------------------------------------
@@ -1464,6 +2580,8 @@ GtkAccel::GtkAccel(const wxMenuItem* item)
 #endif // !__WXGTK4__
 }
 
+#ifndef __WXGTK4__
+
 void
 GtkAccel::Add(GtkWidget* widget, GtkAccelGroup* accelGroup, GtkAccelFlags accelFlags)
 {
@@ -1482,6 +2600,8 @@ void GtkAccel::Remove(GtkWidget* widget, GtkAccelGroup* accelGroup)
         gtk_widget_remove_accelerator(widget, accelGroup, m_key, m_mods);
     }
 }
+
+#endif // !__WXGTK4__
 
 #endif // wxUSE_ACCEL
 

@@ -43,6 +43,13 @@ public:
     virtual void Attach(wxFrame *frame) override;
     virtual void Detach() override;
 
+#ifdef __WXGTK4__
+    // Rebuild the GMenuModel backing the menu bar from the current menu list
+    // and, if we're attached to a frame, the shortcuts for the accelerators of
+    // all the items in all of them.
+    void GTKRebuildModel();
+#endif // __WXGTK4__
+
 private:
     // common part of Append and Insert
     void GtkAppend(wxMenu* menu, const wxString& title, int pos = -1);
@@ -54,6 +61,14 @@ private:
     virtual bool GTKNeedsParent() const override { return false; }
 
     GtkWidget* m_menubar;
+
+#ifdef __WXGTK4__
+    // The model rendered by m_menubar (a GtkPopoverMenuBar under GTK4) and the
+    // controller holding the shortcuts for all our accelerators, created when
+    // we're attached to a frame and destroyed when we're detached from it.
+    GMenu* m_barModel;
+    GtkEventController* m_shortcuts;
+#endif // __WXGTK4__
 
     wxDECLARE_DYNAMIC_CLASS(wxMenuBar);
 };
@@ -87,9 +102,51 @@ public:
     virtual void SetTitle(const wxString& title) override;
 
     // implementation GTK only
+#ifdef __WXGTK4__
+    // GTK4 replaced menu widgets with a declarative model: this menu is a
+    // GMenu describing its structure plus a GSimpleActionGroup owning the
+    // GActions its items act on. See docs/gtk/gtk4-phase-menu-design.md.
+    GMenu* GTKGetMenuModel() const { return m_menuModel; }
+    // Note that this returns the group without casting it to GActionGroup or
+    // GActionMap: the GLib cast macros are not available in this header.
+    GSimpleActionGroup* GTKGetActionGroup() const { return m_actionGroup; }
+    const wxString& GTKGetActionPrefix() const { return m_actionPrefix; }
+
+    // Regenerate both the model and the actions from the wx item list. Called
+    // for any structural change: GMenu copies item attributes on insertion, so
+    // there is nothing to patch in place, and separators are modelled as
+    // sections, so wx item positions don't map to model positions anyway.
+    void GTKRebuildModel();
+
+    // Insert (or remove) the action groups of this menu and of all its sub
+    // menus into (from) the given widget. Named actions are resolved by
+    // walking up the widget hierarchy, so this must be a widget which is an
+    // ancestor of both the menu view and any shortcut controller using them.
+    void GTKInstallActions(GtkWidget* widget);
+    void GTKUninstallActions(GtkWidget* widget);
+
+    // Add the accelerators of this menu and of all its sub menus to the given
+    // shortcut controller. GTK4 has no accelerator groups: menu accelerators
+    // are GtkShortcuts triggering the items' named actions.
+    void GTKAddShortcuts(GtkShortcutController* controller);
+
+    // Called when one of our radio group actions changed state, with the bare
+    // action name and the target value of the item which is now selected.
+    void GTKOnRadioSelected(const char* actionName, const wxString& target);
+
+    // Show this menu as a popup over the given window, blocking until it is
+    // dismissed, as wxWindow::PopupMenu() is documented to do.
+    bool GTKShowPopup(wxWindow* win, int x, int y);
+
+    // True while the menu bar shows this menu as enabled; GMenuModel sub menu
+    // items have no action of their own, so this can't be read back from GTK.
+    bool GTKIsEnabledTop() const { return m_enabledTop; }
+    void GTKSetEnabledTop(bool enable) { m_enabledTop = enable; }
+#else
     GtkWidget       *m_menu;  // GtkMenu
     GtkWidget       *m_owner;
     GtkAccelGroup   *m_accel;
+#endif // __WXGTK4__/!__WXGTK4__
     bool m_popupShown;
 
 protected:
@@ -104,6 +161,18 @@ private:
     // common part of Append (if pos == -1)  and Insert
     void GtkAppend(wxMenuItem* item, int pos = -1);
 
+#ifdef __WXGTK4__
+    // Ask the menu bar we (possibly indirectly) belong to, if any, to refresh
+    // the shortcuts it registered for our items' accelerators.
+    void GTKRefreshShortcuts();
+
+    GMenu* m_menuModel;
+    GSimpleActionGroup* m_actionGroup;
+    wxString m_actionPrefix;
+    GtkWidget* m_popover;
+    GMainLoop* m_popupLoop;
+    bool m_enabledTop;
+#endif // __WXGTK4__
 
     wxDECLARE_DYNAMIC_CLASS(wxMenu);
 };

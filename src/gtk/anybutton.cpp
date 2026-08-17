@@ -19,6 +19,7 @@
 #include "wx/stockitem.h"
 
 #include "wx/gtk/private/wrapgtk.h"
+#include "wx/gtk/private/gtk3-compat.h"
 #include "wx/gtk/private/image.h"
 
 // ----------------------------------------------------------------------------
@@ -78,7 +79,12 @@ void wxAnyButton::DoEnable(bool enable)
 
     base_type::DoEnable(enable);
 
+#ifdef __WXGTK4__
+    if ( GtkWidget* const child = gtk_button_get_child(GTK_BUTTON(m_widget)) )
+        gtk_widget_set_sensitive(child, enable);
+#else
     gtk_widget_set_sensitive(gtk_bin_get_child(GTK_BIN(m_widget)), enable);
+#endif
 
     if (enable)
         GTKFixSensitivity();
@@ -184,10 +190,87 @@ void wxAnyButton::GTKUpdateBitmap()
     }
 }
 
+#ifdef __WXGTK4__
+
+namespace
+{
+
+// GTK4 removed gtk_button_get_image() and gtk_button_set_image(): a button
+// holds exactly one child, so showing an image beside a label means putting
+// both in a box ourselves. These two keep the rest of the file reading the way
+// it did, with the image found rather than asked for.
+
+GtkWidget* ButtonGetImage(GtkWidget* button)
+{
+    GtkWidget* const child = gtk_button_get_child(GTK_BUTTON(button));
+    if ( !child )
+        return nullptr;
+
+    if ( wxGtkImage::Is(child) )
+        return child;
+
+    if ( GTK_IS_BOX(child) )
+    {
+        for ( GtkWidget* c = gtk_widget_get_first_child(child);
+              c;
+              c = gtk_widget_get_next_sibling(c) )
+        {
+            if ( wxGtkImage::Is(c) )
+                return c;
+        }
+    }
+
+    return nullptr;
+}
+
+// Make the button show the given image, the given label, or both. Passing a
+// null image or an empty label leaves that part out. The image is reparented
+// rather than recreated so that the bitmap already on it survives.
+void ButtonSetContent(GtkWidget* button, GtkWidget* image, const wxString& label)
+{
+    if ( image )
+        g_object_ref(image);
+
+    // Detach the image before the old child is dropped, or it goes with it.
+    if ( image && gtk_widget_get_parent(image) )
+        wx_gtk_widget_remove_from_parent(image);
+
+    if ( image && label.empty() )
+    {
+        gtk_button_set_child(GTK_BUTTON(button), image);
+    }
+    else if ( image )
+    {
+        GtkWidget* const box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+        gtk_box_append(GTK_BOX(box), image);
+        gtk_box_append(GTK_BOX(box), gtk_label_new(label.utf8_str()));
+        gtk_widget_set_halign(box, GTK_ALIGN_CENTER);
+        gtk_button_set_child(GTK_BUTTON(button), box);
+    }
+    else
+    {
+        gtk_button_set_label(GTK_BUTTON(button), label.utf8_str());
+    }
+
+    if ( image )
+        g_object_unref(image);
+}
+
+} // anonymous namespace
+
+#endif // __WXGTK4__
+
 void wxAnyButton::GTKDoShowBitmap(const wxBitmapBundle& bitmap)
 {
     wxCHECK_RET(bitmap.IsOk(), "invalid bitmap");
 
+#ifdef __WXGTK4__
+    GtkWidget* const image = ButtonGetImage(m_widget);
+
+    wxCHECK_RET(image, "must have image widget");
+
+    wxGtkImage::Set(image, bitmap);
+#else
     GtkWidget* image = gtk_button_get_image(GTK_BUTTON(m_widget));
     if (image == nullptr)
         image = gtk_bin_get_child(GTK_BIN(m_widget));
@@ -195,6 +278,7 @@ void wxAnyButton::GTKDoShowBitmap(const wxBitmapBundle& bitmap)
     wxCHECK_RET(WX_GTK_IS_IMAGE(image), "must have image widget");
 
     WX_GTK_IMAGE(image)->Set(bitmap);
+#endif
 }
 
 wxBitmap wxAnyButton::DoGetBitmap(State which) const
@@ -209,6 +293,11 @@ void wxAnyButton::SetLabel(const wxString& label)
     if (HasFlag(wxBU_NOTEXT))
         return;
 
+#ifdef __WXGTK4__
+    // Same idea as below, but the two configurations are a lone image and a
+    // box holding an image and a label, both of which we build ourselves.
+    ButtonSetContent(m_widget, ButtonGetImage(m_widget), label);
+#else
     GtkWidget* child = gtk_bin_get_child(GTK_BIN(m_widget));
     if (WX_GTK_IS_IMAGE(child))
     {
@@ -216,6 +305,7 @@ void wxAnyButton::SetLabel(const wxString& label)
         // Direct-child image must be moved into label+image configuration.
         gtk_button_set_image(GTK_BUTTON(m_widget), child);
     }
+#endif
 }
 
 void wxAnyButton::DoSetBitmap(const wxBitmapBundle& bitmap, State which)
@@ -225,6 +315,29 @@ void wxAnyButton::DoSetBitmap(const wxBitmapBundle& bitmap, State which)
         case State_Normal:
             // normal image is special: setting it enables images for the button and
             // resetting it to nothing disables all of them
+#ifdef __WXGTK4__
+            if (bitmap.IsOk())
+            {
+                if ( !ButtonGetImage(m_widget) )
+                {
+                    ButtonSetContent(m_widget, wxGtkImage::New(this),
+                                     HasFlag(wxBU_NOTEXT) ? wxString()
+                                                          : GetLabel());
+
+                    // Rebuilding the child recreates the label, so reapply the
+                    // styles to preserve its font and colour.
+                    GTKApplyWidgetStyle();
+                }
+            }
+            else
+            {
+                if ( ButtonGetImage(m_widget) )
+                {
+                    ButtonSetContent(m_widget, nullptr, GetLabel());
+                    GTKApplyWidgetStyle();
+                }
+            }
+#else
             if (bitmap.IsOk())
             {
                 GtkWidget* child = gtk_bin_get_child(GTK_BIN(m_widget));
@@ -262,6 +375,7 @@ void wxAnyButton::DoSetBitmap(const wxBitmapBundle& bitmap, State which)
                     GTKApplyWidgetStyle();
                 }
             }
+#endif // __WXGTK4__/!__WXGTK4__
             InvalidateBestSize();
             break;
 
@@ -436,7 +550,14 @@ void wxAnyButton::DoSetBitmapPosition(wxDirection dir)
                 break;
         }
 
+#ifdef __WXGTK4__
+        // GTK4 has no gtk_button_set_image_position(): the button contains the
+        // box we assembled, so the image can only be where we put it, which is
+        // before the label. wxLEFT is therefore honoured and the others are not.
+        wxUnusedVar(gtkpos);
+#else
         gtk_button_set_image_position(GTK_BUTTON(m_widget), gtkpos);
+#endif
 
         // As in DoSetBitmap() above, the above call can invalidate the label
         // style, so reapply it to preserve its font and colour.

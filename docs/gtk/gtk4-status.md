@@ -2651,3 +2651,80 @@ events to intercept there is nothing to store.
 
 plus `filedlg.cpp`, `overlay.cpp` and a handful of smaller ones. `test_gui`
 still cannot link, so none of this is runtime-verified.
+
+---
+
+## Progress update 29: `window.cpp` finished
+
+**411 -> 367 diagnostics, 26 -> 25 failing targets, no regressions.**
+The 44 errors left in `window.cpp` after the Phase 3 input work are gone.
+
+### Focus events were not merely broken, they were absent
+
+`focus-in-event` and `focus-out-event` are gone under GTK4 and nothing had
+replaced them here, so `wxEVT_SET_FOCUS` and `wxEVT_KILL_FOCUS` would never
+have fired at all. That is not something an error count shows -- the file had
+44 errors either way -- and it is the sort of thing that only surfaces when
+something tries to run.
+
+A `GtkEventControllerFocus` now reports both. Its signals carry no event and
+return nothing, so `GTKHandleFocusIn()`/`Out()` are simply called. The
+controller is remembered on the widget with `g_object_set_data()` so that
+`GTKDisableFocusOutEvent()`, which blocks the handler by function pointer, can
+still find something to block.
+
+### Removals with no replacement
+
+* **`gdk_window_get_origin()`.** GTK4 does not tell a client where its window
+  is on screen, so `ClientToScreen()`/`ScreenToClient()` are toplevel relative.
+  Same root cause as the positioning loss recorded for `toplevel.cpp`.
+* **`gdk_device_warp()`.** `WarpPointer()` is a no-op. This mostly formalises
+  reality: it already did nothing under GTK3 with the Wayland backend, which is
+  why the file carries a hand-rolled Wayland implementation -- itself built on
+  `GdkWindow` and so GTK3-only now.
+* **`gdk_window_raise()`/`lower()`.** There are no child windows to reorder and
+  toplevel stacking belongs to the compositor. `Raise()` presents a toplevel;
+  `Lower()` does nothing.
+* **Binding sets.** The Ctrl-PageUp/Down conflict between scrolled windows and
+  notebooks was resolved by removing the scrolled window's bindings. GTK4
+  replaced binding sets with `GtkShortcut`, and a class's shortcuts cannot be
+  removed from outside it, so that conflict is back.
+* **Style properties**, again: the default button's `default_border` and the
+  scrolled window's `scrollbar-spacing`. Neither is needed now -- GTK4 draws
+  the default indication inside the widget's own allocation and overlays
+  scrollbars rather than reserving space beside them -- so both become zero.
+
+### One thing that came out better
+
+GTK3 needs three handlers to track scrollbar dragging, one of them connected
+and immediately blocked: `GtkRange` consumes the button release, so the
+thumb-release event has to be deferred via `event_after` until after
+`GtkRange`'s own handler has run.
+
+A single `GtkGestureClick` in the **capture** phase sees the press and the
+release before `GtkRange` does, so the deferral is unnecessary and the three
+handlers collapse to two straightforward callbacks.
+
+### The obstacle that cost the most time, and it was mundane
+
+`GdkSurface` had never been added to the stand-in types in `defs.h`. The
+accessor declarations returning it were therefore ill-formed, and the compiler
+reported the *member functions* as "not declared in this scope" at their call
+sites rather than complaining about the type. Several rounds of looking at the
+wrong file followed.
+
+Worth noting for `dnd.cpp`, which uses `GdkDrop` and `GdkDrag` and will need
+the same stand-ins.
+
+### What is left
+
+| File | Errors |
+|---|---|
+| `dataview.cpp` | 55 |
+| `dnd.cpp` | 41 |
+| `textctrl.cpp` | 21 |
+| `notebook.cpp` | 19 |
+
+plus `filedlg.cpp`, `overlay.cpp` and a handful of smaller ones. `dnd.cpp` is
+the last full model replacement. `test_gui` still cannot link, so none of this
+is runtime-verified.

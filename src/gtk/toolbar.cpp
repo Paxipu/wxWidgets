@@ -15,7 +15,12 @@
 #include "wx/toolbar.h"
 
 #include "wx/gtk/private.h"
-#include "wx/gtk/private/image.h"
+#ifndef __WXGTK4__
+    // wxGtkImage derives from GtkImage, which is an opaque final type under
+    // GTK4. The bitmap variant it picks is chosen directly instead, see
+    // wxToolBarTool::SetImage().
+    #include "wx/gtk/private/image.h"
+#endif
 #include "wx/gtk/private/gtk3-compat.h"
 
 // ----------------------------------------------------------------------------
@@ -45,12 +50,20 @@ public:
                             clientData, shortHelpString, longHelpString)
     {
         m_item = nullptr;
+#ifdef __WXGTK4__
+        m_button = nullptr;
+        m_image = nullptr;
+#endif
     }
 
     wxToolBarTool(wxToolBar *tbar, wxControl *control, const wxString& label)
         : wxToolBarToolBase(tbar, control, label)
     {
         m_item = nullptr;
+#ifdef __WXGTK4__
+        m_button = nullptr;
+        m_image = nullptr;
+#endif
     }
 
     void SetImage();
@@ -58,7 +71,18 @@ public:
     void ShowDropdown(GtkToggleButton* button);
     virtual void SetLabel(const wxString& label) override;
 
+#ifdef __WXGTK4__
+    // GTK4 removed the entire GtkToolItem family, so a tool is assembled from
+    // ordinary widgets: m_item is what sits in the toolbar box (a button, a
+    // separator, a control's widget, or the box wrapping a dropdown button and
+    // its arrow), m_button is the button proper, and m_image is the GtkImage
+    // inside it, if the tool shows one.
+    GtkWidget* m_item;
+    GtkWidget* m_button;
+    GtkWidget* m_image;
+#else
     GtkToolItem* m_item;
+#endif
 };
 
 // ----------------------------------------------------------------------------
@@ -74,6 +98,129 @@ wxIMPLEMENT_DYNAMIC_CLASS(wxToolBar, wxControl);
 //-----------------------------------------------------------------------------
 // "clicked" from m_item
 //-----------------------------------------------------------------------------
+
+#ifdef __WXGTK4__
+
+extern "C" {
+static void item_clicked(GtkButton*, wxToolBarTool* tool)
+{
+    if (g_blockEventsOnDrag) return;
+
+    tool->GetToolBar()->OnLeftClick(tool->GetId(), false);
+}
+}
+
+//-----------------------------------------------------------------------------
+// "toggled" from m_item
+//-----------------------------------------------------------------------------
+
+extern "C" {
+static void item_toggled(GtkToggleButton* button, wxToolBarTool* tool)
+{
+    if (g_blockEventsOnDrag) return;
+
+    const bool active = gtk_toggle_button_get_active(button) != 0;
+    tool->Toggle(active);
+    if (!active && tool->GetKind() == wxITEM_RADIO)
+        return;
+
+    if (!tool->GetToolBar()->OnLeftClick(tool->GetId(), active))
+    {
+        // revert back
+        tool->Toggle();
+    }
+}
+}
+
+//-----------------------------------------------------------------------------
+// right click on a tool
+//-----------------------------------------------------------------------------
+
+// GTK4 has no button-press-event: a gesture restricted to the right button
+// takes its place.
+extern "C" {
+static void
+tool_right_pressed(GtkGestureClick* gesture,
+                   int, double x, double y, wxToolBarTool* tool)
+{
+    if (g_blockEventsOnDrag)
+        return;
+
+    tool->GetToolBar()->OnRightClick(tool->GetId(), int(x), int(y));
+
+    gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+}
+}
+
+//-----------------------------------------------------------------------------
+// pointer entering/leaving a tool
+//-----------------------------------------------------------------------------
+
+extern "C" {
+static void tool_enter(GtkEventControllerMotion*, double, double,
+                       wxToolBarTool* tool)
+{
+    if (g_blockEventsOnDrag)
+        return;
+
+    tool->GetToolBar()->OnMouseEnter(tool->GetId());
+}
+
+static void tool_leave(GtkEventControllerMotion*, wxToolBarTool* tool)
+{
+    if (g_blockEventsOnDrag)
+        return;
+
+    tool->GetToolBar()->OnMouseEnter(-1);
+}
+}
+
+// Attach the above to a tool's button.
+static void wxGTKConnectToolControllers(wxToolBarTool* tool, GtkWidget* widget)
+{
+    GtkGesture* const click = gtk_gesture_click_new();
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
+    g_signal_connect(click, "pressed", G_CALLBACK(tool_right_pressed), tool);
+    gtk_widget_add_controller(widget, GTK_EVENT_CONTROLLER(click));
+
+    GtkEventController* const motion = gtk_event_controller_motion_new();
+    g_signal_connect(motion, "enter", G_CALLBACK(tool_enter), tool);
+    g_signal_connect(motion, "leave", G_CALLBACK(tool_leave), tool);
+    gtk_widget_add_controller(widget, motion);
+}
+
+// Insert a child into a GtkBox at the given position, -1 meaning the end.
+// GtkBox only offers "after this sibling", so the sibling has to be found.
+static void wxGTKBoxInsert(GtkWidget* box, GtkWidget* child, int pos)
+{
+    if (pos < 0)
+    {
+        gtk_box_append(GTK_BOX(box), child);
+        return;
+    }
+
+    GtkWidget* sibling = nullptr;
+    GtkWidget* c = gtk_widget_get_first_child(box);
+    for (int i = 0; i < pos && c; ++i)
+    {
+        sibling = c;
+        c = gtk_widget_get_next_sibling(c);
+    }
+
+    if (sibling)
+        gtk_box_insert_child_after(GTK_BOX(box), child, sibling);
+    else
+        gtk_box_prepend(GTK_BOX(box), child);
+}
+
+// The tool a toolbar box child belongs to, or null if it has none.
+static wxToolBarTool* wxGTKToolFromWidget(GtkWidget* widget)
+{
+    return static_cast<wxToolBarTool*>(
+        g_object_get_data(G_OBJECT(widget), "wx-toolbar-tool"));
+}
+
+#else // !__WXGTK4__
 
 extern "C" {
 static void item_clicked(GtkToolButton*, wxToolBarTool* tool)
@@ -130,6 +277,8 @@ button_press_event(GtkWidget*, GdkEventButton* event, wxToolBarTool* tool)
 // "child_detached" from m_widget
 //-----------------------------------------------------------------------------
 
+// The handle box these two belong to was removed in GTK3.19.7 and is gone
+// entirely under GTK4, so a detachable toolbar has no backing there.
 extern "C" {
 static void child_detached(GtkWidget*, GtkToolbar* toolbar, void*)
 {
@@ -169,7 +318,11 @@ enter_notify_event(GtkWidget*, GdkEventCrossing* event, wxToolBarTool* tool)
 }
 }
 
+#endif // __WXGTK4__/!__WXGTK4__
+
 //-----------------------------------------------------------------------------
+
+#ifndef __WXGTK4__
 
 namespace
 {
@@ -203,6 +356,8 @@ wxBitmap BitmapProvider::Get(int scale) const
 }
 } // namespace
 
+#endif // !__WXGTK4__
+
 //-----------------------------------------------------------------------------
 // "toggled" from dropdown menu button
 //-----------------------------------------------------------------------------
@@ -222,6 +377,7 @@ static void arrow_toggled(GtkToggleButton* button, wxToolBarTool* tool)
 // "button_press_event" from dropdown menu button
 //-----------------------------------------------------------------------------
 
+#ifndef __WXGTK4__
 extern "C" {
 static gboolean
 arrow_button_press_event(GtkToggleButton* button, GdkEventButton* event, wxToolBarTool* tool)
@@ -238,9 +394,19 @@ arrow_button_press_event(GtkToggleButton* button, GdkEventButton* event, wxToolB
     return false;
 }
 }
+#endif // !__WXGTK4__
 
 void wxToolBar::AddChildGTK(wxWindowGTK* child)
 {
+#ifdef __WXGTK4__
+    // There is no GtkToolItem to wrap the control in: it goes into the toolbar
+    // box directly, centred the way the tool item used to centre it.
+    gtk_widget_set_valign(child->m_widget, GTK_ALIGN_CENTER);
+    gtk_widget_set_halign(child->m_widget, GTK_ALIGN_CENTER);
+
+    // position will be corrected in DoInsertTool if necessary
+    gtk_box_append(GTK_BOX(m_toolbar), child->m_widget);
+#else
     GtkToolItem* item = gtk_tool_item_new();
 #ifdef __WXGTK3__
     gtk_widget_set_valign(child->m_widget, GTK_ALIGN_CENTER);
@@ -254,6 +420,7 @@ void wxToolBar::AddChildGTK(wxWindowGTK* child)
 #endif
     // position will be corrected in DoInsertTool if necessary
     gtk_toolbar_insert(GTK_TOOLBAR(gtk_bin_get_child(GTK_BIN(m_widget))), item, -1);
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 // ----------------------------------------------------------------------------
@@ -262,15 +429,95 @@ void wxToolBar::AddChildGTK(wxWindowGTK* child)
 
 void wxToolBarTool::SetImage()
 {
+#ifdef __WXGTK4__
+    if (m_image == nullptr)
+        return;
+
+    // GtkImage is final under GTK4, so wxGtkImage -- whose whole purpose is to
+    // pick the right bitmap variant for the scale factor and enabled state
+    // itself -- cannot be used. The same choice is made here instead and the
+    // result handed to a plain GtkImage as a texture.
+    const int scale = gtk_widget_get_scale_factor(m_image);
+    const bool isEnabled = IsEnabled();
+
+    const wxBitmapBundle bundle(
+        isEnabled ? GetNormalBitmapBundle() : GetDisabledBitmapBundle());
+    const wxSize sizeDefault = bundle.IsOk() ? bundle.GetDefaultSize()
+                                             : GetNormalBitmapBundle().GetDefaultSize();
+
+    wxBitmap bitmap;
+    if (bundle.IsOk())
+        bitmap = bundle.GetBitmap(bundle.GetDefaultSize() * scale);
+
+    if (!isEnabled && !bitmap.IsOk())
+    {
+        // Create disabled bitmap from the normal one
+        const wxBitmapBundle normal(GetNormalBitmapBundle());
+        if (normal.IsOk())
+        {
+            bitmap = normal.GetBitmap(normal.GetDefaultSize() * scale)
+                        .CreateDisabled();
+        }
+    }
+
+    if (!bitmap.IsOk())
+    {
+        gtk_image_clear(GTK_IMAGE(m_image));
+        return;
+    }
+
+    GdkPixbuf* const pixbuf = bitmap.GetPixbuf();
+    if (pixbuf == nullptr)
+    {
+        gtk_image_clear(GTK_IMAGE(m_image));
+        return;
+    }
+
+    GdkTexture* const texture = gdk_texture_new_for_pixbuf(pixbuf);
+    gtk_image_set_from_paintable(GTK_IMAGE(m_image), GDK_PAINTABLE(texture));
+    g_object_unref(texture);
+
+    // Without this the image is laid out at the texture's pixel size, which is
+    // the scaled one and so too big on a HiDPI display.
+    if (sizeDefault.y > 0)
+        gtk_image_set_pixel_size(GTK_IMAGE(m_image), sizeDefault.y);
+#else
     const wxBitmap& bitmap = GetNormalBitmap();
 
     GtkWidget* image = gtk_tool_button_get_icon_widget(GTK_TOOL_BUTTON(m_item));
     WX_GTK_IMAGE(image)->Set(bitmap);
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 // helper to create a dropdown menu item
 void wxToolBarTool::CreateDropDown()
 {
+#ifdef __WXGTK4__
+    GtkOrientation orient = GTK_ORIENTATION_HORIZONTAL;
+    if (GetToolBar()->HasFlag(wxTB_LEFT | wxTB_RIGHT))
+        orient = GTK_ORIENTATION_VERTICAL;
+
+    const char* const icon = orient == GTK_ORIENTATION_VERTICAL
+                                ? "pan-end-symbolic" : "pan-down-symbolic";
+
+    // The button is already in place; wrap it and an arrow button in a box and
+    // let that box be what the toolbar holds.
+    GtkWidget* const box = gtk_box_new(orient, 0);
+    GtkWidget* const arrow_button = gtk_toggle_button_new();
+    gtk_button_set_child(GTK_BUTTON(arrow_button),
+                         gtk_image_new_from_icon_name(icon));
+    gtk_widget_add_css_class(arrow_button, "flat");
+
+    gtk_box_append(GTK_BOX(box), m_button);
+    gtk_box_append(GTK_BOX(box), arrow_button);
+
+    m_item = box;
+
+    // Unlike GTK3 there is no second handler for the button press: a toggle
+    // button reports the press through "toggled" anyway, and GTK4 has no
+    // button-press-event to hook the other one to.
+    g_signal_connect(arrow_button, "toggled", G_CALLBACK(arrow_toggled), this);
+#else
     gtk_tool_item_set_homogeneous(m_item, false);
     GtkOrientation orient = GTK_ORIENTATION_HORIZONTAL;
     if (GetToolBar()->HasFlag(wxTB_LEFT | wxTB_RIGHT))
@@ -311,6 +558,7 @@ void wxToolBarTool::CreateDropDown()
     g_signal_connect(arrow_button, "toggled", G_CALLBACK(arrow_toggled), this);
     g_signal_connect(arrow_button, "button_press_event",
         G_CALLBACK(arrow_button_press_event), this);
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 void wxToolBarTool::ShowDropdown(GtkToggleButton* button)
@@ -322,6 +570,26 @@ void wxToolBarTool::ShowDropdown(GtkToggleButton* button)
         wxMenu* menu = GetDropdownMenu();
         if (menu)
         {
+#ifdef __WXGTK4__
+            // gtk_widget_get_allocation() is deprecated and its x/y are always
+            // zero under GTK4 anyway: the position relative to the toolbar has
+            // to be computed explicitly.
+            graphene_point_t origin = GRAPHENE_POINT_INIT(0, 0);
+            graphene_point_t pt;
+            if (!gtk_widget_compute_point(GTK_WIDGET(button),
+                                          toolbar->m_widget, &origin, &pt))
+            {
+                pt.x = 0;
+                pt.y = 0;
+            }
+
+            int x = int(pt.x);
+            int y = int(pt.y);
+            if (toolbar->HasFlag(wxTB_LEFT | wxTB_RIGHT))
+                x += gtk_widget_get_width(GTK_WIDGET(button));
+            else
+                y += gtk_widget_get_height(GTK_WIDGET(button));
+#else
             GtkAllocation alloc;
             gtk_widget_get_allocation(GTK_WIDGET(button), &alloc);
             int x = alloc.x;
@@ -330,6 +598,7 @@ void wxToolBarTool::ShowDropdown(GtkToggleButton* button)
                 x += alloc.width;
             else
                 y += alloc.height;
+#endif
             toolbar->PopupMenu(menu, x, y);
         }
     }
@@ -346,6 +615,13 @@ void wxToolBarTool::SetLabel(const wxString& label)
     wxToolBarToolBase::SetLabel(label);
     if ( IsButton() )
     {
+#ifdef __WXGTK4__
+        // GTK4 has no "is important" flag deciding whether a label is shown
+        // next to the icon in a horizontal layout: the button contains exactly
+        // the widgets we put in it, so the label is rebuilt instead.
+        if ( m_button )
+            static_cast<wxToolBar*>(GetToolBar())->GTKUpdateToolContent(this);
+#else
         if ( !label.empty() )
         {
             wxString newLabel = wxControl::RemoveMnemonics(label);
@@ -360,6 +636,7 @@ void wxToolBarTool::SetLabel(const wxString& label)
             // To hide the label for toolbar with wxTB_HORZ_LAYOUT.
             gtk_tool_item_set_is_important(m_item, false);
         }
+#endif // __WXGTK4__/!__WXGTK4__
     }
 
     // TODO: Set label for control tool, if it's possible.
@@ -391,7 +668,9 @@ wxToolBar::CreateTool(wxControl *control, const wxString& label)
 void wxToolBar::Init()
 {
     m_toolbar = nullptr;
+#ifndef __WXGTK4__
     m_tooltips = nullptr;
+#endif
 }
 
 wxToolBar::~wxToolBar()
@@ -422,7 +701,14 @@ bool wxToolBar::Create( wxWindow *parent,
 
     FixupStyle();
 
+#ifdef __WXGTK4__
+    // A GTK4 "toolbar" is a box with the matching style class: GtkToolbar and
+    // every GtkToolItem subclass were removed outright.
+    m_toolbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_add_css_class(m_toolbar, "toolbar");
+#else
     m_toolbar = GTK_TOOLBAR( gtk_toolbar_new() );
+#endif
 #ifndef __WXGTK3__
     if (!wx_is_at_least_gtk2(12))
     {
@@ -434,6 +720,7 @@ bool wxToolBar::Create( wxWindow *parent,
     GtkSetStyle();
 
 #ifdef __WXGTK4__
+    // wxTB_DOCKABLE has no backing: GtkHandleBox was removed in GTK3 already.
     m_widget = m_toolbar;
 #else
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
@@ -484,6 +771,19 @@ void wxToolBar::GtkSetStyle()
     if (HasFlag(wxTB_LEFT | wxTB_RIGHT))
         orient = GTK_ORIENTATION_VERTICAL;
 
+#ifdef __WXGTK4__
+    // There is no GtkToolbarStyle to set: whether a tool shows its icon, its
+    // label or both is decided by what we put inside its button, so a style
+    // change means rebuilding the tools' contents.
+    gtk_orientable_set_orientation(GTK_ORIENTABLE(m_toolbar), orient);
+
+    for ( wxToolBarToolsList::const_iterator i = m_tools.begin();
+          i != m_tools.end();
+          ++i )
+    {
+        GTKUpdateToolContent(*i);
+    }
+#else
     GtkToolbarStyle style = GTK_TOOLBAR_ICONS;
     if (HasFlag(wxTB_NOICONS))
         style = GTK_TOOLBAR_TEXT;
@@ -500,6 +800,7 @@ void wxToolBar::GtkSetStyle()
     gtk_toolbar_set_orientation(m_toolbar, orient);
 #endif
     gtk_toolbar_set_style(m_toolbar, style);
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 void wxToolBar::SetWindowStyleFlag( long style )
@@ -535,6 +836,238 @@ bool wxToolBar::Realize()
 
     return true;
 }
+
+#ifdef __WXGTK4__
+
+void wxToolBar::GTKUpdateToolContent(wxToolBarToolBase* toolBase)
+{
+    wxToolBarTool* const tool = static_cast<wxToolBarTool*>(toolBase);
+    if (tool->m_button == nullptr)
+        return;
+
+    const bool showIcon = !HasFlag(wxTB_NOICONS);
+    const bool showText = HasFlag(wxTB_NOICONS) || HasFlag(wxTB_TEXT);
+    const wxString label = showText && !tool->GetLabel().empty()
+                            ? wxControl::RemoveMnemonics(tool->GetLabel())
+                            : wxString();
+
+    // wxTB_HORZ_LAYOUT puts the label beside the icon rather than under it,
+    // which is what GTK_TOOLBAR_BOTH_HORIZ used to mean.
+    const GtkOrientation orient = HasFlag(wxTB_HORZ_LAYOUT)
+                                    ? GTK_ORIENTATION_HORIZONTAL
+                                    : GTK_ORIENTATION_VERTICAL;
+
+    tool->m_image = showIcon ? gtk_image_new() : nullptr;
+
+    GtkWidget* content;
+    if (tool->m_image && !label.empty())
+    {
+        content = gtk_box_new(orient, 4);
+        gtk_box_append(GTK_BOX(content), tool->m_image);
+        gtk_box_append(GTK_BOX(content), gtk_label_new(label.utf8_str()));
+    }
+    else if (tool->m_image)
+    {
+        content = tool->m_image;
+    }
+    else
+    {
+        content = gtk_label_new(label.utf8_str());
+    }
+
+    gtk_button_set_child(GTK_BUTTON(tool->m_button), content);
+
+    if (tool->m_image)
+        tool->SetImage();
+}
+
+wxToolBarToolBase* wxToolBar::GTKGetToolAt(size_t pos) const
+{
+    GtkWidget* c = gtk_widget_get_first_child(m_toolbar);
+    for (size_t i = 0; i < pos && c; ++i)
+        c = gtk_widget_get_next_sibling(c);
+
+    return c ? wxGTKToolFromWidget(c) : nullptr;
+}
+
+GtkToggleButton* wxToolBar::GetRadioGroup(size_t pos)
+{
+    // Mirrors the GTK3 logic: a radio tool joins the group of the radio tool
+    // just before it, or of the one just after it if there is none before.
+    // What differs is only how a group is named -- GTK4 points one toggle
+    // button at another instead of passing a GSList around.
+    for ( int i = 0; i < 2; ++i )
+    {
+        if ( i == 0 && pos == 0 )
+            continue;
+        if ( i == 1 && pos >= m_tools.size() )
+            continue;
+
+        wxToolBarTool* const neighbour = static_cast<wxToolBarTool*>(
+            GTKGetToolAt(i == 0 ? pos - 1 : pos));
+
+        if ( neighbour && neighbour->GetKind() == wxITEM_RADIO &&
+                neighbour->m_button &&
+                    GTK_IS_TOGGLE_BUTTON(neighbour->m_button) )
+        {
+            return GTK_TOGGLE_BUTTON(neighbour->m_button);
+        }
+    }
+
+    return nullptr;
+}
+
+bool wxToolBar::DoInsertTool(size_t pos, wxToolBarToolBase *toolBase)
+{
+    wxToolBarTool* tool = static_cast<wxToolBarTool*>(toolBase);
+
+    switch ( tool->GetStyle() )
+    {
+        case wxTOOL_STYLE_BUTTON:
+            switch (tool->GetKind())
+            {
+                case wxITEM_CHECK:
+                    tool->m_button = gtk_toggle_button_new();
+                    g_signal_connect(tool->m_button, "toggled",
+                        G_CALLBACK(item_toggled), tool);
+                    break;
+
+                case wxITEM_RADIO:
+                    {
+                        GtkToggleButton* const group = GetRadioGroup(pos);
+
+                        tool->m_button = gtk_toggle_button_new();
+                        if (group)
+                        {
+                            gtk_toggle_button_set_group(
+                                GTK_TOGGLE_BUTTON(tool->m_button), group);
+                        }
+                        else
+                        {
+                            // Unlike gtk_radio_tool_button_new(), GTK4 does not
+                            // activate the first member of a group by itself,
+                            // so do it here to keep wx's behaviour that the
+                            // first radio tool of a group starts selected.
+                            gtk_toggle_button_set_active(
+                                GTK_TOGGLE_BUTTON(tool->m_button), TRUE);
+                            tool->Toggle(true);
+                        }
+
+                        g_signal_connect(tool->m_button, "toggled",
+                            G_CALLBACK(item_toggled), tool);
+                    }
+                    break;
+
+                default:
+                    wxFAIL_MSG("unknown toolbar child type");
+                    wxFALLTHROUGH;
+                case wxITEM_DROPDOWN:
+                case wxITEM_NORMAL:
+                    tool->m_button = gtk_button_new();
+                    g_signal_connect(tool->m_button, "clicked",
+                        G_CALLBACK(item_clicked), tool);
+                    break;
+            }
+
+            // GtkToolbar used to give its buttons a flat look; a plain button
+            // in a box does not, so ask for it.
+            gtk_widget_add_css_class(tool->m_button, "flat");
+
+            tool->m_item = tool->m_button;
+
+            GTKUpdateToolContent(tool);
+
+            if (!HasFlag(wxTB_NO_TOOLTIPS) && !tool->GetShortHelp().empty())
+            {
+                gtk_widget_set_tooltip_text(tool->m_button,
+                    tool->GetShortHelp().utf8_str());
+            }
+
+            wxGTKConnectToolControllers(tool, tool->m_button);
+
+            if (tool->GetKind() == wxITEM_DROPDOWN)
+                tool->CreateDropDown();  // this replaces m_item with a box
+
+            g_object_set_data(G_OBJECT(tool->m_item), "wx-toolbar-tool", tool);
+            wxGTKBoxInsert(m_toolbar, tool->m_item, int(pos));
+            break;
+
+        case wxTOOL_STYLE_SEPARATOR:
+            tool->m_item = gtk_separator_new(
+                HasFlag(wxTB_LEFT | wxTB_RIGHT) ? GTK_ORIENTATION_HORIZONTAL
+                                                : GTK_ORIENTATION_VERTICAL);
+            if ( tool->IsStretchable() )
+            {
+                // A stretchable separator is a gap, not a line: it takes up
+                // the slack without drawing anything.
+                gtk_widget_set_opacity(tool->m_item, 0);
+                if (HasFlag(wxTB_LEFT | wxTB_RIGHT))
+                    gtk_widget_set_vexpand(tool->m_item, TRUE);
+                else
+                    gtk_widget_set_hexpand(tool->m_item, TRUE);
+            }
+            g_object_set_data(G_OBJECT(tool->m_item), "wx-toolbar-tool", tool);
+            wxGTKBoxInsert(m_toolbar, tool->m_item, int(pos));
+            break;
+
+        case wxTOOL_STYLE_CONTROL:
+            wxWindow* control = tool->GetControl();
+            if (gtk_widget_get_parent(control->m_widget) == nullptr)
+                AddChildGTK(control);
+
+            // There is no tool item wrapping it any more: the control's own
+            // widget is what the toolbar box holds.
+            tool->m_item = control->m_widget;
+            tool->m_button = nullptr;
+
+            // The widget size is not controlled by wx, so at least make sure
+            // that its minimal size is respected by GTK.
+            wxSize minSize = control->GetMinSize();
+            if ( !minSize.IsFullySpecified() )
+            {
+                minSize.SetDefaults(control->GetSize());
+            }
+
+            gtk_widget_set_size_request(control->m_widget, minSize.x, minSize.y);
+
+            g_object_set_data(G_OBJECT(tool->m_item), "wx-toolbar-tool", tool);
+
+            // AddChildGTK() appended it, so move it if that isn't where it goes
+            g_object_ref(tool->m_item);
+            gtk_box_remove(GTK_BOX(m_toolbar), tool->m_item);
+            wxGTKBoxInsert(m_toolbar, tool->m_item, int(pos));
+            g_object_unref(tool->m_item);
+            break;
+    }
+
+    gtk_widget_set_visible(tool->m_item, TRUE);
+
+    InvalidateBestSize();
+
+    return true;
+}
+
+bool wxToolBar::DoDeleteTool(size_t /* pos */, wxToolBarToolBase* toolBase)
+{
+    wxToolBarTool* tool = static_cast<wxToolBarTool*>(toolBase);
+
+    if (tool->m_item)
+    {
+        // For a control tool this also takes the control's widget out of the
+        // toolbar without destroying it, which is what we want: we may be
+        // called from RemoveTool(), which keeps the control alive.
+        gtk_box_remove(GTK_BOX(m_toolbar), tool->m_item);
+    }
+
+    tool->m_item = nullptr;
+    tool->m_button = nullptr;
+    tool->m_image = nullptr;
+
+    InvalidateBestSize();
+    return true;
+}
+
+#else // !__WXGTK4__
 
 bool wxToolBar::DoInsertTool(size_t pos, wxToolBarToolBase *toolBase)
 {
@@ -719,6 +1252,8 @@ GSList* wxToolBar::GetRadioGroup(size_t pos)
     return radioGroup;
 }
 
+#endif // __WXGTK4__/!__WXGTK4__
+
 // ----------------------------------------------------------------------------
 // wxToolBar tools state
 // ----------------------------------------------------------------------------
@@ -728,7 +1263,14 @@ void wxToolBar::DoEnableTool(wxToolBarToolBase *toolBase, bool enable)
     wxToolBarTool* tool = static_cast<wxToolBarTool*>(toolBase);
 
     if (tool->m_item)
+    {
         gtk_widget_set_sensitive(GTK_WIDGET(tool->m_item), enable);
+#ifdef __WXGTK4__
+        // Unlike wxGtkImage, which chose the variant when it drew, the bitmap
+        // shown is fixed at the point it is set, so it has to be reset here.
+        tool->SetImage();
+#endif
+    }
 }
 
 void wxToolBar::DoToggleTool( wxToolBarToolBase *toolBase, bool toggle )
@@ -737,12 +1279,23 @@ void wxToolBar::DoToggleTool( wxToolBarToolBase *toolBase, bool toggle )
 
     if (tool->m_item)
     {
+#ifdef __WXGTK4__
+        if (tool->m_button == nullptr || !GTK_IS_TOGGLE_BUTTON(tool->m_button))
+            return;
+
+        g_signal_handlers_block_by_func(tool->m_button, (void*)item_toggled, tool);
+
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(tool->m_button), toggle);
+
+        g_signal_handlers_unblock_by_func(tool->m_button, (void*)item_toggled, tool);
+#else
         g_signal_handlers_block_by_func(tool->m_item, (void*)item_toggled, tool);
 
         gtk_toggle_tool_button_set_active(
             GTK_TOGGLE_TOOL_BUTTON(tool->m_item), toggle);
 
         g_signal_handlers_unblock_by_func(tool->m_item, (void*)item_toggled, tool);
+#endif
     }
 }
 
@@ -764,10 +1317,16 @@ wxSize wxToolBar::DoGetBestSize() const
     // This is gross, since it will cause a queue_resize, and could potentially
     // lead to an infinite loop. But there seems to be no alternative, short of
     // disabling the arrow entirely.
+#ifdef __WXGTK4__
+    // No workaround needed: there is no overflow arrow under GTK4, a toolbar
+    // is a plain box and reports the size of its children.
+    return wxToolBarBase::DoGetBestSize();
+#else
     gtk_toolbar_set_show_arrow(m_toolbar, false);
     const wxSize size = wxToolBarBase::DoGetBestSize();
     gtk_toolbar_set_show_arrow(m_toolbar, true);
     return size;
+#endif
 }
 
 wxToolBarToolBase *wxToolBar::FindToolForPosition(wxCoord WXUNUSED(x),
@@ -788,6 +1347,9 @@ void wxToolBar::SetToolShortHelp( int id, const wxString& helpString )
         (void)tool->SetShortHelp(helpString);
         if (tool->m_item)
         {
+#ifdef __WXGTK4__
+            gtk_widget_set_tooltip_text(tool->m_item, helpString.utf8_str());
+#else
 #if GTK_CHECK_VERSION(2, 12, 0)
             if (wx_is_at_least_gtk2(12))
             {
@@ -802,6 +1364,7 @@ void wxToolBar::SetToolShortHelp( int id, const wxString& helpString )
                     m_tooltips, helpString.utf8_str(), "");
 #endif
             }
+#endif // __WXGTK4__/!__WXGTK4__
         }
     }
 }
@@ -835,7 +1398,11 @@ void wxToolBar::SetToolDisabledBitmap( int id, const wxBitmapBundle& bitmap )
 wxVisualAttributes
 wxToolBar::GetClassDefaultAttributes(wxWindowVariant WXUNUSED(variant))
 {
+#ifdef __WXGTK4__
+    return GetDefaultAttributesFromGTKWidget(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0));
+#else
     return GetDefaultAttributesFromGTKWidget(gtk_toolbar_new());
+#endif
 }
 
 #endif // wxUSE_TOOLBAR_NATIVE

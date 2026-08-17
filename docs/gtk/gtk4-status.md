@@ -2056,3 +2056,92 @@ decorations" -- which is why it is kept rather than skipped under GTK4.
 
 Plus the tail of files at 1-25 errors each. `test_gui` still cannot link, so
 none of the above is runtime-verified.
+
+---
+
+## Progress update 22: `toolbar.cpp`
+
+**829 -> 685 diagnostics, 35 -> 34 failing targets, no regressions.**
+`toolbar.cpp` went from 141 errors to zero -- the largest single file in the
+port. Three of the six subsystem rewrites are done.
+
+### Another whole widget family, gone
+
+`GtkToolbar`, `GtkToolItem`, `GtkToolButton`, `GtkToggleToolButton`,
+`GtkRadioToolButton`, `GtkSeparatorToolItem` and `GtkMenuToolButton` were all
+removed. GTK4's answer is that a toolbar was never a special kind of container:
+it is a `GtkBox` carrying the `toolbar` style class, holding ordinary buttons.
+
+| wx | GTK4 |
+| --- | --- |
+| the toolbar | `GtkBox` + the `toolbar` style class |
+| normal tool | `GtkButton` with the `flat` class |
+| check tool | `GtkToggleButton` |
+| radio tool | `GtkToggleButton` grouped with `gtk_toggle_button_set_group()` |
+| separator | `GtkSeparator` |
+| stretchable separator | `GtkSeparator`, opacity 0, `hexpand` set |
+| control tool | the control's own widget, directly in the box |
+| dropdown tool | a box holding the button and an arrow `GtkToggleButton` |
+| right click | `GtkGestureClick` limited to the secondary button |
+| mouse enter/leave | `GtkEventControllerMotion` |
+
+### The behaviour difference that would have bitten silently
+
+GTK3's `gtk_radio_tool_button_new()` **activates the first button of a group by
+itself**. The GTK3 wx code knows this and has a comment saying so, calling
+`tool->Toggle(true)` purely to bring its own flag into line with what GTK
+already did.
+
+GTK4's grouped toggle buttons do **not** do this. A probe confirmed it: a
+freshly grouped set has nothing selected. So the port now activates the first
+radio tool explicitly, both in GTK and in wx.
+
+This is the kind of difference that compiles perfectly and produces a toolbar
+where a radio group starts with nothing selected -- and the existing comment
+in the code would have actively misled anyone reading it. It is now pinned as a
+CI invariant, phrased as the negative ("a grouped toggle button is NOT active
+by default") so that GTK reverting would also be caught.
+
+### `wxGtkImage` cannot be used here either
+
+`GtkImage` is final under GTK4, so `wxGtkImage` -- which derives from it
+specifically so it can pick the right bitmap variant for the scale factor and
+enabled state at draw time -- has no GTK4 form. This is the same blocker
+already recorded for `menu.cpp`.
+
+The choice it made is now made eagerly instead: `wxToolBarTool::SetImage()`
+picks the variant and hands it to a plain `GtkImage` as a `GdkTexture`. The
+consequence is that `DoEnableTool()` has to call `SetImage()` as well, since
+the disabled bitmap is no longer chosen lazily when the widget draws.
+
+### Smaller consequences
+
+* **Tool content is ours to build.** There is no `GtkToolbarStyle` deciding
+  icons vs text vs both, and no "is important" flag controlling whether a label
+  shows beside the icon in a horizontal layout. A button contains exactly the
+  widgets put in it, so `wxTB_NOICONS`, `wxTB_TEXT` and `wxTB_HORZ_LAYOUT` are
+  honoured by rebuilding each button's child. Changing the toolbar style or a
+  tool's label now rebuilds that content.
+* **No overflow arrow.** `DoGetBestSize()` loses its workaround -- the GTK3
+  code disabled the arrow around the measurement because `GtkToolbar` otherwise
+  reported only the arrow's size, and called that "gross". A box just reports
+  its children.
+* **`wxTB_DOCKABLE` does nothing.** `GtkHandleBox` was already gone in GTK3.19.7.
+* **Inline toolbar styling is gone.** `wxAddRemoveCtrl` used
+  `GTK_STYLE_CLASS_INLINE_TOOLBAR` plus style context junction sides to make its
+  toolbar look like GNOME's; neither survived the move to CSS styling, so it
+  gets a plain toolbar.
+* **Insertion by position takes a walk.** `GtkBox` only inserts relative to a
+  sibling, so a helper walks the children to find the one at `pos - 1`. That the
+  walk order matches insertion order is now also a CI invariant.
+
+### What is left
+
+| File | Errors | Why |
+|---|---|---|
+| `clipbrd.cpp` | 62 | `GdkAtom`/selection model replaced by `GdkClipboard` |
+| `radiobox.cpp` | 58 | `GtkRadioButton` removed |
+| `dataview.cpp` | 55 | cell renderers, `GdkWindow` |
+
+Plus the tail of smaller files. `test_gui` still cannot link, so none of this
+is runtime-verified.

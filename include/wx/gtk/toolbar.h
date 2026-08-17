@@ -69,7 +69,19 @@ public:
     // implementation from now on
     // --------------------------
 
+#ifdef __WXGTK4__
+    // GTK4 removed GtkToolbar along with the whole GtkToolItem family: a
+    // toolbar is a GtkBox carrying the "toolbar" style class now, holding
+    // ordinary buttons. See docs/gtk/gtk4-status.md.
+    GtkWidget* GTKGetToolbar() const { return m_toolbar; }
+
+    // (Re)build the contents of a tool's button -- its image and/or its label,
+    // as the toolbar's style flags ask for. GTK4 buttons hold exactly what we
+    // put in them, so a change of label or of style means rebuilding this.
+    void GTKUpdateToolContent(wxToolBarToolBase* tool);
+#else
     GtkToolbar* GTKGetToolbar() const { return m_toolbar; }
+#endif
 
 protected:
     // choose the default border for this window
@@ -91,11 +103,25 @@ protected:
 private:
     void Init();
     void GtkSetStyle();
+#ifdef __WXGTK4__
+    // The tool whose widget is at this position in the toolbar box, or null.
+    wxToolBarToolBase* GTKGetToolAt(size_t pos) const;
+
+    // The button to group a radio tool inserted at this position with, or null
+    // if it starts a new group. GTK4 groups toggle buttons by pointing one at
+    // another rather than by passing around a GSList.
+    struct _GtkToggleButton* GetRadioGroup(size_t pos);
+#else
     GSList* GetRadioGroup(size_t pos);
+#endif
     virtual void AddChildGTK(wxWindowGTK* child) override;
 
+#ifdef __WXGTK4__
+    GtkWidget* m_toolbar;
+#else
     GtkToolbar* m_toolbar;
     GtkTooltips* m_tooltips;
+#endif
 
     wxDECLARE_DYNAMIC_CLASS(wxToolBar);
 };

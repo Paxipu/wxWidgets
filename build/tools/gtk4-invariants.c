@@ -607,6 +607,74 @@ static void test_menu_model_mechanics(void)
     gtk_window_destroy(GTK_WINDOW(win));
 }
 
+/* ------------------------------------------------------------------------
+ * Toolbars.
+ *
+ * GTK4 removed GtkToolbar and every GtkToolItem subclass, so src/gtk/toolbar.cpp
+ * builds a toolbar from a GtkBox and plain buttons. Two properties of that
+ * substitution are load-bearing and neither is obvious.
+ * ------------------------------------------------------------------------ */
+
+static void test_toolbar_substitutes(void)
+{
+    GtkWidget* win;
+    GtkWidget* box;
+    GtkWidget* b[3];
+    int i, active;
+
+    printf("Toolbar building blocks:\n");
+
+    win = gtk_window_new();
+    box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_add_css_class(box, "toolbar");
+    gtk_window_set_child(GTK_WINDOW(win), box);
+
+    for (i = 0; i < 3; i++)
+    {
+        b[i] = gtk_toggle_button_new();
+        if (i)
+        {
+            gtk_toggle_button_set_group(GTK_TOGGLE_BUTTON(b[i]),
+                                        GTK_TOGGLE_BUTTON(b[0]));
+        }
+        gtk_box_append(GTK_BOX(box), b[i]);
+    }
+
+    gtk_window_present(GTK_WINDOW(win));
+    for (i = 0; i < 100; i++)
+        g_main_context_iteration(NULL, FALSE);
+
+    /* This is the one that bites. GTK3's gtk_radio_tool_button_new() activated
+     * the first button of a group by itself, and wxToolBar relied on it; GTK4's
+     * grouped toggle buttons do not, so toolbar.cpp activates it explicitly. If
+     * GTK ever starts doing it again, that becomes a double activation. */
+    check(!gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(b[0])),
+          "a grouped toggle button is NOT active by default",
+          "wxToolBar now activates the first radio tool twice");
+
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(b[1]), TRUE);
+    for (i = 0; i < 50; i++)
+        g_main_context_iteration(NULL, FALSE);
+
+    active = 0;
+    for (i = 0; i < 3; i++)
+        if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(b[i])))
+            active++;
+
+    check(active == 1,
+          "grouped toggle buttons are mutually exclusive",
+          "radio tools no longer deselect each other");
+
+    /* GtkBox only inserts relative to a sibling, so toolbar.cpp walks the
+     * children to find one; that walk assumes stable first/next-sibling order. */
+    check(gtk_widget_get_first_child(box) == b[0] &&
+          gtk_widget_get_next_sibling(b[0]) == b[1],
+          "GtkBox children enumerate in insertion order",
+          "inserting a tool at a given position puts it in the wrong place");
+
+    gtk_window_destroy(GTK_WINDOW(win));
+}
+
 int main(void)
 {
     if (!gtk_init_check())
@@ -634,6 +702,8 @@ int main(void)
     test_theme_colour_names();
     printf("\n");
     test_menu_model_mechanics();
+    printf("\n");
+    test_toolbar_substitutes();
 #ifdef HAVE_XTEST
     printf("\n");
     test_gesture_claim_semantics();

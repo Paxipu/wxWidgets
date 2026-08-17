@@ -201,8 +201,63 @@ gtk_move_slider(GtkRange*, GtkScrollType scrollType, wxSlider* win)
 }
 
 //-----------------------------------------------------------------------------
-// "button_press_event"
+// mouse button tracking, and the "after the release was handled" hook
 //-----------------------------------------------------------------------------
+
+// Both of these do the same thing under GTK3 and GTK4, but they have to hook
+// into completely different places: GTK3 uses the GdkEvent-level signals of
+// the scale widget, which GTK4 removed, so there we use a click gesture and
+// an idle source instead.
+//
+// The thumb release processing deliberately does not happen directly in the
+// button release handler: it has to run *after* GtkRange itself has seen the
+// release and settled on its final value, as otherwise the value we force to
+// an integral position below is immediately overwritten again by the range.
+// GTK3 offered "event-after" for exactly this; GTK4 has no equivalent signal,
+// so we defer to an idle source, which likewise runs once the current event
+// has been fully delivered.
+
+#ifdef __WXGTK4__
+
+extern "C" {
+static void
+wx_slider_pressed(GtkGestureClick*, int, double, double, wxSlider* win)
+{
+    win->m_mouseButtonDown = true;
+}
+
+static gboolean
+wx_slider_after_release(void* data)
+{
+    wxSlider* const win = static_cast<wxSlider*>(data);
+    win->m_afterReleaseIdle = 0;
+
+    if (win->m_needThumbRelease)
+    {
+        win->m_needThumbRelease = false;
+        ProcessScrollEvent(win, wxEVT_SCROLL_THUMBRELEASE);
+    }
+    // Keep slider at an integral position
+    wxGtkEventsDisabler<wxSlider> noEvents(win);
+    gtk_range_set_value(GTK_RANGE (win->m_scale), win->GetValue());
+
+    return G_SOURCE_REMOVE;
+}
+
+static void
+wx_slider_released(GtkGestureClick*, int, double, double, wxSlider* win)
+{
+    win->m_mouseButtonDown = false;
+    if (win->m_isScrolling)
+    {
+        win->m_isScrolling = false;
+        if (win->m_afterReleaseIdle == 0)
+            win->m_afterReleaseIdle = g_idle_add(wx_slider_after_release, win);
+    }
+}
+}
+
+#else // !__WXGTK4__
 
 extern "C" {
 static gboolean
@@ -212,13 +267,7 @@ gtk_button_press_event(GtkWidget*, GdkEventButton*, wxSlider* win)
 
     return false;
 }
-}
 
-//-----------------------------------------------------------------------------
-// "event_after"
-//-----------------------------------------------------------------------------
-
-extern "C" {
 static void
 gtk_event_after(GtkRange* range, GdkEvent* event, wxSlider* win)
 {
@@ -236,13 +285,7 @@ gtk_event_after(GtkRange* range, GdkEvent* event, wxSlider* win)
         gtk_range_set_value(GTK_RANGE (win->m_scale), win->GetValue());
     }
 }
-}
 
-//-----------------------------------------------------------------------------
-// "button_release_event"
-//-----------------------------------------------------------------------------
-
-extern "C" {
 static gboolean
 gtk_button_release_event(GtkRange* range, GdkEventButton*, wxSlider* win)
 {
@@ -255,6 +298,8 @@ gtk_button_release_event(GtkRange* range, GdkEventButton*, wxSlider* win)
     return false;
 }
 }
+
+#endif // __WXGTK4__/!__WXGTK4__
 
 //-----------------------------------------------------------------------------
 // "format_value"
@@ -281,6 +326,11 @@ wxSlider::~wxSlider()
 {
     if (m_scale && m_scale != m_widget)
         GTKDisconnect(m_scale);
+
+#ifdef __WXGTK4__
+    if (m_afterReleaseIdle)
+        g_source_remove(m_afterReleaseIdle);
+#endif // __WXGTK4__
 }
 
 void wxSlider::Init()
@@ -290,6 +340,9 @@ void wxSlider::Init()
     m_blockScrollEvent = false;
     m_tickFreq = 0;
     m_scale = nullptr;
+#ifdef __WXGTK4__
+    m_afterReleaseIdle = 0;
+#endif // __WXGTK4__
 }
 
 bool wxSlider::Create(wxWindow *parent,
@@ -393,10 +446,19 @@ bool wxSlider::Create(wxWindow *parent,
         {
             // The value label causes the slider to be somewhat off-center,
             // try to keep the labels approximately aligned with it.
+#ifdef __WXGTK4__
+            // GtkMisc is gone; for labels its alignment was always just the
+            // label's own xalign/yalign properties anyhow.
+            gtk_label_set_xalign(GTK_LABEL(m_minLabel), xAlign);
+            gtk_label_set_yalign(GTK_LABEL(m_minLabel), yAlign);
+            gtk_label_set_xalign(GTK_LABEL(m_maxLabel), xAlign);
+            gtk_label_set_yalign(GTK_LABEL(m_maxLabel), yAlign);
+#else // !__WXGTK4__
             wxGCC_WARNING_SUPPRESS(deprecated-declarations)
             gtk_misc_set_alignment(GTK_MISC(m_minLabel), xAlign, yAlign);
             gtk_misc_set_alignment(GTK_MISC(m_maxLabel), xAlign, yAlign);
             wxGCC_WARNING_RESTORE()
+#endif // __WXGTK4__/!__WXGTK4__
         }
     }
 #ifdef __WXGTK3__
@@ -441,13 +503,30 @@ bool wxSlider::Create(wxWindow *parent,
     if (style & wxSL_INVERSE)
         gtk_range_set_inverted( GTK_RANGE(m_scale), TRUE );
 
+#ifdef __WXGTK4__
+    {
+        // The gesture has to run in the capture phase: GtkRange installs its
+        // own click gesture which claims the sequence, so a bubble phase one
+        // of ours would simply never see the press.
+        GtkGesture* const click = gtk_gesture_click_new();
+        gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), 0);
+        gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(click),
+                                                   GTK_PHASE_CAPTURE);
+        g_signal_connect(click, "pressed", G_CALLBACK(wx_slider_pressed), this);
+        g_signal_connect(click, "released", G_CALLBACK(wx_slider_released), this);
+        gtk_widget_add_controller(m_scale, GTK_EVENT_CONTROLLER(click));
+    }
+#else // !__WXGTK4__
     g_signal_connect(m_scale, "button_press_event", G_CALLBACK(gtk_button_press_event), this);
     g_signal_connect(m_scale, "button_release_event", G_CALLBACK(gtk_button_release_event), this);
+#endif // __WXGTK4__/!__WXGTK4__
     g_signal_connect(m_scale, "move_slider", G_CALLBACK(gtk_move_slider), this);
     g_signal_connect(m_scale, "format_value", G_CALLBACK(gtk_format_value), nullptr);
     g_signal_connect(m_scale, "value_changed", G_CALLBACK(gtk_value_changed), this);
+#ifndef __WXGTK4__
     gulong handler_id = g_signal_connect(m_scale, "event_after", G_CALLBACK(gtk_event_after), this);
     g_signal_handler_block(m_scale, handler_id);
+#endif // !__WXGTK4__
 
     SetRange( minValue, maxValue );
 

@@ -121,15 +121,13 @@ gtk_listitem_changed_callback(GtkTreeSelection * WXUNUSED(selection),
 // "key_press_event"
 //-----------------------------------------------------------------------------
 
-extern "C" {
-static gboolean
-gtk_listbox_key_press_callback( GtkWidget *WXUNUSED(widget),
-                                GdkEventKey *gdk_event,
-                                wxListBox *listbox )
+// Shared by both key handlers below, which differ only in how GTK tells them
+// which key was pressed.
+static gboolean wxGTKListBoxHandleKey(wxListBox* listbox, guint keyval)
 {
-    if ((gdk_event->keyval == GDK_KEY_Return) ||
-        (gdk_event->keyval == GDK_KEY_ISO_Enter) ||
-        (gdk_event->keyval == GDK_KEY_KP_Enter))
+    if ((keyval == GDK_KEY_Return) ||
+        (keyval == GDK_KEY_ISO_Enter) ||
+        (keyval == GDK_KEY_KP_Enter))
     {
         int index = -1;
         if (!listbox->HasMultipleSelection())
@@ -167,6 +165,28 @@ gtk_listbox_key_press_callback( GtkWidget *WXUNUSED(widget),
 
     return FALSE;
 }
+
+extern "C" {
+#ifdef __WXGTK4__
+// GTK4 has no key-press-event: keys arrive through a GtkEventControllerKey.
+static gboolean
+gtk_listbox_key_press_callback( GtkEventControllerKey* WXUNUSED(controller),
+                                guint keyval,
+                                guint WXUNUSED(keycode),
+                                GdkModifierType WXUNUSED(state),
+                                wxListBox *listbox )
+{
+    return wxGTKListBoxHandleKey(listbox, keyval);
+}
+#else
+static gboolean
+gtk_listbox_key_press_callback( GtkWidget *WXUNUSED(widget),
+                                GdkEventKey *gdk_event,
+                                wxListBox *listbox )
+{
+    return wxGTKListBoxHandleKey(listbox, gdk_event->keyval);
+}
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 //-----------------------------------------------------------------------------
@@ -361,7 +381,12 @@ bool wxListBox::Create( wxWindow *parent, wxWindowID id,
     }
 
 
+#ifdef __WXGTK4__
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(m_widget),
+                                  GTK_WIDGET(m_treeview));
+#else
     gtk_container_add (GTK_CONTAINER (m_widget), GTK_WIDGET(m_treeview) );
+#endif
 
     gtk_widget_show( GTK_WIDGET(m_treeview) );
     m_focusWidget = GTK_WIDGET(m_treeview);
@@ -373,9 +398,18 @@ bool wxListBox::Create( wxWindow *parent, wxWindowID id,
                      G_CALLBACK(gtk_listbox_row_activated_callback), this);
 
     // for intercepting dclick generation by <ENTER>
+#ifdef __WXGTK4__
+    {
+        GtkEventController* const key = gtk_event_controller_key_new();
+        g_signal_connect (key, "key-pressed",
+                          G_CALLBACK (gtk_listbox_key_press_callback), this);
+        gtk_widget_add_controller(GTK_WIDGET(m_treeview), key);
+    }
+#else
     g_signal_connect (m_treeview, "key_press_event",
                       G_CALLBACK (gtk_listbox_key_press_callback),
                            this);
+#endif
     m_parent->DoAddChild( this );
 
     PostCreation(size);
@@ -422,12 +456,18 @@ void wxListBox::Update()
 {
     wxWindow::Update();
 
+#ifndef __WXGTK4__
+    // There is no way to force a synchronous repaint under GTK4: rendering is
+    // driven entirely by the frame clock and gdk_window_process_updates() has
+    // no replacement. wxWindow::Update() above has already queued the redraw,
+    // which is all that can be asked for.
     if (m_treeview)
     {
         wxGCC_WARNING_SUPPRESS(deprecated-declarations)
         gdk_window_process_updates(gtk_widget_get_window(GTK_WIDGET(m_treeview)), true);
         wxGCC_WARNING_RESTORE(deprecated-declarations)
     }
+#endif // !__WXGTK4__
 }
 
 // ----------------------------------------------------------------------------
@@ -748,9 +788,14 @@ void wxListBox::DoScrollToCell(int n, float alignY, float alignX)
     wxCHECK_RET( m_treeview, wxT("invalid listbox") );
     wxCHECK_RET( IsValid(n), wxT("invalid index"));
 
+#ifndef __WXGTK4__
     //RN: I have no idea why this line is needed...
+    //
+    // GTK4 removed widget grabs entirely -- there is nothing left to ask about
+    // -- so this check is simply gone there.
     if (gtk_widget_has_grab(GTK_WIDGET(m_treeview)))
         return;
+#endif // !__WXGTK4__
 
     GtkTreeIter iter;
     if ( !GTKGetIteratorFor(n, &iter) )
@@ -837,16 +882,28 @@ int wxListBox::DoListHitTest(const wxPoint& point) const
         return wxNOT_FOUND;
 
     // need to translate from master window since it is in client coords
+#ifdef __WXGTK4__
+    // gtk_tree_view_get_bin_window() went away with GdkWindow, but the
+    // conversion it was being used for has its own function.
+    gint binPosX, binPosY;
+    gtk_tree_view_convert_widget_to_bin_window_coords(m_treeview,
+                                                      point.x, point.y,
+                                                      &binPosX, &binPosY);
+#else
     gint binx, biny;
     gdk_window_get_geometry(gtk_tree_view_get_bin_window(m_treeview),
                             &binx, &biny, nullptr, nullptr);
+
+    const gint binPosX = point.x - binx;
+    const gint binPosY = point.y - biny;
+#endif // __WXGTK4__/!__WXGTK4__
 
     wxGtkTreePath path;
     if ( !gtk_tree_view_get_path_at_pos
           (
             m_treeview,
-            point.x - binx,
-            point.y - biny,
+            binPosX,
+            binPosY,
             path.ByRef(),
             nullptr,   // [out] column (always 0 here)
             nullptr,   // [out] x-coord relative to the cell (not interested)

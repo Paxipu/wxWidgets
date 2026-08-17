@@ -43,6 +43,13 @@ wxgtk_button_clicked_callback(GtkWidget *WXUNUSED(widget), wxButton *button)
 // "style_set" from m_widget
 //-----------------------------------------------------------------------------
 
+// GTK4 has neither the "style-set" signal, nor GtkStyle, nor style properties
+// such as "default_border" -- and, more to the point, no longer needs any of
+// them here: the extra room a default button used to occupy is now drawn from
+// CSS within the button's own allocation, so there is nothing to compensate
+// for.  See the matching comment in wxWindowGTK::DoMoveWindow().
+#ifndef __WXGTK4__
+
 static void
 wxgtk_button_style_set_callback(GtkWidget* widget, GtkStyle*, wxButton* win)
 {
@@ -63,6 +70,8 @@ wxgtk_button_style_set_callback(GtkWidget* widget, GtkStyle*, wxButton* win)
         }
     }
 }
+
+#endif // !__WXGTK4__
 
 } // extern "C"
 
@@ -162,9 +171,11 @@ bool wxButton::Create(wxWindow *parent,
                             G_CALLBACK (wxgtk_button_clicked_callback),
                             this);
 
+#ifndef __WXGTK4__
     g_signal_connect_after (m_widget, "style_set",
                             G_CALLBACK (wxgtk_button_style_set_callback),
                             this);
+#endif // !__WXGTK4__
 
     m_parent->DoAddChild( this );
 
@@ -178,11 +189,22 @@ wxWindow *wxButton::SetDefault()
 {
     wxWindow *oldDefault = wxButtonBase::SetDefault();
 
+#ifdef __WXGTK4__
+    // gtk_widget_set_can_default() and gtk_widget_grab_default() are both
+    // gone: being the default is no longer a property of the widget at all,
+    // but of the window, and any widget can be made the default one.  Note
+    // that this means the "can be default but isn't" state doesn't exist any
+    // more either, which is what the size adjustment below used to be for.
+    GtkRoot* const root = gtk_widget_get_root(m_widget);
+    if ( GTK_IS_WINDOW(root) )
+        gtk_window_set_default_widget(GTK_WINDOW(root), m_widget);
+#else // !__WXGTK4__
     gtk_widget_set_can_default(m_widget, TRUE);
     gtk_widget_grab_default( m_widget );
 
     // resize for default border
     wxgtk_button_style_set_callback( m_widget, nullptr, this );
+#endif // __WXGTK4__/!__WXGTK4__
 
     return oldDefault;
 }
@@ -372,6 +394,12 @@ void wxButton::DoApplyWidgetStyle(GtkRcStyle *style)
 
 wxSize wxButton::DoGetBestSize() const
 {
+#ifdef __WXGTK4__
+    // Under GTK4 the default button is not any bigger than the others: the
+    // default indication is drawn from CSS inside the button's own allocation,
+    // so there is nothing to compensate for here, see SetDefault().
+    wxSize ret( wxAnyButton::DoGetBestSize() );
+#else // !__WXGTK4__
     // the default button in wxGTK is bigger than the other ones because of an
     // extra border around it, but we don't want to take it into account in
     // our size calculations (otherwise the result is visually ugly), so
@@ -390,6 +418,7 @@ wxSize wxButton::DoGetBestSize() const
         // set it back again
         gtk_widget_set_can_default(m_widget, TRUE);
     }
+#endif // __WXGTK4__/!__WXGTK4__
 
     if (!HasFlag(wxBU_EXACTFIT))
     {

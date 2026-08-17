@@ -830,6 +830,57 @@ static const char* indicator_node_name(GtkWidget* button)
     return child ? gtk_widget_get_css_name(child) : "";
 }
 
+/* src/gtk/choice.cpp has to reach the widget inside a GtkComboBoxText which
+ * actually receives pointer events, because the combo box itself does not.
+ * It does so by walking up two levels from gtk_combo_box_get_child(), which
+ * is exactly what the GTK3 code did through gtk_bin_get_child().  None of the
+ * widgets in between are public API, so nothing but a test keeps us honest if
+ * GTK rearranges them.
+ *
+ * See docs/gtk/probes/gtk4-combobox-tree.c for the tree this was derived from.
+ */
+static void test_combo_box_internals(void)
+{
+    GtkWidget* combo;
+    GtkWidget* child;
+    GtkWidget* parent;
+    GtkWidget* grandparent;
+
+    printf("GtkComboBoxText internal structure:\n");
+
+    combo = gtk_combo_box_text_new();
+    g_object_ref_sink(combo);
+
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(combo), "item");
+    gtk_combo_box_set_active(GTK_COMBO_BOX(combo), 0);
+
+    child = gtk_combo_box_get_child(GTK_COMBO_BOX(combo));
+    check(child != NULL,
+          "gtk_combo_box_get_child() reports the cell view of a text combo",
+          "choice.cpp has no way in to the combo box internals at all");
+
+    check(child != NULL && GTK_IS_CELL_VIEW(child),
+          "that child is a GtkCellView, as it was under GTK3",
+          "choice.cpp's DoGetSizeFromTextSize() distinguishes cell view from "
+          "entry to tell wxChoice from wxComboBox");
+
+    parent = child ? gtk_widget_get_parent(child) : NULL;
+    grandparent = parent ? gtk_widget_get_parent(parent) : NULL;
+
+    check(grandparent != NULL && GTK_IS_TOGGLE_BUTTON(grandparent),
+          "the cell view's grandparent is the GtkToggleButton",
+          "choice.cpp would attach its motion controller to the wrong widget "
+          "and wxChoice would stop reporting enter/leave events");
+
+    /* Negative control: the intermediate widget is not itself the button, so
+     * a one-level walk really would be wrong rather than accidentally right. */
+    check(parent != NULL && !GTK_IS_TOGGLE_BUTTON(parent),
+          "one level up is not already the toggle button",
+          "the two-level walk in choice.cpp may be off by one");
+
+    g_object_unref(combo);
+}
+
 static void test_indicator_nodes(void)
 {
     GtkWidget* checkbtn;
@@ -910,6 +961,8 @@ int main(void)
     test_clipboard_sync_bridge();
     printf("\n");
     test_indicator_nodes();
+    printf("\n");
+    test_combo_box_internals();
 #ifdef HAVE_XTEST
     printf("\n");
     test_gesture_claim_semantics();

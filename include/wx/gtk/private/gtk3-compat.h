@@ -314,6 +314,31 @@ static inline GdkSurface* wx_gtk_widget_get_surface(GtkWidget* widget)
 #define gtk_widget_set_margin_left(w, m)  gtk_widget_set_margin_start(w, m)
 #define gtk_widget_set_margin_right(w, m) gtk_widget_set_margin_end(w, m)
 
+// A GtkScrolledWindow always creates its own adjustments now, so the two
+// arguments which were almost always nullptr anyhow are gone.  Note that this
+// must stay variadic: code written for GTK4 calls it without any arguments and
+// a fixed-arity macro would silently break exactly those call sites.
+static inline GtkWidget* wx_gtk_scrolled_window_new()
+{
+    return gtk_scrolled_window_new();
+}
+#define gtk_scrolled_window_new(...) wx_gtk_scrolled_window_new()
+
+// A button's relief became a plain "does it have a frame" boolean, which is
+// all wx ever used it for anyhow.
+typedef enum
+{
+    GTK_RELIEF_NORMAL,
+    GTK_RELIEF_NONE
+} GtkReliefStyle;
+
+static inline void wx_gtk_button_set_relief(GtkButton* button,
+                                            GtkReliefStyle relief)
+{
+    gtk_button_set_has_frame(button, relief == GTK_RELIEF_NORMAL);
+}
+#define gtk_button_set_relief(b, r) wx_gtk_button_set_relief(b, r)
+
 // GTK4 dropped the widget-level child notify freeze in favour of the GObject
 // one it was always implemented in terms of.
 #define gtk_widget_freeze_child_notify(w) g_object_freeze_notify(G_OBJECT(w))

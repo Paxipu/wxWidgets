@@ -73,6 +73,12 @@ public:
     bool m_needThumbRelease;
     GtkWidget *m_scale;
 
+#ifdef __WXGTK4__
+    // Id of the idle source used to run the code which GTK3 ran from the
+    // "event-after" signal, or 0 if none is pending, see slider.cpp.
+    unsigned m_afterReleaseIdle;
+#endif // __WXGTK4__
+
 protected:
     virtual wxSize DoGetBestSize() const override;
 

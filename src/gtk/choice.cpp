@@ -35,7 +35,32 @@ gtk_choice_changed_callback( GtkWidget *WXUNUSED(widget), wxChoice *choice )
     choice->SendSelectionChangedEvent(wxEVT_CHOICE);
 }
 
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+
+// GTK4 has no crossing events: the pointer entering and leaving a widget is
+// reported by a GtkEventControllerMotion instead, exactly as in window.cpp.
+
+static void
+wx_gtk_choice_enter_notify(GtkEventControllerMotion* controller,
+                           double x, double y,
+                           wxChoice* choice)
+{
+    wxGTKImpl::WindowEnterCallback(
+        choice,
+        gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(controller)),
+        x, y);
+}
+
+static void
+wx_gtk_choice_leave_notify(GtkEventControllerMotion* controller,
+                           wxChoice* choice)
+{
+    wxGTKImpl::WindowLeaveCallback(
+        choice,
+        gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(controller)));
+}
+
+#elif defined(__WXGTK3__)
 
 static gboolean
 wx_gtk_choice_enter_notify(GtkWidget* widget,
@@ -53,8 +78,19 @@ wx_gtk_choice_leave_notify(GtkWidget* widget,
     return wxGTKImpl::WindowLeaveCallback(widget, gdk_event, choice);
 }
 
-#endif // __WXGTK3__
+#endif // __WXGTK4__/__WXGTK3__
 
+}
+
+// GtkComboBox stopped being a GtkBin under GTK4, but it kept a direct
+// accessor for the child which used to be reached through one.
+static inline GtkWidget* wxGTKComboBoxGetChild(GtkWidget* combo)
+{
+#ifdef __WXGTK4__
+    return gtk_combo_box_get_child(GTK_COMBO_BOX(combo));
+#else
+    return gtk_bin_get_child(GTK_BIN(combo));
+#endif
 }
 
 //-----------------------------------------------------------------------------
@@ -140,7 +176,10 @@ bool wxChoice::Create( wxWindow *parent, wxWindowID id,
     // which is simpler because GtkComboBoxText sets things up in such a way
     // that its only child is the GtkCellView (even if, again, this is not how
     // things really are internally).
-    auto cellView = gtk_bin_get_child(GTK_BIN(m_widget));
+    //
+    // This layout is unchanged in GTK4, which is checked for by the
+    // gtk4-invariants CI test as it is not part of any documented API.
+    auto cellView = wxGTKComboBoxGetChild(m_widget);
     wxCHECK_MSG( cellView, true, "No cell view in GtkComboBoxText?" );
 
     auto box = gtk_widget_get_parent(cellView);
@@ -149,10 +188,19 @@ bool wxChoice::Create( wxWindow *parent, wxWindowID id,
     wxCHECK_MSG( GTK_IS_TOGGLE_BUTTON(button), true,
                  "Unexpected grandparent of GtkCellView in GtkComboBoxText" );
 
+#ifdef __WXGTK4__
+    GtkEventController* const motion = gtk_event_controller_motion_new();
+    g_signal_connect(motion, "enter",
+                     G_CALLBACK(wx_gtk_choice_enter_notify), this);
+    g_signal_connect(motion, "leave",
+                     G_CALLBACK(wx_gtk_choice_leave_notify), this);
+    gtk_widget_add_controller(button, motion);
+#else
     g_signal_connect(button, "enter_notify_event",
                      G_CALLBACK(wx_gtk_choice_enter_notify), this);
     g_signal_connect(button, "leave_notify_event",
                      G_CALLBACK(wx_gtk_choice_leave_notify), this);
+#endif
 #endif // __WXGTK3__
 
     return true;
@@ -382,12 +430,23 @@ void wxChoice::SetSelection( int n )
 
 void wxChoice::SetColumns(int n)
 {
+#ifdef __WXGTK4__
+    // GTK4 dropped the wrap-width property along with the grid layout of the
+    // drop-down list it controlled, so a multi-column popup can't be asked
+    // for any more and this is a no-op. The list is always a single column.
+    wxUnusedVar(n);
+#else
     gtk_combo_box_set_wrap_width(GTK_COMBO_BOX(m_widget), n);
+#endif
 }
 
 int wxChoice::GetColumns() const
 {
+#ifdef __WXGTK4__
+    return 1; // see SetColumns()
+#else
     return gtk_combo_box_get_wrap_width(GTK_COMBO_BOX(m_widget));
+#endif
 }
 
 void wxChoice::GTKDisableEvents()
@@ -422,7 +481,7 @@ wxSize wxChoice::DoGetSizeFromTextSize(int xlen, int ylen) const
     wxASSERT_MSG( m_widget, wxS("GetSizeFromTextSize called before creation") );
 
     // a GtkEntry for wxComboBox and a GtkCellView for wxChoice
-    GtkWidget* childPart = gtk_bin_get_child(GTK_BIN(m_widget));
+    GtkWidget* childPart = wxGTKComboBoxGetChild(m_widget);
 
 #ifdef __WXGTK3__
     // Preferred size for wxChoice can be incorrect when control is empty,
@@ -479,7 +538,7 @@ wxSize wxChoice::DoGetSizeFromTextSize(int xlen, int ylen) const
 void wxChoice::DoApplyWidgetStyle(GtkRcStyle *style)
 {
     GTKApplyStyle(m_widget, style);
-    GTKApplyStyle(gtk_bin_get_child(GTK_BIN(m_widget)), style);
+    GTKApplyStyle(wxGTKComboBoxGetChild(m_widget), style);
 }
 
 // static

@@ -27,12 +27,24 @@ extern bool           g_blockEventsOnDrag;
 //-----------------------------------------------------------------------------
 
 extern "C" {
+#ifdef __WXGTK4__
+// GtkCheckButton is not a GtkToggleButton any more under GTK4 -- the two are
+// now unrelated widgets -- and it reports the change as "toggled" rather than
+// as "clicked".
+static
+void gtk_radiobutton_clicked_callback( GtkCheckButton *button, wxRadioButton *rb )
+{
+    if (g_blockEventsOnDrag) return;
+
+    if (!gtk_check_button_get_active(button)) return;
+#else
 static
 void gtk_radiobutton_clicked_callback( GtkToggleButton *button, wxRadioButton *rb )
 {
     if (g_blockEventsOnDrag) return;
 
     if (!gtk_toggle_button_get_active(button)) return;
+#endif
 
     wxCommandEvent event( wxEVT_RADIOBUTTON, rb->GetId());
     event.SetInt( rb->GetValue() );
@@ -64,7 +76,13 @@ bool wxRadioButton::Create( wxWindow *parent,
     // Check if this radio button should be put into an existing group. This
     // shouldn't be done if it's given a style to explicitly start a new group
     // or if it's not meant to be a part of a group at all.
+#ifdef __WXGTK4__
+    // A group is identified by any one of its members under GTK4, instead of
+    // by a GSList holding all of them.
+    GtkWidget* radioButtonGroup = nullptr;
+#else
     GSList* radioButtonGroup = nullptr;
+#endif
     if (!HasFlag(wxRB_GROUP) && !HasFlag(wxRB_SINGLE))
     {
         // search backward for last group start
@@ -84,8 +102,12 @@ bool wxRadioButton::Create( wxWindow *parent,
                 // wxRB_SINGLE ones as their group should never be shared.
                 if (!child->HasFlag(wxRB_SINGLE))
                 {
+#ifdef __WXGTK4__
+                    radioButtonGroup = child->m_widget;
+#else
                     radioButtonGroup = gtk_radio_button_get_group(
                         GTK_RADIO_BUTTON(child->m_widget));
+#endif
                 }
 
                 break;
@@ -96,6 +118,30 @@ bool wxRadioButton::Create( wxWindow *parent,
     // GTK does not allow a radio button to be inactive if it is the only radio
     // button in its group, so we need to work around this by creating a second
     // hidden radio button.
+#ifdef __WXGTK4__
+    m_widget = gtk_check_button_new_with_label( label.utf8_str() );
+
+    if (HasFlag(wxRB_SINGLE))
+    {
+        m_hiddenButton = gtk_check_button_new();
+        g_object_ref_sink(m_hiddenButton);
+
+        gtk_check_button_set_group( GTK_CHECK_BUTTON(m_widget),
+                                    GTK_CHECK_BUTTON(m_hiddenButton) );
+    }
+    else if (radioButtonGroup)
+    {
+        gtk_check_button_set_group( GTK_CHECK_BUTTON(m_widget),
+                                    GTK_CHECK_BUTTON(radioButtonGroup) );
+    }
+
+    // Unlike GTK3, GTK4 doesn't make the first button of a group active by
+    // itself, so a group would start out with nothing selected at all -- do it
+    // explicitly.  For wxRB_SINGLE this also ensures that it is this button and
+    // not the hidden one which starts out active, which GTK3 needed too.
+    if (HasFlag(wxRB_SINGLE) || !radioButtonGroup)
+        gtk_check_button_set_active( GTK_CHECK_BUTTON(m_widget), TRUE );
+#else // !__WXGTK4__
     if (HasFlag(wxRB_SINGLE))
     {
         m_hiddenButton = gtk_radio_button_new( nullptr );
@@ -108,13 +154,19 @@ bool wxRadioButton::Create( wxWindow *parent,
     {
         m_widget = gtk_radio_button_new_with_label( radioButtonGroup, label.utf8_str() );
     }
+#endif // __WXGTK4__/!__WXGTK4__
 
     g_object_ref(m_widget);
 
     SetLabel(label);
 
+#ifdef __WXGTK4__
+    g_signal_connect_after (m_widget, "toggled",
+                            G_CALLBACK (gtk_radiobutton_clicked_callback), this);
+#else
     g_signal_connect_after (m_widget, "clicked",
                             G_CALLBACK (gtk_radiobutton_clicked_callback), this);
+#endif
 
     m_parent->DoAddChild( this );
 
@@ -123,6 +175,18 @@ bool wxRadioButton::Create( wxWindow *parent,
     return true;
 }
 
+#ifdef __WXGTK4__
+
+wxRadioButton::~wxRadioButton()
+{
+    // This one is never added to any widget hierarchy, so nothing else will
+    // ever drop the reference we took on it in Create().
+    if ( m_hiddenButton )
+        g_object_unref(m_hiddenButton);
+}
+
+#endif // __WXGTK4__
+
 void wxRadioButton::SetLabel( const wxString& label )
 {
     wxCHECK_RET( m_widget != nullptr, wxT("invalid radiobutton") );
@@ -130,7 +194,15 @@ void wxRadioButton::SetLabel( const wxString& label )
     // save the original label
     wxControlBase::SetLabel(label);
 
+#ifdef __WXGTK4__
+    // GtkCheckButton owns its label internally under GTK4: there is no child
+    // GtkLabel to reach for.
+    const wxString labelGTK = GTKConvertMnemonics(label);
+    gtk_check_button_set_use_underline( GTK_CHECK_BUTTON(m_widget), TRUE );
+    gtk_check_button_set_label( GTK_CHECK_BUTTON(m_widget), labelGTK.utf8_str() );
+#else
     GTKSetLabelForLabel(GTK_LABEL(gtk_bin_get_child(GTK_BIN(m_widget))), label);
+#endif
 }
 
 void wxRadioButton::SetValue( bool val )
@@ -145,7 +217,11 @@ void wxRadioButton::SetValue( bool val )
 
     if (val)
     {
+#ifdef __WXGTK4__
+        gtk_check_button_set_active( GTK_CHECK_BUTTON(m_widget), TRUE );
+#else
         gtk_toggle_button_set_active( GTK_TOGGLE_BUTTON(m_widget), TRUE );
+#endif
     }
     else
     {
@@ -154,7 +230,13 @@ void wxRadioButton::SetValue( bool val )
         // manually, which is implemented by turning a hidden button on, as
         // it's the only way to do it with GTK.
         if (HasFlag(wxRB_SINGLE))
+        {
+#ifdef __WXGTK4__
+            gtk_check_button_set_active( GTK_CHECK_BUTTON(m_hiddenButton), TRUE );
+#else
             gtk_toggle_button_set_active( GTK_TOGGLE_BUTTON(m_hiddenButton), TRUE );
+#endif
+        }
     }
 
     g_signal_handlers_unblock_by_func(
@@ -165,7 +247,11 @@ bool wxRadioButton::GetValue() const
 {
     wxCHECK_MSG( m_widget != nullptr, false, wxT("invalid radiobutton") );
 
+#ifdef __WXGTK4__
+    return gtk_check_button_get_active(GTK_CHECK_BUTTON(m_widget)) != 0;
+#else
     return gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(m_widget)) != 0;
+#endif
 }
 
 void wxRadioButton::DoEnable(bool enable)
@@ -175,7 +261,12 @@ void wxRadioButton::DoEnable(bool enable)
 
     base_type::DoEnable(enable);
 
+#ifndef __WXGTK4__
+    // The label is a child widget of its own under GTK3 and needs to follow;
+    // under GTK4 it belongs to the GtkCheckButton itself, which base_type has
+    // already taken care of.
     gtk_widget_set_sensitive(gtk_bin_get_child(GTK_BIN(m_widget)), enable);
+#endif
 
     if (enable)
         GTKFixSensitivity();
@@ -184,7 +275,9 @@ void wxRadioButton::DoEnable(bool enable)
 void wxRadioButton::DoApplyWidgetStyle(GtkRcStyle *style)
 {
     GTKApplyStyle(m_widget, style);
+#ifndef __WXGTK4__
     GTKApplyStyle(gtk_bin_get_child(GTK_BIN(m_widget)), style);
+#endif
 }
 
 #ifndef __WXGTK4__
@@ -199,7 +292,11 @@ wxRadioButton::GTKGetWindow(wxArrayGdkWindows& WXUNUSED(windows)) const
 wxVisualAttributes
 wxRadioButton::GetClassDefaultAttributes(wxWindowVariant WXUNUSED(variant))
 {
+#ifdef __WXGTK4__
+    return GetDefaultAttributesFromGTKWidget(gtk_check_button_new_with_label(""));
+#else
     return GetDefaultAttributesFromGTKWidget(gtk_radio_button_new_with_label(nullptr, ""));
+#endif
 }
 
 

@@ -40,6 +40,25 @@ public:
 
     // implementation
 
+#ifdef __WXGTK4__
+    // GTK4 replaced the drag_* signals, GdkDragContext and GtkSelectionData
+    // with a GtkDropTargetAsync controller, a GdkDrop, and an asynchronous
+    // read of the dropped data. A drop therefore no longer arrives with its
+    // data attached: it has to be fetched, which GetData() does synchronously
+    // over a nested main loop, as wxClipboard does.
+    wxDataFormat::NativeFormat GTKGetMatchingPair(bool quiet = false);
+    wxDragResult GTKFigureOutSuggestedAction();
+
+    void GtkRegisterWidget( GtkWidget *widget );
+    void GtkUnregisterWidget( GtkWidget *widget );
+
+    GdkDrop            *m_drop;
+    GtkWidget          *m_dragWidget;
+    bool                m_firstMotion;
+
+    void GTKSetDrop( GdkDrop* drop ) { m_drop = drop; }
+    void GTKSetDragWidget( GtkWidget *w ) { m_dragWidget = w; }
+#else
     GdkAtom GTKGetMatchingPair(bool quiet = false);
     wxDragResult GTKFigureOutSuggestedAction();
 
@@ -56,6 +75,7 @@ public:
     void GTKSetDragWidget( GtkWidget *w ) { m_dragWidget = w; }
     void GTKSetDragData( GtkSelectionData *sd ) { m_dragData = sd; }
     void GTKSetDragTime(unsigned time) { m_dragTime = time; }
+#endif // __WXGTK4__/!__WXGTK4__
 };
 
 //-------------------------------------------------------------------------
@@ -96,15 +116,25 @@ public:
 
     // implementation
 
+#ifdef __WXGTK4__
+    // GdkDragContext became GdkDrag, and a drag is started with
+    // gdk_drag_begin() rather than gtk_drag_begin().
+    GdkDrag* m_dragContext;
+#else
     GdkDragContext* m_dragContext;
+#endif
     wxDragResult m_retValue;
     bool m_waiting;
 
 private:
+#ifndef __WXGTK4__
     void PrepareIcon( int action, GdkDragContext *context );
+#endif
 
     GtkWidget       *m_widget;
+#ifndef __WXGTK4__
     GtkWidget       *m_iconWindow;
+#endif
     wxIcon           m_iconCopy,
                      m_iconMove,
                      m_iconNone;

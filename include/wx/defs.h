@@ -2991,6 +2991,9 @@ typedef struct _GMainLoop             GMainLoop;
 typedef struct _GtkEventController    GtkEventController;
 typedef struct _GtkShortcutController GtkShortcutController;
 typedef struct _GdkSurface            GdkSurface;
+typedef struct _GdkDrop               GdkDrop;
+typedef struct _GdkDrag               GdkDrag;
+typedef struct _GdkContentFormats     GdkContentFormats;
 typedef struct _GdkClipboard          GdkClipboard;
 typedef struct _GdkContentProvider    GdkContentProvider;
 #endif /* __WXGTK4__ */

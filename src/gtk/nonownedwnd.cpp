@@ -51,10 +51,19 @@ public:
 
     bool SetShape()
     {
+#ifdef __WXGTK4__
+        // GTK4 has no shaped windows at all: gdk_window_shape_combine_region()
+        // went away with GdkWindow and nothing took its place, the intended
+        // way to get a non-rectangular window now being to make the parts you
+        // don't want transparent instead. Report the failure rather than
+        // quietly leaving a rectangular window behind.
+        return false;
+#else
         if ( m_win->m_wxwindow )
             SetShapeIfNonNull(gtk_widget_get_window(m_win->m_wxwindow));
 
         return SetShapeIfNonNull(gtk_widget_get_window(m_win->m_widget));
+#endif // __WXGTK4__/!__WXGTK4__
     }
 
     // Must be overridden to indicate if the data object must stay around or if
@@ -65,6 +74,7 @@ protected:
     wxWindow* const m_win;
 
 private:
+#ifndef __WXGTK4__
     // SetShape to the given GDK window by calling DoSetShape() if it's non-null.
     bool SetShapeIfNonNull(GdkWindow* window)
     {
@@ -74,6 +84,7 @@ private:
     // SetShape the shape to the given GDK window which can be either the window
     // of m_widget or m_wxwindow of the wxWindow we're used with.
     virtual bool DoSetShape(GdkWindow* window) = 0;
+#endif // !__WXGTK4__
 
     wxDECLARE_NO_COPY_CLASS(wxNonOwnedWindowShapeImpl);
 };
@@ -90,12 +101,14 @@ public:
     virtual bool CanBeDeleted() const override { return true; }
 
 private:
+#ifndef __WXGTK4__
     virtual bool DoSetShape(GdkWindow* window) override
     {
         gdk_window_shape_combine_region(window, nullptr, 0, 0);
 
         return true;
     }
+#endif // !__WXGTK4__
 };
 
 // Version using simple wxRegion.
@@ -111,12 +124,14 @@ public:
     virtual bool CanBeDeleted() const override { return true; }
 
 private:
+#ifndef __WXGTK4__
     virtual bool DoSetShape(GdkWindow* window) override
     {
         gdk_window_shape_combine_region(window, m_region.GetRegion(), 0, 0);
 
         return true;
     }
+#endif // !__WXGTK4__
 
     wxRegion m_region;
 };
@@ -171,6 +186,7 @@ private:
         return bmp;
     }
 
+#ifndef __WXGTK4__
     virtual bool DoSetShape(GdkWindow *window) override
     {
         if (!m_mask)
@@ -186,6 +202,7 @@ private:
 
         return true;
     }
+#endif // !__WXGTK4__
 
     // Draw a shaped window border.
     void OnPaint(wxPaintEvent& event)

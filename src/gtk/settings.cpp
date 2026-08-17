@@ -1209,7 +1209,14 @@ wxColour wxSystemSettingsNative::GetColour(wxSystemColour index)
         sc.AddMenu().Bg(color);
         break;
     case wxSYS_COLOUR_MENUBAR:
+#ifdef __WXGTK4__
+        // GtkMenuBar is gone with the rest of the GtkMenu family; GTK4's
+        // replacement, GtkPopoverMenuBar, carries the same "menubar" CSS name
+        // and is what menu.cpp builds menu bars from.
+        sc.Add(GTK_TYPE_POPOVER_MENU_BAR, "menubar", "menubar", nullptr).Bg(color);
+#else
         sc.Add(GTK_TYPE_MENU_BAR, "menubar", "menubar", nullptr).Bg(color);
+#endif
         break;
     case wxSYS_COLOUR_MENUHILIGHT:
         sc.AddMenuItem().Bg(color, GTK_STATE_FLAG_PRELIGHT);
@@ -1428,10 +1435,27 @@ wxFont wxSystemSettingsNative::GetFont( wxSystemFont index )
                 if (wx_is_at_least_gtk3(10))
                     scale = gtk_widget_get_scale_factor(gs_tlw_parent);
 #endif
+#ifdef __WXGTK4__
+                // gtk_style_context_get() and GTK_STYLE_PROPERTY_FONT are both
+                // gone. The UI font is the "gtk-font-name" setting, which is
+                // where the style context read it from in the first place and
+                // which this code already watches for changes just above.
+                wxUnusedVar(scale);
+
+                gchar* fontName = nullptr;
+                g_object_get(gtk_settings_get_default(),
+                             "gtk-font-name", &fontName, nullptr);
+
+                info.description =
+                    pango_font_description_from_string(fontName ? fontName
+                                                                : "Sans 10");
+                g_free(fontName);
+#else
                 wxGtkStyleContext sc(scale);
                 sc.AddButton().AddLabel();
                 gtk_style_context_get(sc, GTK_STATE_FLAG_NORMAL,
                     GTK_STYLE_PROPERTY_FONT, &info.description, nullptr);
+#endif
 #else
                 info.description = ButtonStyle()->font_desc;
 #endif
@@ -1465,11 +1489,20 @@ wxFont wxSystemSettingsNative::GetFont( wxSystemFont index )
 
 // helper: return the GtkSettings either for the screen the current window is
 // on or for the default screen if window is null
+#ifdef __WXGTK4__
+// GdkScreen is gone: settings are per-display now, and a window is a surface.
+static GtkSettings *GetSettingsForWindowScreen(GdkSurface *window)
+{
+    return window ? gtk_settings_get_for_display(gdk_surface_get_display(window))
+                  : gtk_settings_get_default();
+}
+#else
 static GtkSettings *GetSettingsForWindowScreen(GdkWindow *window)
 {
     return window ? gtk_settings_get_for_screen(gdk_window_get_screen(window))
                   : gtk_settings_get_default();
 }
+#endif
 
 static int GetBorderWidth(wxSystemMetric index, const wxWindow* win)
 {
@@ -1492,15 +1525,35 @@ static int GetBorderWidth(wxSystemMetric index, const wxWindow* win)
 }
 
 #ifdef __WXGTK4__
-static GdkRectangle GetMonitorGeom(GdkWindow* window)
+static GdkRectangle GetMonitorGeom(GdkSurface* window)
 {
-    GdkMonitor* monitor;
+    GdkRectangle rect = { 0, 0, 0, 0 };
+
+    GdkDisplay* const display = window ? gdk_surface_get_display(window)
+                                       : gdk_display_get_default();
+    if ( !display )
+        return rect;
+
+    GdkMonitor* monitor = nullptr;
     if (window)
-        monitor = gdk_display_get_monitor_at_window(gdk_window_get_display(window), window);
+    {
+        monitor = gdk_display_get_monitor_at_surface(display, window);
+    }
     else
-        monitor = gdk_display_get_primary_monitor(gdk_display_get_default());
-    GdkRectangle rect;
-    gdk_monitor_get_geometry(monitor, &rect);
+    {
+        // gdk_display_get_primary_monitor() is gone: GTK4 takes the view that
+        // no monitor is more primary than another, so use the first one.
+        GListModel* const monitors = gdk_display_get_monitors(display);
+        if ( monitors && g_list_model_get_n_items(monitors) )
+        {
+            monitor = static_cast<GdkMonitor*>(g_list_model_get_item(monitors, 0));
+            g_object_unref(monitor); // the list model holds a reference too
+        }
+    }
+
+    if (monitor)
+        gdk_monitor_get_geometry(monitor, &rect);
+
     return rect;
 }
 #endif
@@ -1538,7 +1591,8 @@ static int GetScrollbarWidth()
     gtk_widget_measure(sb, GTK_ORIENTATION_HORIZONTAL, -1,
                        &width, nullptr, nullptr, nullptr);
     g_object_unref(sb);
-#elif defined(__WXGTK3__)
+#else // !__WXGTK4__
+#ifdef __WXGTK3__
     if (wx_is_at_least_gtk3(20))
     {
 #if GTK_CHECK_VERSION(3,10,0)
@@ -1559,21 +1613,26 @@ static int GetScrollbarWidth()
         width += GetNodeWidth(sc);
     }
     else
-#endif
+#endif // __WXGTK3__
     {
         int slider_width, trough_border;
         gtk_widget_style_get(ScrollBarWidget(),
             "slider-width", &slider_width, "trough-border", &trough_border, nullptr);
         width = slider_width + (2 * trough_border);
     }
+#endif // __WXGTK4__/!__WXGTK4__
     return width;
 }
 
 int wxSystemSettingsNative::GetMetric( wxSystemMetric index, const wxWindow* win )
 {
+#ifdef __WXGTK4__
+    GdkSurface *window = nullptr;
+#else
     GdkWindow *window = nullptr;
+#endif
     if (win)
-        window = gtk_widget_get_window(win->GetHandle());
+        window = wx_gtk_widget_get_surface_or_window(win->GetHandle());
 
     switch (index)
     {
@@ -1620,9 +1679,16 @@ int wxSystemSettingsNative::GetMetric( wxSystemMetric index, const wxWindow* win
                 if (cursor_size)
                     return cursor_size;
 
+#ifdef __WXGTK4__
+                // gdk_display_get_default_cursor_size() is gone; the setting
+                // read just above is the only remaining source, so all that is
+                // left is the value GTK itself falls back to.
+                return 24;
+#else
                 return gdk_display_get_default_cursor_size(
                             window ? gdk_window_get_display(window)
                                    : gdk_display_get_default());
+#endif
             }
 
         case wxSYS_DCLICK_X:

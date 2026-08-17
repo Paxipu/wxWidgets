@@ -332,9 +332,49 @@ void wxPopupTransientWindow::Popup(wxWindow *winFocus)
     }
 }
 
+#ifdef __WXGTK4__
+
+extern "C" {
+
+// Called when the popover GTK4 builds a wxPopupWindow out of closes itself,
+// which with autohide turned on below is how a click outside of it arrives.
+static void wx_popup_closed(GtkPopover*, wxPopupTransientWindow* popup)
+{
+    popup->GTKOnPopoverClosed();
+}
+
+} // extern "C"
+
+#endif // __WXGTK4__
+
 bool wxPopupTransientWindow::Show( bool show )
 {
-#ifdef __WXGTK__
+#ifdef __WXGTK4__
+    // GTK4 has no grabs of any kind: gtk_grab_add(), gdk_seat_grab() and
+    // gdk_pointer_grab() are all gone. What replaces them for this particular
+    // job -- keeping a popup up until the user clicks somewhere else -- is a
+    // GtkPopover's own "autohide" mode, in which GTK takes and releases the
+    // grab itself and tells us about the dismissal through "closed".
+    //
+    // wxPopupWindow leaves autohide off, as a plain wxPopupWindow is not
+    // supposed to disappear on its own; it is only the transient flavour,
+    // here, that wants it.
+    if ( show )
+    {
+        if ( !m_gtkClosedHandler )
+        {
+            m_gtkClosedHandler = g_signal_connect(m_widget, "closed",
+                                                  G_CALLBACK(wx_popup_closed),
+                                                  this);
+        }
+
+        gtk_popover_set_autohide(GTK_POPOVER(m_widget), TRUE);
+    }
+    else
+    {
+        gtk_popover_set_autohide(GTK_POPOVER(m_widget), FALSE);
+    }
+#elif defined(__WXGTK__)
     if (!show)
     {
         GdkDisplay* display = gtk_widget_get_display(m_widget);
@@ -369,7 +409,7 @@ bool wxPopupTransientWindow::Show( bool show )
 
     bool ret = wxPopupWindow::Show( show );
 
-#ifdef __WXGTK__
+#if defined(__WXGTK__) && !defined(__WXGTK4__)
     if (show)
     {
         gtk_grab_add( m_widget );

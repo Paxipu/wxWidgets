@@ -39,6 +39,7 @@
 #endif
 
 #include "wx/gtk/private.h"
+#include "wx/gtk/private/gtk3-compat.h"
 #include "wx/gtk/private/stylecontext.h"
 #include "wx/gtk/private/value.h"
 
@@ -156,6 +157,50 @@ static cairo_t* wxGetGTKDrawable(const wxDC& dc)
     wxCHECK_MSG(gc, nullptr, "cannot use wxRendererNative on wxDC of this type");
     return static_cast<cairo_t*>(gc->GetNativeContext());
 }
+
+#ifdef __WXGTK4__
+
+// GTK4 removed style properties -- gtk_widget_style_get() and
+// gtk_style_context_get_style_property() -- and the varargs
+// gtk_style_context_get() that read CSS min-width/min-height. The sizes those
+// returned are obtained here the way GTK itself obtains them, by measuring a
+// real widget of the right kind.
+//
+// "Of the right kind" matters more than it looks: grouping a GtkCheckButton is
+// what turns its "check" CSS node into a "radio" one, so measuring an
+// ungrouped button for a radio indicator would quietly give check box metrics.
+// wxGTKPrivate::GetRadioButtonWidget() is grouped for exactly this reason.
+static void wxGTKMeasureWidget(GtkWidget* widget, int* width, int* height)
+{
+    if ( width )
+    {
+        gtk_widget_measure(widget, GTK_ORIENTATION_HORIZONTAL, -1,
+                           width, nullptr, nullptr, nullptr);
+    }
+
+    if ( height )
+    {
+        gtk_widget_measure(widget, GTK_ORIENTATION_VERTICAL, -1,
+                           height, nullptr, nullptr, nullptr);
+    }
+}
+
+// The first child node of the given name, or the widget itself if it has none.
+static GtkWidget* wxGTKFindChildNode(GtkWidget* widget, const char* name)
+{
+    for ( GtkWidget* c = gtk_widget_get_first_child(widget);
+          c;
+          c = gtk_widget_get_next_sibling(c) )
+    {
+        const char* const css = gtk_widget_get_css_name(c);
+        if ( css && strcmp(css, name) == 0 )
+            return c;
+    }
+
+    return widget;
+}
+
+#endif // __WXGTK4__
 
 static const GtkStateFlags stateTypeToFlags[] = {
     GTK_STATE_FLAG_NORMAL, GTK_STATE_FLAG_ACTIVE, GTK_STATE_FLAG_PRELIGHT,
@@ -338,7 +383,13 @@ wxRendererGTK::DrawTreeItemButton(wxWindow* WXUNUSED_IN_GTK3(win),
         state |= GTK_STATE_FLAG_SELECTED;
 
     int expander_size;
+#ifdef __WXGTK4__
+    // The "expander-size" style property is gone; measure a real expander.
+    wxUnusedVar(tree);
+    wxGTKMeasureWidget(wxGTKPrivate::GetExpanderWidget(), &expander_size, nullptr);
+#else
     gtk_widget_style_get(tree, "expander-size", &expander_size, nullptr);
+#endif
     // +1 to match GtkTreeView behavior
     expander_size++;
     const int x = rect.x + (rect.width - expander_size) / 2;
@@ -386,7 +437,15 @@ wxRendererGTK::DrawTreeItemButton(wxWindow* WXUNUSED_IN_GTK3(win),
 static int GetGtkSplitterFullSize(GtkWidget* widget)
 {
     gint handle_size;
+#ifdef __WXGTK4__
+    // The "handle-size" style property is gone; a GtkPaned's handle is its
+    // "separator" CSS node, so measure that.
+    int measured = 0;
+    wxGTKMeasureWidget(wxGTKFindChildNode(widget, "separator"), &measured, nullptr);
+    handle_size = measured;
+#else
     gtk_widget_style_get(widget, "handle_size", &handle_size, nullptr);
+#endif
     // Narrow handles don't work well with wxSplitterWindow
     if (handle_size < 5)
         handle_size = 5;
@@ -423,7 +482,7 @@ wxRendererGTK::DrawSplitterSash(wxWindow* win,
                                 wxOrientation orient,
                                 int flags)
 {
-    if (gtk_widget_get_window(win->m_wxwindow) == nullptr)
+    if (wx_gtk_widget_get_surface_or_window(win->m_wxwindow) == nullptr)
     {
         // window not realized yet
         return;
@@ -582,10 +641,16 @@ struct CheckBoxInfo
         if (gtk_check_version(3,20,0) == nullptr)
         {
             sc.Add("check");
+#ifdef __WXGTK4__
+            wxGTKMeasureWidget(
+                wxGTKFindChildNode(wxGTKPrivate::GetCheckButtonWidget(), "check"),
+                &indicator_width, &indicator_height);
+#else
             gtk_style_context_get(sc, GTK_STATE_FLAG_NORMAL,
                                   "min-width", &indicator_width,
                                   "min-height", &indicator_height,
                                   nullptr);
+#endif
 
             GtkBorder border, padding;
             gtk_style_context_get_border(sc, GTK_STATE_FLAG_NORMAL, &border);
@@ -596,6 +661,10 @@ struct CheckBoxInfo
             margin_right = border.right + padding.right;
             margin_bottom = border.bottom + padding.bottom;
         }
+#ifndef __WXGTK4__
+        // The pre-3.20 fallback, which read style properties. GTK4 is always
+        // newer than that, and style properties are gone there, so this branch
+        // is unreachable and does not compile.
         else
         {
             wxGtkValue value( G_TYPE_INT);
@@ -610,6 +679,7 @@ struct CheckBoxInfo
             margin_right =
             margin_bottom = g_value_get_int(value);
         }
+#endif // !__WXGTK4__
     }
 #else // !__WXGTK3__
     CheckBoxInfo(GtkWidget* button, int flags)
@@ -1127,6 +1197,15 @@ void wxRendererGTK::DrawRadioBitmap(wxWindow*, wxDC& dc, const wxRect& rect, int
 
     int min_width, min_height;
     wxGtkStyleContext sc(dc.GetContentScaleFactor());
+#ifdef __WXGTK4__
+    // GtkRadioButton is gone: a radio button is a grouped GtkCheckButton, whose
+    // indicator node is "radio" rather than "check" because of that grouping.
+    sc.Add(GTK_TYPE_CHECK_BUTTON, "checkbutton", nullptr);
+    sc.Add("radio");
+    wxGTKMeasureWidget(
+        wxGTKFindChildNode(wxGTKPrivate::GetRadioButtonWidget(), "radio"),
+        &min_width, &min_height);
+#else
     sc.Add(GTK_TYPE_RADIO_BUTTON, "radiobutton", nullptr);
     if (gtk_check_version(3,20,0) == nullptr)
     {
@@ -1141,6 +1220,7 @@ void wxRendererGTK::DrawRadioBitmap(wxWindow*, wxDC& dc, const wxRect& rect, int
         min_width = g_value_get_int(value);
         min_height = min_width;
     }
+#endif
 
     // need save/restore for GTK+ 3.6 & 3.8
     gtk_style_context_save(sc);

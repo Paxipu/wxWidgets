@@ -809,6 +809,74 @@ static void test_clipboard_sync_bridge(void)
           "wxDataFormat can no longer compare formats by pointer");
 }
 
+/* ------------------------------------------------------------------------
+ * Indicator metrics.
+ *
+ * GTK4 removed style properties and the varargs gtk_style_context_get() that
+ * read CSS min-width/min-height, so renderer.cpp sizes check and radio
+ * indicators by measuring real widgets instead.
+ *
+ * That only works while the widget being measured is the right KIND, and the
+ * distinction is subtle: a GtkCheckButton's indicator node is "check", but
+ * putting it in a group turns it into "radio". Measuring an ungrouped button
+ * for a radio indicator would silently return check box metrics -- no error,
+ * no crash, just the wrong size. wxGTKPrivate::GetRadioButtonWidget() is
+ * grouped specifically for this.
+ * ------------------------------------------------------------------------ */
+
+static const char* indicator_node_name(GtkWidget* button)
+{
+    GtkWidget* child = gtk_widget_get_first_child(button);
+    return child ? gtk_widget_get_css_name(child) : "";
+}
+
+static void test_indicator_nodes(void)
+{
+    GtkWidget* checkbtn;
+    GtkWidget* radio;
+    GtkWidget* partner;
+    GtkWidget* expander;
+    int w = 0, h = 0;
+
+    printf("Check and radio indicator nodes:\n");
+
+    checkbtn = gtk_check_button_new();
+    g_object_ref_sink(checkbtn);
+    check(strcmp(indicator_node_name(checkbtn), "check") == 0,
+           "an ungrouped check button's indicator node is 'check'",
+           "renderer.cpp measures the wrong node for check boxes");
+
+    radio = gtk_check_button_new();
+    g_object_ref_sink(radio);
+    partner = gtk_check_button_new();
+    g_object_ref_sink(partner);
+    gtk_check_button_set_group(GTK_CHECK_BUTTON(radio), GTK_CHECK_BUTTON(partner));
+
+    check(strcmp(indicator_node_name(radio), "radio") == 0,
+           "grouping a check button makes its indicator node 'radio'",
+           "radio indicators are now measured as check boxes, silently");
+
+    gtk_widget_measure(checkbtn, GTK_ORIENTATION_HORIZONTAL, -1, &w, NULL, NULL, NULL);
+    gtk_widget_measure(checkbtn, GTK_ORIENTATION_VERTICAL, -1, &h, NULL, NULL, NULL);
+    check(w > 0 && h > 0,
+           "an unrealized check button measures non-zero",
+           "indicator sizes collapse to zero without realization");
+
+    g_object_unref(checkbtn);
+    g_object_unref(radio);
+    g_object_unref(partner);
+
+    /* The expander arrow, which used to be the "expander-size" style property. */
+    expander = gtk_expander_new(NULL);
+    g_object_ref_sink(expander);
+    w = 0;
+    gtk_widget_measure(expander, GTK_ORIENTATION_HORIZONTAL, -1, &w, NULL, NULL, NULL);
+    check(w > 0,
+           "an expander measures non-zero, replacing 'expander-size'",
+           "tree expander arrows are sized to nothing");
+    g_object_unref(expander);
+}
+
 int main(void)
 {
     if (!gtk_init_check())
@@ -840,6 +908,8 @@ int main(void)
     test_toolbar_substitutes();
     printf("\n");
     test_clipboard_sync_bridge();
+    printf("\n");
+    test_indicator_nodes();
 #ifdef HAVE_XTEST
     printf("\n");
     test_gesture_claim_semantics();

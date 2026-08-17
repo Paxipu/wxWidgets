@@ -2399,3 +2399,94 @@ is worth looking at properly rather than preserving by reflex.
 plus `filedlg.cpp`, `overlay.cpp` and a handful of smaller ones. `evtloop.cpp`
 needs the `gtk_main` family replaced with `GMainContext`. `test_gui` still
 cannot link, so none of this is runtime-verified.
+
+---
+
+## Progress update 26: `renderer.cpp`, and a regression my own shim caused
+
+**551 -> 495 diagnostics, 29 -> 28 failing targets, no regressions.**
+`renderer.cpp` went from 50 errors to zero.
+
+### A suspicion I had, and had to withdraw
+
+Update 25 flagged this file as a trap because `GtkStateType` and `GtkStateFlags`
+do not map by value -- `GTK_STATE_INSENSITIVE` is 4 while
+`GTK_STATE_FLAG_INSENSITIVE` is 8, and 4 is `GTK_STATE_FLAG_SELECTED` -- and
+noted that the existing code "already casts one to the other in places", with
+the implication that it might be a latent bug.
+
+That was wrong, and the file deserves better. It funnels every conversion
+through a single `stateTypeToFlags[]` table. The raw `GtkStateFlags(state)`
+casts belong to a *different* idiom in the same file, where `state` is an int
+accumulating `GTK_STATE_FLAG_*` bits and the cast is exactly right. Both
+conventions are correct.
+
+That changed the fix. Rather than rewrite every drawing function to accumulate
+flags, the enumeration is restored in the compatibility header, which preserves
+the existing careful design and leaves the one conversion point where it was.
+
+### The real work: style properties are gone
+
+`gtk_widget_style_get()` and `gtk_style_context_get_style_property()` are
+removed under GTK4, and so is the varargs `gtk_style_context_get()` used to
+read CSS `min-width`/`min-height`. Those supplied `expander-size`,
+`handle_size` and the check/radio indicator sizes.
+
+They are now obtained the way GTK itself obtains them: by measuring a real
+widget. `GtkPaned`'s handle is its `separator` node, an expander arrow is a
+`GtkExpander`, and the indicators are the check button's indicator node.
+
+The pre-3.20 fallback branches, which read style properties, are compiled out:
+GTK4 is always newer than 3.20, so they were unreachable as well as
+uncompilable.
+
+### The trap that made this worth doing carefully
+
+**Grouping a `GtkCheckButton` is what turns its `check` CSS node into a
+`radio` node.** A probe confirmed it.
+
+`wxGTKPrivate::GetRadioButtonWidget()` had already been stubbed for GTK4 as a
+plain, ungrouped check button, carrying a comment saying the group did not
+matter because the widget only supplies fonts and colours. That was true when
+it was written and stopped being true the moment something measured the
+indicator -- it would have returned check box metrics, silently, with no error
+anywhere. The widget is now genuinely grouped and the comment says why.
+
+Four invariants added: the ungrouped node is `check`, the grouped node is
+`radio`, an unrealized check button still measures non-zero, and an expander
+measures non-zero as the `expander-size` replacement.
+
+### A regression I introduced, and what caught it
+
+The state-taking style getters (`gtk_style_context_get_color()` and friends)
+lost their state argument under GTK4. I first restored the GTK3 spelling as
+**function-like macros taking three arguments**.
+
+That broke `statbox.cpp`, which had already been ported to the two-argument
+form: a three-parameter macro rejects a two-argument call outright. The file
+went from green to red.
+
+What is worth recording is how it surfaced. Total diagnostics fell from 551 to
+498 in that build -- a count-only check would have reported pure improvement.
+Diffing the set of **failed targets** showed `statbox.o` appearing where it had
+not been before. This is the third time that habit has caught something an
+error count would have hidden.
+
+The fix is C++ overloads rather than macros: they accept both arities, so
+ported and unported call sites coexist, which is the actual situation in a
+port done file by file.
+
+### What is left
+
+| File | Errors |
+|---|---|
+| `dataview.cpp` | 55 |
+| `minifram.cpp` | 48 |
+| `window.cpp` | 44 |
+| `dnd.cpp` | 41 |
+| `evtloop.cpp` | 37 |
+| `textctrl.cpp` | 21 |
+| `notebook.cpp` | 19 |
+
+plus `filedlg.cpp`, `overlay.cpp` and a handful of smaller ones. `test_gui`
+still cannot link, so none of this is runtime-verified.

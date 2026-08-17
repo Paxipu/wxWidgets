@@ -310,6 +310,78 @@ static inline GdkSurface* wx_gtk_widget_get_surface(GtkWidget* widget)
 #define gtk_window_iconify(window)   gtk_window_minimize(window)
 #define gtk_window_deiconify(window) gtk_window_unminimize(window)
 
+// GTK4 removed GtkStateType, the pre-3.0 enumeration of widget states, leaving
+// only the GtkStateFlags bitfield.
+//
+// The two are emphatically NOT interchangeable: GtkStateType is an index
+// (GTK_STATE_INSENSITIVE == 4) while GtkStateFlags is a bitfield
+// (GTK_STATE_FLAG_INSENSITIVE == 8, and 4 is GTK_STATE_FLAG_SELECTED). Casting
+// one to the other would compile and draw the wrong state.
+//
+// renderer.cpp is aware of that and already funnels every conversion through a
+// single stateTypeToFlags[] table, using the enumeration as a compact way to
+// name one state at a time. Keeping the enumeration therefore preserves that
+// design exactly, where rewriting each drawing function to accumulate flags
+// would be a much larger change with more room to get a state wrong.
+// GTK4 dropped the state argument from these getters: a style context now
+// always reports the state it is set to.
+//
+// These are C++ overloads rather than macros on purpose. Some call sites have
+// already been ported to GTK4's two-argument form while others still use the
+// GTK3 three-argument one, and a fixed-arity function-like macro breaks the
+// former -- as it did, turning statbox.cpp red until this was noticed by
+// diffing the failed targets rather than the error count.
+static inline void
+gtk_style_context_get_color(GtkStyleContext* sc, GtkStateFlags state,
+                            GdkRGBA* out)
+{
+    gtk_style_context_save(sc);
+    gtk_style_context_set_state(sc, state);
+    gtk_style_context_get_color(sc, out);
+    gtk_style_context_restore(sc);
+}
+
+static inline void
+gtk_style_context_get_border(GtkStyleContext* sc, GtkStateFlags state,
+                             GtkBorder* out)
+{
+    gtk_style_context_save(sc);
+    gtk_style_context_set_state(sc, state);
+    gtk_style_context_get_border(sc, out);
+    gtk_style_context_restore(sc);
+}
+
+static inline void
+gtk_style_context_get_padding(GtkStyleContext* sc, GtkStateFlags state,
+                              GtkBorder* out)
+{
+    gtk_style_context_save(sc);
+    gtk_style_context_set_state(sc, state);
+    gtk_style_context_get_padding(sc, out);
+    gtk_style_context_restore(sc);
+}
+
+static inline void
+gtk_style_context_get_margin(GtkStyleContext* sc, GtkStateFlags state,
+                             GtkBorder* out)
+{
+    gtk_style_context_save(sc);
+    gtk_style_context_set_state(sc, state);
+    gtk_style_context_get_margin(sc, out);
+    gtk_style_context_restore(sc);
+}
+
+typedef enum
+{
+    GTK_STATE_NORMAL,
+    GTK_STATE_ACTIVE,
+    GTK_STATE_PRELIGHT,
+    GTK_STATE_SELECTED,
+    GTK_STATE_INSENSITIVE,
+    GTK_STATE_INCONSISTENT,
+    GTK_STATE_FOCUSED
+} GtkStateType;
+
 // No widget owns a GdkWindow under GTK4 -- the concept is gone -- so the
 // GTK3 question "does this widget have its own window?" is always answered
 // no. Call sites use it to decide whether coordinates need translating

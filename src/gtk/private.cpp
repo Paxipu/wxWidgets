@@ -227,10 +227,17 @@ GtkWidget * GetRadioButtonWidget()
     {
 #ifdef __WXGTK4__
         // GtkRadioButton doesn't exist under GTK4, a radio button being a
-        // GtkCheckButton in a group there. This widget only exists to query
-        // theme attributes such as the default font and colours, which don't
-        // depend on the group, so a plain check button will do.
+        // GtkCheckButton in a group there.
+        //
+        // The group is not incidental: it is what turns the button's "check"
+        // CSS node into a "radio" one, so an ungrouped button would style and
+        // measure as a check box. renderer.cpp measures this widget to size
+        // the radio indicator, so it is given a group member to be in. The
+        // partner is deliberately never shown or added to anything; it exists
+        // only to make this one a radio button.
         s_button = gtk_check_button_new();
+        gtk_check_button_set_group(GTK_CHECK_BUTTON(s_button),
+                                   GTK_CHECK_BUTTON(gtk_check_button_new()));
 #else
         s_button = gtk_radio_button_new(nullptr);
 #endif
@@ -265,6 +272,25 @@ GtkWidget* GetSplitterWidget(wxOrientation orient)
 
     return widget;
 }
+
+#ifdef __WXGTK4__
+
+GtkWidget *GetExpanderWidget()
+{
+    static GtkWidget *s_expander = nullptr;
+
+    if ( !s_expander )
+    {
+        s_expander = gtk_expander_new(nullptr);
+        g_object_add_weak_pointer(G_OBJECT(s_expander), (void**)&s_expander);
+        AddToContainer(s_expander);
+        gtk_widget_realize(s_expander);
+    }
+
+    return s_expander;
+}
+
+#endif // __WXGTK4__
 
 GtkWidget *GetTreeWidget()
 {

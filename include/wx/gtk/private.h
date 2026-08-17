@@ -63,6 +63,11 @@ WXDLLIMPEXP_CORE GtkWidget *GetNotebookWidget();
 WXDLLIMPEXP_CORE GtkWidget *GetRadioButtonWidget();
 WXDLLIMPEXP_CORE GtkWidget *GetSplitterWidget(wxOrientation orient = wxHORIZONTAL);
 WXDLLIMPEXP_CORE GtkWidget *GetTreeWidget();
+#ifdef __WXGTK4__
+// Used to measure the expander arrow, whose size used to be readable as the
+// "expander-size" style property before GTK4 removed style properties.
+WXDLLIMPEXP_CORE GtkWidget *GetExpanderWidget();
+#endif
 
 } // wxGTKPrivate
 

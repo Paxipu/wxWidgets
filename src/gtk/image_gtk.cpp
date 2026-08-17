@@ -15,6 +15,112 @@
 #include "wx/gtk/private/gtk3-compat.h"
 #include "wx/gtk/private/image.h"
 
+#ifdef __WXGTK4__
+
+// ----------------------------------------------------------------------------
+// GTK4: plain GtkImage plus eager bitmap selection, see image.h
+// ----------------------------------------------------------------------------
+
+namespace
+{
+
+// Pick the bitmap for the scale factor a GtkImage is being shown at, and put
+// it on that image as a texture. Also sets the logical pixel size, without
+// which GtkImage would lay the texture out at its device pixel size and so
+// draw it twice too large on a HiDPI display.
+void SetImageFromBitmap(GtkWidget* image, const wxBitmap& bitmap, int logicalHeight)
+{
+    if ( !bitmap.IsOk() )
+    {
+        gtk_image_clear(GTK_IMAGE(image));
+        return;
+    }
+
+    GdkPixbuf* const pixbuf = bitmap.GetPixbuf();
+    if ( !pixbuf )
+    {
+        gtk_image_clear(GTK_IMAGE(image));
+        return;
+    }
+
+    GdkTexture* const texture = gdk_texture_new_for_pixbuf(pixbuf);
+    gtk_image_set_from_paintable(GTK_IMAGE(image), GDK_PAINTABLE(texture));
+    g_object_unref(texture);
+
+    if ( logicalHeight > 0 )
+        gtk_image_set_pixel_size(GTK_IMAGE(image), logicalHeight);
+}
+
+int GetScaleFactor(GtkWidget* widget)
+{
+    const int scale = gtk_widget_get_scale_factor(widget);
+
+    return scale > 0 ? scale : 1;
+}
+
+} // anonymous namespace
+
+/* static */
+GtkWidget* wxGtkImage::New(wxWindow* WXUNUSED(win))
+{
+    return gtk_image_new();
+}
+
+/* static */
+bool wxGtkImage::Is(GtkWidget* widget)
+{
+    return widget && GTK_IS_IMAGE(widget);
+}
+
+/* static */
+void wxGtkImage::Set(GtkWidget* image, const wxBitmapBundle& bitmapBundle)
+{
+    wxCHECK_RET( Is(image), "not an image widget" );
+
+    if ( !bitmapBundle.IsOk() )
+    {
+        gtk_image_clear(GTK_IMAGE(image));
+        return;
+    }
+
+    const wxSize sizeDefault = bitmapBundle.GetDefaultSize();
+
+    SetImageFromBitmap(image,
+                       bitmapBundle.GetBitmap(sizeDefault * GetScaleFactor(image)),
+                       sizeDefault.y);
+}
+
+/* static */
+void wxGtkImage::SetDisabled(GtkWidget* image,
+                             const wxBitmapBundle& normal,
+                             const wxBitmapBundle& disabled)
+{
+    wxCHECK_RET( Is(image), "not an image widget" );
+
+    const int scale = GetScaleFactor(image);
+
+    if ( disabled.IsOk() )
+    {
+        const wxSize size = disabled.GetDefaultSize();
+        SetImageFromBitmap(image, disabled.GetBitmap(size * scale), size.y);
+        return;
+    }
+
+    if ( !normal.IsOk() )
+    {
+        gtk_image_clear(GTK_IMAGE(image));
+        return;
+    }
+
+    // No disabled variant was given, so derive one, as wxGtkImage did when it
+    // drew under GTK3.
+    const wxSize size = normal.GetDefaultSize();
+    SetImageFromBitmap(image, normal.GetBitmap(size * scale).CreateDisabled(),
+                       size.y);
+}
+
+#else // !__WXGTK4__
+
 namespace
 {
 
@@ -223,3 +329,5 @@ static void wxGtkImageClassInit(void* g_class, void* /*class_data*/)
     wxGtkImageParentClass = GTK_WIDGET_CLASS(g_type_class_peek_parent(g_class));
 }
 } // extern "C"
+
+#endif // __WXGTK4__/!__WXGTK4__

@@ -351,9 +351,38 @@ wx_gtk_file_chooser_set_filename(GtkFileChooser* chooser, const char* name)
 #define gtk_file_chooser_set_filename(c, n) \
             wx_gtk_file_chooser_set_filename(c, n)
 
+// Three of these functions kept their GTK3 names in GTK4 while changing what
+// they take or return, so code written for GTK4 may already be calling them
+// the new way. A macro which fixed the argument count or the argument types
+// would break exactly those call sites -- once loudly (wrong arity) and once
+// silently (a char* where a GFile* was meant) -- so each is an overload set
+// accepting both spellings, reached through a forwarding variadic macro.
+//
+// The real functions have to be captured before the macros hide them.
+static inline GFile*
+wx_gtk_fc_get_current_folder_file(GtkFileChooser* chooser)
+{
+    return gtk_file_chooser_get_current_folder(chooser);
+}
+
+static inline gboolean
+wx_gtk_fc_set_current_folder_file(GtkFileChooser* chooser, GFile* file,
+                                  GError** error)
+{
+    return gtk_file_chooser_set_current_folder(chooser, file, error);
+}
+
+static inline gboolean
+wx_gtk_fc_add_shortcut_folder_file(GtkFileChooser* chooser, GFile* file,
+                                   GError** error)
+{
+    return gtk_file_chooser_add_shortcut_folder(chooser, file, error);
+}
+
+// The GTK3 spelling returns a newly allocated path, to be freed with g_free().
 static inline char* wx_gtk_file_chooser_get_current_folder(GtkFileChooser* chooser)
 {
-    GFile* const file = gtk_file_chooser_get_current_folder(chooser);
+    GFile* const file = wx_gtk_fc_get_current_folder_file(chooser);
     if ( !file )
         return nullptr;
 
@@ -362,20 +391,27 @@ static inline char* wx_gtk_file_chooser_get_current_folder(GtkFileChooser* choos
 
     return path;
 }
-#define gtk_file_chooser_get_current_folder(c) \
-            wx_gtk_file_chooser_get_current_folder(c)
+#define gtk_file_chooser_get_current_folder(...) \
+            wx_gtk_file_chooser_get_current_folder(__VA_ARGS__)
 
 static inline gboolean
 wx_gtk_file_chooser_set_current_folder(GtkFileChooser* chooser, const char* name)
 {
     GFile* const file = g_file_new_for_path(name);
-    const gboolean ok = gtk_file_chooser_set_current_folder(chooser, file, nullptr);
+    const gboolean ok = wx_gtk_fc_set_current_folder_file(chooser, file, nullptr);
     g_object_unref(file);
 
     return ok;
 }
-#define gtk_file_chooser_set_current_folder(c, n) \
-            wx_gtk_file_chooser_set_current_folder(c, n)
+
+static inline gboolean
+wx_gtk_file_chooser_set_current_folder(GtkFileChooser* chooser, GFile* file,
+                                       GError** error)
+{
+    return wx_gtk_fc_set_current_folder_file(chooser, file, error);
+}
+#define gtk_file_chooser_set_current_folder(...) \
+            wx_gtk_file_chooser_set_current_folder(__VA_ARGS__)
 
 // As in GTK3, the returned list owns the strings: free with
 // g_slist_free_full(list, g_free).
@@ -433,14 +469,21 @@ wx_gtk_file_chooser_add_shortcut_folder(GtkFileChooser* chooser,
                                         GError** error)
 {
     GFile* const file = g_file_new_for_path(name);
-    const gboolean ok =
-        gtk_file_chooser_add_shortcut_folder(chooser, file, error);
+    const gboolean ok = wx_gtk_fc_add_shortcut_folder_file(chooser, file, error);
     g_object_unref(file);
 
     return ok;
 }
-#define gtk_file_chooser_add_shortcut_folder(c, n, e) \
-            wx_gtk_file_chooser_add_shortcut_folder(c, n, e)
+
+static inline gboolean
+wx_gtk_file_chooser_add_shortcut_folder(GtkFileChooser* chooser,
+                                        GFile* file,
+                                        GError** error)
+{
+    return wx_gtk_fc_add_shortcut_folder_file(chooser, file, error);
+}
+#define gtk_file_chooser_add_shortcut_folder(...) \
+            wx_gtk_file_chooser_add_shortcut_folder(__VA_ARGS__)
 
 // GTK4 always confirms before overwriting and offers no way to turn it off,
 // which is what every wx caller wanted anyhow.

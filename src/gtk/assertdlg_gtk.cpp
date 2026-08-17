@@ -43,7 +43,11 @@ GtkWidget *gtk_assert_dialog_add_button_to (GtkBox *box, const gchar *label,
 {
     /* create the button */
     GtkWidget *button = gtk_button_new_with_mnemonic (label);
+#ifndef __WXGTK4__
+    // Being the default is a property of the window under GTK4, not of the
+    // widget, so there is nothing to allow here any more.
     gtk_widget_set_can_default(button, true);
+#endif
 
     /* add a stock icon inside it */
 #ifdef __WXGTK4__
@@ -66,7 +70,9 @@ GtkWidget *gtk_assert_dialog_add_button_to (GtkBox *box, const gchar *label,
     return button;
 }
 
-// This function is called only for GTK+ < 3.10
+// This function is called only for GTK+ < 3.10; GTK4 builds the dialog in
+// gtk_assert_dialog_init() and use gtk_dialog_add_button() directly.
+#ifndef __WXGTK4__
 static
 GtkWidget *gtk_assert_dialog_add_button (GtkAssertDialog *dlg, const gchar *label,
                                          const gchar *stock, gint response_id)
@@ -79,6 +85,7 @@ GtkWidget *gtk_assert_dialog_add_button (GtkAssertDialog *dlg, const gchar *labe
 
     return button;
 }
+#endif // !__WXGTK4__
 
 #if wxUSE_STACKWALKER
 
@@ -132,6 +139,22 @@ GtkWidget *gtk_assert_dialog_create_backtrace_list_model ()
 static
 void gtk_assert_dialog_process_backtrace (GtkAssertDialog *dlg)
 {
+#ifdef __WXGTK4__
+    /* set busy cursor: cursors belong to widgets rather than to windows now,
+       and are named rather than picked from a fixed enumeration */
+    GtkWidget* const widget = GTK_WIDGET(dlg);
+    GdkDisplay* const display = gtk_widget_get_display(widget);
+    GdkCursor* const cur = gdk_cursor_new_from_name("wait", nullptr);
+    gtk_widget_set_cursor (widget, cur);
+    gdk_display_flush (display);
+
+    (*dlg->callback)(dlg->userdata);
+
+    /* toggle busy cursor */
+    gtk_widget_set_cursor (widget, nullptr);
+    if (cur)
+        g_object_unref(cur);
+#else // !__WXGTK4__
     /* set busy cursor */
     GdkWindow *parent = gtk_widget_get_window(GTK_WIDGET(dlg));
     GdkDisplay* display = gdk_window_get_display(parent);
@@ -148,6 +171,7 @@ void gtk_assert_dialog_process_backtrace (GtkAssertDialog *dlg)
 #else
     gdk_cursor_unref (cur);
 #endif
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 extern "C" {
@@ -215,7 +239,6 @@ static void gtk_assert_dialog_save_backtrace_callback(GtkWidget*, GtkAssertDialo
 static void gtk_assert_dialog_copy_callback(GtkWidget*, GtkAssertDialog* dlg)
 {
     char *msg, *backtrace;
-    GtkClipboard *clipboard;
     GString *str;
 
     msg = gtk_assert_dialog_get_message (dlg);
@@ -225,6 +248,16 @@ static void gtk_assert_dialog_copy_callback(GtkWidget*, GtkAssertDialog* dlg)
     str = g_string_new("");
     g_string_printf (str, "ASSERT INFO:\n%s\n\nBACKTRACE:\n%s\n\n", msg, backtrace);
 
+#ifdef __WXGTK4__
+    /* GtkClipboard and the selection atoms it was addressed by are gone: a
+       GdkClipboard is obtained from the widget which wants to use it */
+    GtkWidget* const widget = GTK_WIDGET(dlg);
+
+    gdk_clipboard_set_text (gtk_widget_get_clipboard(widget), str->str);
+    gdk_clipboard_set_text (gtk_widget_get_primary_clipboard(widget), str->str);
+#else // !__WXGTK4__
+    GtkClipboard *clipboard;
+
     /* copy everything in default clipboard */
     clipboard = gtk_clipboard_get (GDK_SELECTION_CLIPBOARD);
     gtk_clipboard_set_text (clipboard, str->str, str->len);
@@ -232,6 +265,7 @@ static void gtk_assert_dialog_copy_callback(GtkWidget*, GtkAssertDialog* dlg)
     /* copy everything in primary clipboard too */
     clipboard = gtk_clipboard_get (GDK_SELECTION_PRIMARY);
     gtk_clipboard_set_text (clipboard, str->str, str->len);
+#endif // __WXGTK4__/!__WXGTK4__
 
     g_free (msg);
     g_free (backtrace);
@@ -257,7 +291,7 @@ static void gtk_assert_dialog_continue_callback(GtkWidget*, GtkAssertDialog* dlg
  ---------------------------------------------------------------------------- */
 
 extern "C" {
-#if GTK_CHECK_VERSION(3,10,0)
+#if GTK_CHECK_VERSION(3,10,0) && !defined(__WXGTK4__)
 static void gtk_assert_dialog_class_init(gpointer g_class, void*);
 #endif // GTK+ >= 3.10
 static void gtk_assert_dialog_init(GTypeInstance* instance, void*);
@@ -274,7 +308,7 @@ GType gtk_assert_dialog_get_type()
             sizeof (GtkAssertDialogClass),
             nullptr,           /* base_init */
             nullptr,           /* base_finalize */
-#if GTK_CHECK_VERSION(3,10,0)
+#if GTK_CHECK_VERSION(3,10,0) && !defined(__WXGTK4__)
             gtk_assert_dialog_class_init,  /* class init */
 #else
             nullptr,
@@ -294,7 +328,7 @@ GType gtk_assert_dialog_get_type()
 
 extern "C" {
 // For GTK+ >= 3.10, Composite Widget Templates are used to define composite widgets.
-#if GTK_CHECK_VERSION(3,10,0)
+#if GTK_CHECK_VERSION(3,10,0) && !defined(__WXGTK4__)
 static void gtk_assert_dialog_class_init(gpointer g_class, void*)
 {
     if (gtk_check_version(3,10,0) == nullptr)
@@ -682,7 +716,113 @@ static void gtk_assert_dialog_init(GTypeInstance* instance, void*)
 {
     // For GTK+ >= 3.10 create and initialize the dialog from the already assigned template
     // or create the dialog "manually" otherwise.
-#if GTK_CHECK_VERSION(3,10,0)
+#ifdef __WXGTK4__
+    // The GtkBuilder template used below is written in GTK3's dialect of the
+    // format -- GtkButtonBox, <packing>, type_hint, draw_indicator, the
+    // action_area internal child -- none of which GTK4 understands. Rather
+    // than maintain a second copy of it in a second dialect, build the dialog
+    // in code: it is a handful of boxes and this way there is only one
+    // description of it to keep correct.
+    {
+        GtkAssertDialog* dlg = GTK_ASSERT_DIALOG(instance);
+
+        gtk_window_set_title(GTK_WINDOW(dlg), "wxWidgets Debug Alert");
+
+        GtkWidget* const content = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
+
+        GtkWidget* const vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+        gtk_widget_set_margin_start(vbox, 8);
+        gtk_widget_set_margin_end(vbox, 8);
+        gtk_widget_set_margin_top(vbox, 8);
+        gtk_widget_set_margin_bottom(vbox, 8);
+        gtk_widget_set_vexpand(vbox, TRUE);
+        gtk_box_append(GTK_BOX(content), vbox);
+
+        /* the icon and message side by side */
+        GtkWidget* const hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+        gtk_box_append(GTK_BOX(vbox), hbox);
+
+        GtkWidget* const image = gtk_image_new_from_icon_name("dialog-error");
+        gtk_image_set_pixel_size(GTK_IMAGE(image), 48);
+        gtk_box_append(GTK_BOX(hbox), image);
+
+        GtkWidget* const vbox2 = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+        gtk_widget_set_hexpand(vbox2, TRUE);
+        gtk_box_append(GTK_BOX(hbox), vbox2);
+
+        gtk_box_append(GTK_BOX(vbox2), gtk_label_new("An assertion failed!"));
+
+        dlg->message = gtk_label_new(nullptr);
+        gtk_label_set_selectable(GTK_LABEL(dlg->message), TRUE);
+        gtk_label_set_wrap(GTK_LABEL(dlg->message), TRUE);
+        gtk_label_set_justify(GTK_LABEL(dlg->message), GTK_JUSTIFY_LEFT);
+        gtk_widget_set_size_request(dlg->message, 450, -1);
+        gtk_widget_set_vexpand(dlg->message, TRUE);
+        gtk_box_append(GTK_BOX(vbox2), dlg->message);
+
+#if wxUSE_STACKWALKER
+        /* the backtrace, inside an expander */
+        dlg->expander = gtk_expander_new_with_mnemonic("Back_trace:");
+        gtk_widget_set_vexpand(dlg->expander, TRUE);
+        gtk_box_append(GTK_BOX(vbox), dlg->expander);
+        g_signal_connect(dlg->expander, "activate",
+                         G_CALLBACK(gtk_assert_dialog_expander_callback), dlg);
+
+        GtkWidget* const expVBox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+        gtk_expander_set_child(GTK_EXPANDER(dlg->expander), expVBox);
+
+        GtkWidget* const sw = gtk_scrolled_window_new();
+        gtk_scrolled_window_set_has_frame(GTK_SCROLLED_WINDOW(sw), TRUE);
+        gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw),
+                                       GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+        gtk_widget_set_size_request(sw, -1, 180);
+        gtk_widget_set_vexpand(sw, TRUE);
+        gtk_box_append(GTK_BOX(expVBox), sw);
+
+        dlg->treeview = gtk_assert_dialog_create_backtrace_list_model();
+        gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sw), dlg->treeview);
+
+        /* GtkButtonBox is gone; a box with the children aligned to its end
+           does the same job */
+        GtkWidget* const btnBox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        gtk_widget_set_halign(btnBox, GTK_ALIGN_END);
+        gtk_box_append(GTK_BOX(expVBox), btnBox);
+
+        GtkWidget* button =
+            gtk_assert_dialog_add_button_to(GTK_BOX(btnBox), "Save to _file",
+                                            "document-save");
+        g_signal_connect(button, "clicked",
+                         G_CALLBACK(gtk_assert_dialog_save_backtrace_callback), dlg);
+
+        button = gtk_assert_dialog_add_button_to(GTK_BOX(btnBox), "Copy to clip_board",
+                                                 "edit-copy");
+        g_signal_connect(button, "clicked",
+                         G_CALLBACK(gtk_assert_dialog_copy_callback), dlg);
+#endif // wxUSE_STACKWALKER
+
+        dlg->shownexttime =
+            gtk_check_button_new_with_mnemonic("Show this _dialog the next time");
+        gtk_check_button_set_active(GTK_CHECK_BUTTON(dlg->shownexttime), TRUE);
+        gtk_box_append(GTK_BOX(vbox), dlg->shownexttime);
+
+        gtk_dialog_add_button(GTK_DIALOG(dlg), "_Stop", GTK_ASSERT_DIALOG_STOP);
+
+        GtkWidget* const continuebtn =
+            gtk_dialog_add_button(GTK_DIALOG(dlg), "_Continue",
+                                  GTK_ASSERT_DIALOG_CONTINUE);
+        gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_ASSERT_DIALOG_CONTINUE);
+        g_signal_connect(continuebtn, "clicked",
+                         G_CALLBACK(gtk_assert_dialog_continue_callback), dlg);
+
+        /* the resizable property of this window is modified by the expander:
+           when it's collapsed, the window must be non-resizable! */
+        gtk_window_set_resizable(GTK_WINDOW(dlg), FALSE);
+
+        dlg->callback = nullptr;
+        dlg->userdata = nullptr;
+    }
+#else // !__WXGTK4__
+#if GTK_CHECK_VERSION(3,10,0) && !defined(__WXGTK4__)
     if (gtk_check_version(3,10,0) == nullptr)
     {
         GtkAssertDialog* dlg = GTK_ASSERT_DIALOG(instance);
@@ -809,6 +949,7 @@ static void gtk_assert_dialog_init(GTypeInstance* instance, void*)
         wxGCC_WARNING_RESTORE()
         gtk_widget_show_all (GTK_WIDGET(dlg));
     }
+#endif // __WXGTK4__/!__WXGTK4__
 }
 }
 

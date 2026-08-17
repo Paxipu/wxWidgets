@@ -2809,3 +2809,139 @@ No model replacements remain -- everything below is ordinary porting:
 plus `filedlg.cpp`, `overlay.cpp` and a handful of smaller ones. `test_gui`
 still cannot link, so none of this is runtime-verified -- which remains the
 largest risk in the port, unchanged since the beginning.
+
+*(Update 31 below finishes all of these; two of them turned out not to be
+ordinary porting after all.)*
+
+## Progress update 31: the library compiles
+
+Every remaining file is ported. `make` on the GTK4 configuration produces no
+failing targets and no errors, from 78 failing targets when this started.
+
+Two more model replacements turned up in this batch, neither of which was on
+the list because both were hiding behind files that had failed earlier:
+
+**Popup windows.** GTK4 removed `GTK_WINDOW_POPUP` and `gtk_window_move()`
+together, so there is no way left to create a toplevel the application decides
+the position of. `GtkPopover` is the only widget that still gets a surface of
+its own which may extend past its toplevel, so `wxPopupWindow` is built on one.
+A popover is placed by pointing at a rectangle in its parent's coordinates
+rather than by being moved.
+
+The placement was measured rather than assumed --
+`docs/gtk/probes/gtk4-popover-placement.c`. A popover centers itself on the
+pointing rectangle and, with `GTK_POS_BOTTOM`, puts its top edge at that
+rectangle's bottom. Giving the rectangle the popup's own width both
+left-aligns it and cancels out the popover's padding, which would otherwise
+have to be measured separately. Two consequences: a `wxPopupWindow` must now
+have a parent, and click-outside dismissal moved to where it belongs -- a
+plain `wxPopupWindow` leaves the popover's autohide off, `wxPopupTransientWindow`
+turns it on and learns about the dismissal from `::closed`. That last part
+replaces `gtk_grab_add()`, `gdk_seat_grab()` and `gdk_pointer_grab()`, all of
+which are gone.
+
+**Drawing outside a paint handler.** `gdk_cairo_create()` is gone and a
+`GdkSurface` cannot be drawn to except from GTK's own snapshot vfunc. So
+`wxWindowDC` and `wxClientDC` keep reporting the right size -- which is what
+most of their users actually want -- and their drawing goes to a scratch
+context. `wxClientDCImpl::CanBeUsedForDrawing()` says so, exactly as it
+already did for Wayland under GTK3. `wxPaintDC` is unaffected.
+
+### The native overlay got simpler, not harder
+
+`src/gtk/overlay.cpp` was a stack of things GTK4 removed: a popup toplevel for
+save-under behaviour, `gtk_window_move()` to place it, RGBA visual selection,
+and a 1x1 input shape to make it click-through. GTK4 needs none of them,
+because it renders a toplevel as a single scene: a `GtkDrawingArea` added last
+to the target's `wxPizza` is drawn on top of everything else in it, and
+`gtk_widget_set_can_target(false)` makes it click-through exactly rather than
+approximately. This also makes the native overlay the right choice on every
+backend rather than only on Wayland, since the generic implementation reads the
+window's pixels back and no GTK4 backend can do that.
+
+### Measuring instead of reconstructing
+
+Twice in this batch the GTK3 code reconstructed a size by summing CSS
+properties node by node, using `gtk_style_context_get()` which GTK4 removed.
+Both times measuring a real widget answered the same question and accounted
+for every node by construction:
+
+- `wxNotebook::CalcSizeFromPage()` measures a scratch notebook twice, once
+  with the tab strip shown and once hidden. The two differences are exactly
+  the frame around the page and the room the smallest tab needs -- the two
+  quantities the GTK3 code computes separately.
+- `GetScrollbarWidth()` in `settings.cpp` had already been done this way, and
+  fixing the surrounding `#if` chain in this batch revealed that its GTK2
+  fallback was never excluded, so it overwrote the measured width on every
+  GTK4 build. That code had not been reached by the compiler before.
+
+### Fixed-arity macro shims, for the third time
+
+`gtk_file_chooser_set_current_folder()` kept its name in GTK4 while changing
+what it takes. A two-argument macro shim broke `dirdlg.cpp`, which was already
+calling it the GTK4 way. This is the same mistake as the `statbox.cpp`
+regression in update 21 and the reason `gtk_scrolled_window_new()` was made
+variadic earlier in this batch.
+
+The three file-chooser functions which share a name with a real GTK4 function
+are now overload sets reached through a forwarding variadic macro, so both
+spellings compile and neither is silently reinterpreted. Where a shim's name
+does *not* exist in GTK4 at all -- `set_filename`, `get_filenames`,
+`list_filters` and the rest -- a plain macro is safe, because no GTK4 code can
+be calling it.
+
+### Capabilities dropped in this batch
+
+| Feature | Why |
+|---|---|
+| `wxDataViewCtrl` drag and drop | See below |
+| `wxFileDialog` preview (`wxFD_PREVIEW`) | The whole preview mechanism, and the `selection-changed` signal with it, was removed from `GtkFileChooser` |
+| `wxFileDialog` extra control | `gtk_file_chooser_set_extra_widget()` is gone; GTK4 allows only the fixed controls `add_choice()` offers |
+| Shaped windows (`wxNonOwnedWindow::SetShape`) | `gdk_window_shape_combine_region()` has no replacement; GTK4's answer is transparency |
+| `wxChoice::SetColumns()` | The popup's grid layout, and the wrap-width property controlling it, are gone |
+| `wxScreenDC` drawing and read-back | No root window, and no backend can read the screen |
+| Horizontal scroll offset in `wxTextCtrl::HitTest()` for single-line controls | The layout belongs to the private `GtkText` inside a `GtkEntry` |
+
+`wxFileButton` and `wxDirButton` fall back to the generic implementation
+because `GtkFileChooserButton` was removed -- but that is a plain button which
+opens a file dialog, which is what GTK's own migration guide tells applications
+to do now, and what wx already did for `wxFLP_SAVE`.
+
+### The one deliberate gap: dataview drag and drop
+
+`GtkTreeView`'s own drag and drop, which `wxDataViewCtrl`'s model joins through
+`GtkTreeDragSource` and `GtkTreeDragDest`, was rebuilt on `GdkContentProvider`
+and `GValue`. The source half maps over cleanly. The destination half does not:
+what GTK4 puts in that `GValue` for an application-defined MIME type is not
+specified anywhere, and wx needs the raw bytes and their format, which is
+exactly what a `GValue` of an unknown type cannot be asked for.
+
+Rather than guess, `EnableDragSource()` and `EnableDropTarget()` return false,
+which is the documented way for a port to report that it cannot do this.
+Everything else about `wxDataViewCtrl` works, and `wxDropTarget`/`wxDropSource`
+on the control as a whole are unaffected -- those go through `dnd.cpp`.
+
+### Deriving from an opaque GObject type
+
+`GtkCellRendererPixbuf`'s instance and class structs became private, so
+`wxCellRendererPixbuf` could no longer be a C++ class with it as a base:
+neither its size nor its layout is known at compile time. The sizes are asked
+for with `g_type_query()` at run time instead and wx's one added field lives at
+the end of the instance, addressed by an offset. This is the standard way of
+deriving from an opaque GObject type and compiles identically under GTK3.
+
+`GtkCellRenderer::render` also became `::snapshot`. wx renderers draw with
+Cairo, and `gtk_snapshot_append_cairo()` hands out a context which renders into
+the snapshot, so the existing drawing code needed no changes beyond being given
+one. Where wx delegates to a GTK renderer, the snapshot is passed through so
+that renderer draws into the same scene -- which is also why the RTL mirroring
+had to move from `cairo_scale()` to `gtk_snapshot_scale()`.
+
+### Where this leaves the port
+
+The library compiles. It has never run. Every design decision above is
+justified by the API and, where it was checkable without running wx, by a probe
+or a CI invariant -- but the number of behaviours that can only be confirmed by
+looking at a window is now the whole of the remaining risk.
+
+Next: link `test_gui`, then the samples.

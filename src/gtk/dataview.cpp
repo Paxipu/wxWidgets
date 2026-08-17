@@ -212,6 +212,7 @@ public:
     bool EnableDragSource( const wxDataFormat &format );
     bool EnableDropTarget( const wxVector<wxDataFormat> &formats );
 
+#ifndef __WXGTK4__
     gboolean row_draggable( GtkTreeDragSource *drag_source, GtkTreePath *path );
     gboolean drag_data_delete( GtkTreeDragSource *drag_source, GtkTreePath* path );
     gboolean drag_data_get( GtkTreeDragSource *drag_source, GtkTreePath *path,
@@ -221,6 +222,7 @@ public:
 
     // dnd-related signal handlers
     gboolean OnDragDataReceived(gint x, gint y, GtkSelectionData* selection_data);
+#endif // !__WXGTK4__
 
     // May return null if the item is not present in this tree.
     wxGtkTreeModelNode *FindNode( const wxDataViewItem &item );
@@ -297,11 +299,15 @@ private:
     int                   m_sort_column;
     bool                  m_sort_frozen;
 
+#ifndef __WXGTK4__
     GtkTargetEntry        m_dragSourceTargetEntry;
+#endif
     wxCharBuffer          m_dragSourceTargetEntryTarget;
     wxDataObject         *m_dragDataObject;
 
+#ifndef __WXGTK4__
     GtkTargetEntry        m_dropTargetTargetEntry;
+#endif
     wxCharBuffer          m_dropTargetTargetEntryTarget;
     wxDataObject         *m_dropDataObject;
 
@@ -522,8 +528,29 @@ static void         wxgtk_tree_model_init            (GTypeInstance* instance, v
 
 static void         wxgtk_tree_model_tree_model_init (void* g_iface, void*);
 static void         wxgtk_tree_model_sortable_init   (void* g_iface, void*);
+// GtkTreeView's own drag and drop, which wxDataViewCtrl's model participates
+// in through the GtkTreeDragSource and GtkTreeDragDest interfaces, was rebuilt
+// on top of GdkContentProvider and GValue in GTK4: drag_data_get() returns a
+// content provider instead of filling in a GtkSelectionData, drag_data_received()
+// and row_drop_possible() are handed a GValue rather than selection data, and
+// gtk_tree_view_enable_model_drag_source() takes GdkContentFormats instead of
+// an array of GtkTargetEntry.
+//
+// The source half maps over cleanly, but the destination half does not: what
+// GTK4 puts in that GValue for an application-defined MIME type is not
+// specified anywhere, and wx needs the raw bytes and their format, which is
+// exactly what a GValue of an unknown type cannot be asked for. Rather than
+// guess at it, dataview drag and drop is unavailable under GTK4 and says so:
+// EnableDragSource() and EnableDropTarget() return false, which is the
+// documented way for a port to report that it cannot do this.
+//
+// Everything else about wxDataViewCtrl works; only dragging items in and out
+// of it does not. wxDropTarget/wxDropSource on the control as a whole are
+// unaffected, those go through src/gtk/dnd.cpp which is ported.
+#ifndef __WXGTK4__
 static void         wxgtk_tree_model_drag_source_init(void* g_iface, void*);
 static void         wxgtk_tree_model_drag_dest_init  (void* g_iface, void*);
+#endif // !__WXGTK4__
 
 static GtkTreeModelFlags wxgtk_tree_model_get_flags  (GtkTreeModel      *tree_model);
 static gint         wxgtk_tree_model_get_n_columns   (GtkTreeModel      *tree_model);
@@ -574,6 +601,7 @@ static void     wxgtk_tree_model_set_default_sort_func (GtkTreeSortable       *s
 static gboolean wxgtk_tree_model_has_default_sort_func (GtkTreeSortable       *sortable);
 
 /* drag'n'drop */
+#ifndef __WXGTK4__
 static gboolean wxgtk_tree_model_row_draggable         (GtkTreeDragSource     *drag_source,
                                                         GtkTreePath           *path);
 static gboolean wxgtk_tree_model_drag_data_delete      (GtkTreeDragSource     *drag_source,
@@ -587,6 +615,7 @@ static gboolean wxgtk_tree_model_drag_data_received    (GtkTreeDragDest       *d
 static gboolean wxgtk_tree_model_row_drop_possible     (GtkTreeDragDest       *drag_dest,
                                                         GtkTreePath           *dest_path,
                                                         GtkSelectionData      *selection_data);
+#endif // !__WXGTK4__
 
 static GType
 gtk_wx_tree_model_get_type (void)
@@ -623,6 +652,7 @@ gtk_wx_tree_model_get_type (void)
             nullptr
         };
 
+#ifndef __WXGTK4__
         static const GInterfaceInfo drag_source_iface_info =
         {
             wxgtk_tree_model_drag_source_init,
@@ -636,6 +666,7 @@ gtk_wx_tree_model_get_type (void)
             nullptr,
             nullptr
         };
+#endif // !__WXGTK4__
 
         tree_model_type = g_type_register_static (G_TYPE_OBJECT, "GtkWxTreeModel",
                                                 &tree_model_info, (GTypeFlags)0 );
@@ -646,12 +677,16 @@ gtk_wx_tree_model_get_type (void)
         g_type_add_interface_static (tree_model_type,
                                      GTK_TYPE_TREE_SORTABLE,
                                      &sortable_iface_info);
+#ifndef __WXGTK4__
+        // See the note above the drag and drop callbacks below: the model
+        // does not claim to implement these under GTK4.
         g_type_add_interface_static (tree_model_type,
                                      GTK_TYPE_TREE_DRAG_DEST,
                                      &drag_dest_iface_info);
         g_type_add_interface_static (tree_model_type,
                                      GTK_TYPE_TREE_DRAG_SOURCE,
                                      &drag_source_iface_info);
+#endif // !__WXGTK4__
     }
 
     return tree_model_type;
@@ -693,6 +728,7 @@ wxgtk_tree_model_sortable_init(void* g_iface, void*)
     iface->has_default_sort_func = wxgtk_tree_model_has_default_sort_func;
 }
 
+#ifndef __WXGTK4__
 static void
 wxgtk_tree_model_drag_source_init(void* g_iface, void*)
 {
@@ -709,6 +745,7 @@ wxgtk_tree_model_drag_dest_init(void* g_iface, void*)
     iface->drag_data_received = wxgtk_tree_model_drag_data_received;
     iface->row_drop_possible = wxgtk_tree_model_row_drop_possible;
 }
+#endif // !__WXGTK4__
 
 static void
 wxgtk_tree_model_init(GTypeInstance* instance, void*)
@@ -917,6 +954,7 @@ wxgtk_tree_model_iter_parent (GtkTreeModel *tree_model,
 }
 
 /* drag'n'drop iface */
+#ifndef __WXGTK4__
 static gboolean
 wxgtk_tree_model_row_draggable (GtkTreeDragSource *drag_source,
                                 GtkTreePath       *path)
@@ -997,6 +1035,7 @@ wxgtk_tree_model_row_drop_possible (GtkTreeDragDest  *drag_dest,
 
     return wxtree_model->internal->row_drop_possible( drag_dest, dest_path, selection_data );
 }
+#endif // !__WXGTK4__
 
 /* sortable iface */
 static gboolean
@@ -1236,14 +1275,16 @@ extern "C" {
 // get_preferred_height for GTK+ 3) vfuncs, so we use GtkHBox instead. But in
 // GTK+ 4, GtkHBox is removed, so we do use GtkBin with it.
 #ifdef __WXGTK4__
-    typedef GtkBin GtkWxCellEditorBinBase;
-    typedef GtkBinClass GtkWxCellEditorBinBaseClass;
+    // GTK4 removed GtkBin as well as GtkHBox, leaving GtkBox, which is what
+    // this was under GTK3 anyway -- a box holding exactly one child.
+    typedef GtkBox GtkWxCellEditorBinBase;
+    typedef GtkBoxClass GtkWxCellEditorBinBaseClass;
 
     // Notice that this can't be just a (const) variable as GTK+ type constants
     // are actually macros expanding into function calls, which shouldn't be
     // performed before the library is initialized, so we need to use either an
     // inline function or a define, which is simpler.
-    #define GetGtkWxCellEditorBinBaseType() GTK_TYPE_BIN
+    #define GetGtkWxCellEditorBinBaseType() GTK_TYPE_BOX
 #else // GTK+ < 4
     // GtkHBox is deprecated since 3.2, so avoid warnings about using it.
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
@@ -1364,7 +1405,11 @@ gtk_wx_cell_editor_bin_new(wxWindow* editor)
         bin = (GtkWxCellEditorBin*)g_object_new (GTK_TYPE_WX_CELL_EDITOR_BIN, nullptr);
 
     bin->editor = editor;
+#ifdef __WXGTK4__
+    gtk_box_append(GTK_BOX(bin), editor->m_widget);
+#else
     gtk_container_add(GTK_CONTAINER(bin), editor->m_widget);
+#endif
 
     return GTK_WIDGET(bin);
 }
@@ -1438,9 +1483,34 @@ static void gtk_wx_cell_renderer_get_size (
                         gint                    *y_offset,
                         gint                    *width,
                         gint                    *height );
+#ifdef __WXGTK4__
+// GtkCellRendererClass::render became ::snapshot, and the get_size vfunc was
+// replaced by separate width and height requests. Both are bridged below to
+// the code which already exists for GTK3.
+static void gtk_wx_cell_renderer_snapshot (
+                        GtkCellRenderer         *cell,
+                        GtkSnapshot             *snapshot,
+                        GtkWidget               *widget,
+                        wxConstGdkRect          *background_area,
+                        wxConstGdkRect          *cell_area,
+                        GtkCellRendererState     flags );
+static void gtk_wx_cell_renderer_get_preferred_width (
+                        GtkCellRenderer         *cell,
+                        GtkWidget               *widget,
+                        gint                    *minimum,
+                        gint                    *natural );
+static void gtk_wx_cell_renderer_get_preferred_height (
+                        GtkCellRenderer         *cell,
+                        GtkWidget               *widget,
+                        gint                    *minimum,
+                        gint                    *natural );
+#endif // __WXGTK4__
 static void gtk_wx_cell_renderer_render (
                         GtkCellRenderer         *cell,
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+                        cairo_t* cr,
+                        GtkSnapshot* snapshot,
+#elif defined(__WXGTK3__)
                         cairo_t* cr,
 #else
                         GdkWindow               *window,
@@ -1512,8 +1582,14 @@ gtk_wx_cell_renderer_class_init(void* klass, void*)
 {
     GtkCellRendererClass *cell_class = GTK_CELL_RENDERER_CLASS (klass);
 
+#ifdef __WXGTK4__
+    cell_class->get_preferred_width = gtk_wx_cell_renderer_get_preferred_width;
+    cell_class->get_preferred_height = gtk_wx_cell_renderer_get_preferred_height;
+    cell_class->snapshot = gtk_wx_cell_renderer_snapshot;
+#else
     cell_class->get_size = gtk_wx_cell_renderer_get_size;
     cell_class->render = gtk_wx_cell_renderer_render;
+#endif
     cell_class->activate = gtk_wx_cell_renderer_activate;
     cell_class->start_editing = gtk_wx_cell_renderer_start_editing;
 }
@@ -1625,7 +1701,13 @@ gtk_wx_cell_renderer_get_size (GtkCellRenderer *renderer,
 
 struct wxDataViewCustomRenderer::GTKRenderParams
 {
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    // The Cairo context is obtained from the snapshot for wx's own drawing;
+    // the snapshot itself is kept so that the GTK renderers wx delegates to
+    // can be asked to snapshot themselves into the same scene.
+    cairo_t* cr;
+    GtkSnapshot* snapshot;
+#elif defined(__WXGTK3__)
     cairo_t* cr;
 #else
     GdkWindow* window;
@@ -1638,7 +1720,10 @@ struct wxDataViewCustomRenderer::GTKRenderParams
 
 static void
 gtk_wx_cell_renderer_render (GtkCellRenderer      *renderer,
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+                             cairo_t* cr,
+                             GtkSnapshot* snapshot,
+#elif defined(__WXGTK3__)
                              cairo_t* cr,
 #else
                              GdkWindow            *window,
@@ -1665,6 +1750,9 @@ gtk_wx_cell_renderer_render (GtkCellRenderer      *renderer,
         rect.x = -rect.x - rect.width;
     }
     renderParams.cr = cr;
+#ifdef __WXGTK4__
+    renderParams.snapshot = snapshot;
+#endif
 #else
     renderParams.window = window;
     renderParams.expose_area = expose_area;
@@ -1716,6 +1804,76 @@ gtk_wx_cell_renderer_render (GtkCellRenderer      *renderer,
 #endif
 }
 
+#ifdef __WXGTK4__
+
+// The three vfuncs GTK4 wants, each expressed in terms of the GTK3 code above.
+
+static void
+gtk_wx_cell_renderer_get_preferred_size (GtkCellRenderer *renderer,
+                                         GtkWidget       *widget,
+                                         gint            *width,
+                                         gint            *height)
+{
+    gtk_wx_cell_renderer_get_size(renderer, widget, nullptr,
+                                  nullptr, nullptr, width, height);
+}
+
+static void
+gtk_wx_cell_renderer_get_preferred_width (GtkCellRenderer *renderer,
+                                          GtkWidget       *widget,
+                                          gint            *minimum,
+                                          gint            *natural)
+{
+    gint width = 0;
+    gtk_wx_cell_renderer_get_preferred_size(renderer, widget, &width, nullptr);
+
+    if (minimum)
+        *minimum = width;
+    if (natural)
+        *natural = width;
+}
+
+static void
+gtk_wx_cell_renderer_get_preferred_height (GtkCellRenderer *renderer,
+                                           GtkWidget       *widget,
+                                           gint            *minimum,
+                                           gint            *natural)
+{
+    gint height = 0;
+    gtk_wx_cell_renderer_get_preferred_size(renderer, widget, nullptr, &height);
+
+    if (minimum)
+        *minimum = height;
+    if (natural)
+        *natural = height;
+}
+
+static void
+gtk_wx_cell_renderer_snapshot (GtkCellRenderer      *renderer,
+                               GtkSnapshot          *snapshot,
+                               GtkWidget            *widget,
+                               wxConstGdkRect       *background_area,
+                               wxConstGdkRect       *cell_area,
+                               GtkCellRendererState  flags)
+{
+    // wx renderers draw with Cairo, and a snapshot can hand out a Cairo
+    // context which renders into it, so the GTK3 code needs no changes beyond
+    // being given one. The node covers the background area, which is the
+    // largest region this cell may touch.
+    const graphene_rect_t bounds = GRAPHENE_RECT_INIT(
+        float(background_area->x), float(background_area->y),
+        float(background_area->width), float(background_area->height));
+
+    cairo_t* const cr = gtk_snapshot_append_cairo(snapshot, &bounds);
+
+    gtk_wx_cell_renderer_render(renderer, cr, snapshot, widget,
+                                background_area, cell_area, flags);
+
+    cairo_destroy(cr);
+}
+
+#endif // __WXGTK4__
+
 static gboolean
 gtk_wx_cell_renderer_activate(
                         GtkCellRenderer         *renderer,
@@ -1757,6 +1915,23 @@ gtk_wx_cell_renderer_activate(
         // activated by <ENTER>
         return cell->ActivateCell(renderrect, model, item, model_col, nullptr);
     }
+#ifdef __WXGTK4__
+    else if ( gdk_event_get_event_type(event) == GDK_BUTTON_PRESS )
+    {
+        // GdkEvent is opaque now, so the button and the position are asked for
+        // rather than read out of a struct. The position is surface-relative,
+        // which is what InitMouseEvent() wants here since this event did not
+        // come through a controller attached to the tree view.
+        if ( gdk_button_event_get_button(event) == GDK_BUTTON_PRIMARY )
+        {
+            double eventX = 0, eventY = 0;
+            gdk_event_get_position(event, &eventX, &eventY);
+
+            wxMouseEvent mouse_event(wxEVT_LEFT_DOWN);
+            InitMouseEvent(ctrl, mouse_event, event, eventX, eventY);
+
+            if (ctrl->GetLayoutDirection() == wxLayout_RightToLeft)
+#else
     else if ( event->type == GDK_BUTTON_PRESS )
     {
         GdkEventButton *button_event = (GdkEventButton*)event;
@@ -1766,6 +1941,7 @@ gtk_wx_cell_renderer_activate(
             InitMouseEvent(ctrl, mouse_event, button_event);
 
             if (ctrl->GetLayoutDirection() == wxLayout_RightToLeft)
+#endif // __WXGTK4__/!__WXGTK4__
             {
                 int w;
                 ctrl->GetClientSize(&w, nullptr);
@@ -1966,8 +2142,16 @@ bool wxGtkDataViewModelNotifier::ValueChanged( const wxDataViewItem &item, unsig
                     gtk_widget_get_allocation(GTK_WIDGET(gtk_tree_view_column_get_button(gcolumn)), &a);
                     int ydiff = a.height;
                     // Redraw
+#ifdef __WXGTK4__
+                    // GTK4 has no partial redraws: the frame clock repaints
+                    // whatever it needs to, so the area is not asked for.
+                    gtk_widget_queue_draw( GTK_WIDGET(widget) );
+                    wxUnusedVar(xdiff);
+                    wxUnusedVar(ydiff);
+#else
                     gtk_widget_queue_draw_area( GTK_WIDGET(widget),
                         cell_area.x - xdiff, ydiff + cell_area.y, cell_area.width, cell_area.height );
+#endif
                 }
             }
 
@@ -2478,52 +2662,82 @@ extern "C" {
 static void wxCellRendererPixbufClassInit(void* g_class, void* class_data);
 }
 
-#define WX_CELL_RENDERER_PIXBUF(obj) G_TYPE_CHECK_INSTANCE_CAST(obj, wxCellRendererPixbuf::Type(), wxCellRendererPixbuf)
-
 namespace
 {
-class wxCellRendererPixbuf: GtkCellRendererPixbuf
+
+// GTK4 made both the instance and the class struct of GtkCellRendererPixbuf
+// private, so a derived type can no longer be declared as a C++ class with it
+// as a base: neither its size nor its layout is known at compile time. The
+// sizes are asked for at run time instead and the one field wx adds lives at
+// the end of the instance, addressed by an offset. This is the usual way of
+// deriving from an opaque GObject type and works identically under GTK3.
+struct wxCellRendererPixbufData
+{
+    wxBitmapBundle* m_bundle;
+};
+
+GtkCellRendererClass* wxCellRendererPixbufParentClass;
+guint wxCellRendererPixbufDataOffset;
+
+class wxCellRendererPixbuf
 {
 public:
     static GType Type();
     static GtkCellRenderer* New();
-    void Set(const wxBitmapBundle& bundle);
 
-    wxBitmapBundle* m_bundle;
-
-    wxDECLARE_NO_COPY_CLASS(wxCellRendererPixbuf);
-    wxCellRendererPixbuf() wxMEMBER_DELETE;
-    ~wxCellRendererPixbuf() wxMEMBER_DELETE;
+    // Both take the renderer to act on rather than being called on it, as
+    // there is no C++ object to call anything on any more.
+    static void Set(void* renderer, const wxBitmapBundle& bundle);
+    static wxBitmapBundle* GetBundle(void* renderer);
 };
-
-GtkCellRendererClass* wxCellRendererPixbufParentClass;
 
 GType wxCellRendererPixbuf::Type()
 {
     static GType type;
     if (type == 0)
     {
+        GTypeQuery query;
+        g_type_query(GTK_TYPE_CELL_RENDERER_PIXBUF, &query);
+
+        // g_type_query() reports the parent's instance size, which is where
+        // the derived type's own data starts.
+        wxCellRendererPixbufDataOffset = query.instance_size;
+
         type = g_type_register_static_simple(
             GTK_TYPE_CELL_RENDERER_PIXBUF,
             "wxCellRendererPixbuf",
-            sizeof(GtkCellRendererPixbufClass),
+            query.class_size,
             wxCellRendererPixbufClassInit,
-            sizeof(wxCellRendererPixbuf),
+            wxCellRendererPixbufDataOffset + sizeof(wxCellRendererPixbufData),
             nullptr, GTypeFlags(0));
     }
     return type;
 }
 
+wxBitmapBundle* wxCellRendererPixbuf::GetBundle(void* renderer)
+{
+    wxCellRendererPixbufData* const data =
+        reinterpret_cast<wxCellRendererPixbufData*>(
+            reinterpret_cast<char*>(renderer) + wxCellRendererPixbufDataOffset);
+
+    return data->m_bundle;
+}
+
 GtkCellRenderer* wxCellRendererPixbuf::New()
 {
-    wxCellRendererPixbuf* crp = WX_CELL_RENDERER_PIXBUF(g_object_new(Type(), nullptr));
-    crp->m_bundle = new wxBitmapBundle;
+    void* const crp = g_object_new(Type(), nullptr);
+
+    wxCellRendererPixbufData* const data =
+        reinterpret_cast<wxCellRendererPixbufData*>(
+            reinterpret_cast<char*>(crp) + wxCellRendererPixbufDataOffset);
+    data->m_bundle = new wxBitmapBundle;
+
     return GTK_CELL_RENDERER(crp);
 }
 
-void wxCellRendererPixbuf::Set(const wxBitmapBundle& bundle)
+void wxCellRendererPixbuf::Set(void* renderer, const wxBitmapBundle& bundle)
 {
-    *m_bundle = bundle;
+    *GetBundle(renderer) = bundle;
 
     GdkPixbuf* pixbuf = nullptr;
     if (bundle.IsOk())
@@ -2531,7 +2745,7 @@ void wxCellRendererPixbuf::Set(const wxBitmapBundle& bundle)
         const wxSize size(bundle.GetDefaultSize());
         pixbuf = gdk_pixbuf_new(GDK_COLORSPACE_RGB, false, 8, size.x, size.y);
     }
-    g_object_set(G_OBJECT(this), "pixbuf", pixbuf, nullptr);
+    g_object_set(G_OBJECT(renderer), "pixbuf", pixbuf, nullptr);
     if (pixbuf)
         g_object_unref(pixbuf);
 }
@@ -2543,7 +2757,7 @@ wxCellRendererPixbufRender(GtkCellRenderer* cell, cairo_t* cr, GtkWidget* widget
     const GdkRectangle* /*background_area*/, const GdkRectangle* cell_area,
     GtkCellRendererState /*flags*/)
 {
-    const wxBitmapBundle& bundle = *WX_CELL_RENDERER_PIXBUF(cell)->m_bundle;
+    const wxBitmapBundle& bundle = *wxCellRendererPixbuf::GetBundle(cell);
     if (bundle.IsOk())
     {
         int scale = 1;
@@ -2559,17 +2773,42 @@ wxCellRendererPixbufRender(GtkCellRenderer* cell, cairo_t* cr, GtkWidget* widget
     }
 }
 
+#ifdef __WXGTK4__
+static void wxCellRendererPixbufSnapshot(GtkCellRenderer* cell,
+    GtkSnapshot* snapshot, GtkWidget* widget,
+    const GdkRectangle* background_area, const GdkRectangle* cell_area,
+    GtkCellRendererState flags)
+{
+    // As for the custom renderer above: wx draws with Cairo and a snapshot
+    // can hand out a context which renders into it.
+    const graphene_rect_t bounds = GRAPHENE_RECT_INIT(
+        float(background_area->x), float(background_area->y),
+        float(background_area->width), float(background_area->height));
+
+    cairo_t* const cr = gtk_snapshot_append_cairo(snapshot, &bounds);
+
+    wxCellRendererPixbufRender(cell, cr, widget, background_area, cell_area, flags);
+
+    cairo_destroy(cr);
+}
+#endif // __WXGTK4__
+
 static void wxCellRendererPixbufFinalize(GObject* object)
 {
-    wxCellRendererPixbuf* crp = WX_CELL_RENDERER_PIXBUF(object);
-    delete crp->m_bundle;
-    crp->m_bundle = nullptr;
+    wxBitmapBundle*& bundle = *reinterpret_cast<wxBitmapBundle**>(
+        reinterpret_cast<char*>(object) + wxCellRendererPixbufDataOffset);
+    delete bundle;
+    bundle = nullptr;
     G_OBJECT_CLASS(wxCellRendererPixbufParentClass)->finalize(object);
 }
 
 static void wxCellRendererPixbufClassInit(void* g_class, void* /*class_data*/)
 {
+#ifdef __WXGTK4__
+    GTK_CELL_RENDERER_CLASS(g_class)->snapshot = wxCellRendererPixbufSnapshot;
+#else
     GTK_CELL_RENDERER_CLASS(g_class)->render = wxCellRendererPixbufRender;
+#endif
     G_OBJECT_CLASS(g_class)->finalize = wxCellRendererPixbufFinalize;
     wxCellRendererPixbufParentClass = GTK_CELL_RENDERER_CLASS(g_type_class_peek_parent(g_class));
 }
@@ -2613,7 +2852,7 @@ bool wxDataViewBitmapRenderer::SetValue( const wxVariant &value )
     }
 
 #ifdef __WXGTK3__
-    WX_CELL_RENDERER_PIXBUF(m_renderer)->Set(bitmapBundle);
+    wxCellRendererPixbuf::Set(m_renderer, bitmapBundle);
 #else
     g_object_set(G_OBJECT(m_renderer),
         "pixbuf",
@@ -2834,7 +3073,19 @@ void wxDataViewCustomRenderer::RenderText( const wxString &text,
     cell_area.x += xoffset;
     cell_area.width -= xoffset;
 
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    const bool isRTL =
+        wxWindow::GTKGetLayout(m_renderParams->widget) == wxLayout_RightToLeft;
+    if (isRTL)
+    {
+        // The mirroring has to be applied to the snapshot rather than to our
+        // Cairo context, because that is what the delegated renderer draws
+        // into. gtk_snapshot_save()/restore() bracket it as cairo_save() did.
+        gtk_snapshot_save(m_renderParams->snapshot);
+        gtk_snapshot_scale(m_renderParams->snapshot, -1, 1);
+        cell_area.x = -cell_area.x - cell_area.width;
+    }
+#elif defined(__WXGTK3__)
     const bool isRTL =
         wxWindow::GTKGetLayout(m_renderParams->widget) == wxLayout_RightToLeft;
     if (isRTL)
@@ -2843,8 +3094,18 @@ void wxDataViewCustomRenderer::RenderText( const wxString &text,
         cairo_scale(m_renderParams->cr, -1, 1);
         cell_area.x = -cell_area.x - cell_area.width;
     }
-#endif // __WXGTK3__
+#endif // __WXGTK4__/__WXGTK3__
 
+#ifdef __WXGTK4__
+    // gtk_cell_renderer_render() is gone with the render vfunc it called: a
+    // renderer draws into the same snapshot as everything else now.
+    gtk_cell_renderer_snapshot( GTK_CELL_RENDERER(textRenderer),
+        m_renderParams->snapshot,
+        m_renderParams->widget,
+        m_renderParams->background_area,
+        &cell_area,
+        GtkCellRendererState(m_renderParams->flags));
+#else
     gtk_cell_renderer_render( GTK_CELL_RENDERER(textRenderer),
 #ifdef __WXGTK3__
         m_renderParams->cr,
@@ -2858,8 +3119,12 @@ void wxDataViewCustomRenderer::RenderText( const wxString &text,
         m_renderParams->expose_area,
 #endif
         GtkCellRendererState(m_renderParams->flags));
+#endif // __WXGTK4__/!__WXGTK4__
 
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    if (isRTL)
+        gtk_snapshot_restore(m_renderParams->snapshot);
+#elif defined(__WXGTK3__)
     if (isRTL)
         cairo_restore(m_renderParams->cr);
 #endif
@@ -3148,7 +3413,7 @@ bool wxDataViewIconTextRenderer::SetValue( const wxVariant &value )
     SetTextValue(m_value.GetText());
 
 #ifdef __WXGTK3__
-    WX_CELL_RENDERER_PIXBUF(m_rendererIcon)->Set(m_value.GetBitmapBundle());
+    wxCellRendererPixbuf::Set(m_rendererIcon, m_value.GetBitmapBundle());
 #else
     const wxIcon& icon = m_value.GetIcon();
     g_object_set(G_OBJECT(m_rendererIcon), "pixbuf", icon.IsOk() ? icon.GetPixbuf() : nullptr, nullptr);
@@ -3205,15 +3470,11 @@ wxDataViewIconTextRenderer::GtkGetValueFromString(const wxString& str) const
 // ---------------------------------------------------------
 
 
+// The body is shared: only the way GTK reports the click differs.
 static gboolean
-gtk_dataview_header_button_press_callback( GtkWidget *WXUNUSED(widget),
-                                           GdkEventButton *gdk_event,
-                                           wxDataViewColumn *column )
+wxGTKDataViewHeaderClick(wxDataViewColumn *column, guint button)
 {
-    if (gdk_event->type != GDK_BUTTON_PRESS)
-        return FALSE;
-
-    if (gdk_event->button == 1)
+    if (button == 1)
     {
         gs_lastLeftClickHeader = column;
 
@@ -3223,7 +3484,7 @@ gtk_dataview_header_button_press_callback( GtkWidget *WXUNUSED(widget),
             return FALSE;
     }
 
-    if (gdk_event->button == 3)
+    if (button == 3)
     {
         wxDataViewCtrl *dv = column->GetOwner();
         wxDataViewEvent
@@ -3237,6 +3498,33 @@ gtk_dataview_header_button_press_callback( GtkWidget *WXUNUSED(widget),
 
 extern "C"
 {
+
+#ifdef __WXGTK4__
+// There is no button-press-event: a click gesture in the capture phase sees
+// the press before the header button's own handling of it, which is what the
+// GTK3 handler running before GTK's did.
+static void
+gtk_dataview_header_button_press_callback( GtkGestureClick* gesture,
+                                           int WXUNUSED(nPress),
+                                           double WXUNUSED(x),
+                                           double WXUNUSED(y),
+                                           wxDataViewColumn *column )
+{
+    wxGTKDataViewHeaderClick(column,
+        gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture)));
+}
+#else
+static gboolean
+gtk_dataview_header_button_press_callback( GtkWidget *WXUNUSED(widget),
+                                           GdkEventButton *gdk_event,
+                                           wxDataViewColumn *column )
+{
+    if (gdk_event->type != GDK_BUTTON_PRESS)
+        return FALSE;
+
+    return wxGTKDataViewHeaderClick(column, gdk_event->button);
+}
+#endif // __WXGTK4__/!__WXGTK4__
 
 static void wxGtkTreeCellDataFunc( GtkTreeViewColumn *WXUNUSED(column),
                             GtkCellRenderer *renderer,
@@ -3347,8 +3635,20 @@ void wxDataViewColumn::OnInternalIdle()
         GtkWidget* button = gtk_tree_view_column_get_button(column);
         if (button)
         {
+#ifdef __WXGTK4__
+            {
+                GtkGesture* const click = gtk_gesture_click_new();
+                gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), 0);
+                gtk_event_controller_set_propagation_phase(
+                    GTK_EVENT_CONTROLLER(click), GTK_PHASE_CAPTURE);
+                g_signal_connect(click, "pressed",
+                    G_CALLBACK (gtk_dataview_header_button_press_callback), this);
+                gtk_widget_add_controller(button, GTK_EVENT_CONTROLLER(click));
+            }
+#else
             g_signal_connect(button, "button_press_event",
                       G_CALLBACK (gtk_dataview_header_button_press_callback), this);
+#endif
 
             // otherwise the event will be blocked by GTK+
             gtk_tree_view_column_set_clickable( column, TRUE );
@@ -3389,7 +3689,11 @@ void wxDataViewColumn::SetBitmap( const wxBitmapBundle &bitmap )
 
     if (bitmap.IsOk())
     {
+#ifdef __WXGTK4__
+        wxGtkImage::Set(m_image, bitmap);
+#else
         WX_GTK_IMAGE(m_image)->Set(bitmap);
+#endif
         gtk_widget_show( m_image );
     }
     else
@@ -3764,6 +4068,12 @@ void wxDataViewCtrlInternal::BuildBranch( wxGtkTreeModelNode *node )
 
 bool wxDataViewCtrlInternal::EnableDragSource( const wxDataFormat &format )
 {
+#ifdef __WXGTK4__
+    // See the note above the tree model drag and drop callbacks: this cannot
+    // be done under GTK4 yet, so say so rather than pretend it worked.
+    wxUnusedVar(format);
+    return false;
+#else
     wxGtkString atom_str( gdk_atom_name( format  ) );
     m_dragSourceTargetEntryTarget = wxCharBuffer( atom_str );
 
@@ -3775,10 +4085,16 @@ bool wxDataViewCtrlInternal::EnableDragSource( const wxDataFormat &format )
        GDK_BUTTON1_MASK, &m_dragSourceTargetEntry, 1, (GdkDragAction) GDK_ACTION_COPY );
 
     return true;
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 bool wxDataViewCtrlInternal::EnableDropTarget( const wxVector<wxDataFormat>& formats )
 {
+#ifdef __WXGTK4__
+    // See EnableDragSource() above.
+    wxUnusedVar(formats);
+    return false;
+#else
     if (formats.empty())
     {
         gtk_tree_view_unset_rows_drag_dest(GTK_TREE_VIEW(m_owner->GtkGetTreeView()));
@@ -3798,7 +4114,10 @@ bool wxDataViewCtrlInternal::EnableDropTarget( const wxVector<wxDataFormat>& for
        &m_dropTargetTargetEntry, 1, (GdkDragAction) GDK_ACTION_COPY );
 
     return true;
+#endif // __WXGTK4__/!__WXGTK4__
 }
+
+#ifndef __WXGTK4__
 
 gboolean wxDataViewCtrlInternal::row_draggable( GtkTreeDragSource *WXUNUSED(drag_source),
     GtkTreePath *path )
@@ -3969,6 +4288,8 @@ wxDataViewCtrlInternal::row_drop_possible(GtkTreeDragDest *WXUNUSED(drag_dest),
 
     return TRUE;
 }
+
+#endif // !__WXGTK4__
 
 // notifications from wxDataViewModel
 
@@ -4581,22 +4902,11 @@ void wxDataViewCtrl::AddChildGTK(wxWindowGTK*)
 // "motion_notify_event"
 //-----------------------------------------------------------------------------
 
+// Shared body: the two handlers below differ only in how they get the
+// position, which under GTK4 the controller hands over directly.
 static gboolean
-gtk_dataview_motion_notify_callback( GtkWidget *WXUNUSED(widget),
-                                     GdkEventMotion *gdk_event,
-                                     wxDataViewCtrl *dv )
+wxGTKDataViewMotion( wxDataViewCtrl *dv, int x, int y )
 {
-    int x = int(gdk_event->x);
-    int y = int(gdk_event->y);
-    if (gdk_event->is_hint)
-    {
-#ifdef __WXGTK3__
-        gdk_window_get_device_position(gdk_event->window, gdk_event->device, &x, &y, nullptr);
-#else
-        gdk_window_get_pointer(gdk_event->window, &x, &y, nullptr);
-#endif
-    }
-
     wxGtkTreePath path;
     GtkTreeViewColumn *column = nullptr;
     gint cell_x = 0;
@@ -4620,10 +4930,44 @@ gtk_dataview_motion_notify_callback( GtkWidget *WXUNUSED(widget),
     return FALSE;
 }
 
+#ifdef __WXGTK4__
+static void
+gtk_dataview_motion_notify_callback( GtkEventControllerMotion* WXUNUSED(controller),
+                                     double x, double y,
+                                     wxDataViewCtrl *dv )
+{
+    // GtkEventControllerMotion always reports real coordinates: motion hints,
+    // which the GTK3 handler had to resolve with a pointer query, are gone.
+    wxGTKDataViewMotion(dv, int(x), int(y));
+}
+#else
+static gboolean
+gtk_dataview_motion_notify_callback( GtkWidget *WXUNUSED(widget),
+                                     GdkEventMotion *gdk_event,
+                                     wxDataViewCtrl *dv )
+{
+    int x = int(gdk_event->x);
+    int y = int(gdk_event->y);
+    if (gdk_event->is_hint)
+    {
+#ifdef __WXGTK3__
+        gdk_window_get_device_position(gdk_event->window, gdk_event->device, &x, &y, nullptr);
+#else
+        gdk_window_get_pointer(gdk_event->window, &x, &y, nullptr);
+#endif
+    }
+
+    return wxGTKDataViewMotion(dv, x, y);
+}
+#endif // __WXGTK4__/!__WXGTK4__
+
 //-----------------------------------------------------------------------------
 // "drag_data_received" signal
 //-----------------------------------------------------------------------------
 
+// Only reached through the tree model drag and drop machinery, which is not
+// available under GTK4, see the note near the top of this file.
+#ifndef __WXGTK4__
 static void
 gtk_dataview_drag_data_received_callback(GtkWidget* WXUNUSED(widget),
                                          GdkDragContext* WXUNUSED(context),
@@ -4635,29 +4979,19 @@ gtk_dataview_drag_data_received_callback(GtkWidget* WXUNUSED(widget),
 {
     dv->GtkGetInternal()->OnDragDataReceived(x, y, selection_data);
 }
+#endif // !__WXGTK4__
 
 //-----------------------------------------------------------------------------
 // "button_press_event"
 //-----------------------------------------------------------------------------
 
+// Shared body: only the way GTK reports the click differs.
 static gboolean
-gtk_dataview_button_press_callback( GtkWidget *WXUNUSED(widget),
-                                    GdkEventButton *gdk_event,
-                                    wxDataViewCtrl *dv )
+wxGTKDataViewContextMenu( wxDataViewCtrl *dv, int x, int y )
 {
-    if ((gdk_event->button == 3) && (gdk_event->type == GDK_BUTTON_PRESS))
     {
         GtkTreeView* const treeview = GTK_TREE_VIEW(dv->GtkGetTreeView());
 
-        // Surprisingly, we can get the events not only from the "bin" window,
-        // containing the items, but also from the window containing the column
-        // headers, and we're not interested in them here, we already generate
-        // wxEVT_DATAVIEW_COLUMN_HEADER_RIGHT_CLICK for them, so just ignore.
-        if (gdk_event->window != gtk_tree_view_get_bin_window(treeview))
-            return FALSE;
-
-        int x = int(gdk_event->x);
-        int y = int(gdk_event->y);
         wxGtkTreePath path;
         GtkTreeViewColumn *column = nullptr;
         gint cell_x = 0;
@@ -4696,9 +5030,52 @@ gtk_dataview_button_press_callback( GtkWidget *WXUNUSED(widget),
 #endif
         return dv->HandleWindowEvent( event );
     }
+}
+
+#ifdef __WXGTK4__
+static void
+gtk_dataview_button_press_callback( GtkGestureClick* WXUNUSED(gesture),
+                                    int WXUNUSED(nPress),
+                                    double x, double y,
+                                    wxDataViewCtrl *dv )
+{
+    // The GTK3 handler had to check that the event came from the "bin" window
+    // rather than from the column headers, which have their own handler.
+    // There are no subwindows under GTK4 and the headers are separate widgets
+    // with their own gesture, so a gesture on the tree view only ever sees
+    // clicks on the items -- but the coordinates are widget-relative and so
+    // need converting, which the GTK3 path got for free from the bin window.
+    GtkTreeView* const treeview = GTK_TREE_VIEW(dv->GtkGetTreeView());
+
+    int binX, binY;
+    gtk_tree_view_convert_widget_to_bin_window_coords(treeview, int(x), int(y),
+                                                      &binX, &binY);
+
+    wxGTKDataViewContextMenu(dv, binX, binY);
+}
+#else
+static gboolean
+gtk_dataview_button_press_callback( GtkWidget *WXUNUSED(widget),
+                                    GdkEventButton *gdk_event,
+                                    wxDataViewCtrl *dv )
+{
+    if ((gdk_event->button == 3) && (gdk_event->type == GDK_BUTTON_PRESS))
+    {
+        GtkTreeView* const treeview = GTK_TREE_VIEW(dv->GtkGetTreeView());
+
+        // Surprisingly, we can get the events not only from the "bin" window,
+        // containing the items, but also from the window containing the column
+        // headers, and we're not interested in them here, we already generate
+        // wxEVT_DATAVIEW_COLUMN_HEADER_RIGHT_CLICK for them, so just ignore.
+        if (gdk_event->window != gtk_tree_view_get_bin_window(treeview))
+            return FALSE;
+
+        return wxGTKDataViewContextMenu(dv, int(gdk_event->x), int(gdk_event->y));
+    }
 
     return FALSE;
 }
+#endif // __WXGTK4__/!__WXGTK4__
 
 wxIMPLEMENT_DYNAMIC_CLASS(wxDataViewCtrl, wxDataViewCtrlBase);
 
@@ -4757,7 +5134,11 @@ bool wxDataViewCtrl::Create(wxWindow *parent,
     GTKScrolledWindowSetBorder(m_widget, style);
 
     m_treeview = gtk_tree_view_new();
+#ifdef __WXGTK4__
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(m_widget), m_treeview);
+#else
     gtk_container_add (GTK_CONTAINER (m_widget), m_treeview);
+#endif
 
     m_focusWidget = GTK_WIDGET(m_treeview);
 
@@ -4822,6 +5203,25 @@ bool wxDataViewCtrl::Create(wxWindow *parent,
     g_signal_connect_after (m_treeview, "row-expanded",
                             G_CALLBACK (wxdataview_row_expanded_callback), this);
 
+#ifdef __WXGTK4__
+    {
+        GtkEventController* const motion = gtk_event_controller_motion_new();
+        g_signal_connect (motion, "motion",
+                          G_CALLBACK (gtk_dataview_motion_notify_callback), this);
+        gtk_widget_add_controller(m_treeview, motion);
+
+        // Only the secondary button is of interest here, which the gesture can
+        // be told rather than being checked for in the handler.
+        GtkGesture* const click = gtk_gesture_click_new();
+        gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
+        g_signal_connect (click, "pressed",
+                          G_CALLBACK (gtk_dataview_button_press_callback), this);
+        gtk_widget_add_controller(m_treeview, GTK_EVENT_CONTROLLER(click));
+    }
+
+    // No "drag-data-received": see the note about tree model drag and drop
+    // near the top of this file.
+#else
     g_signal_connect (m_treeview, "motion_notify_event",
                       G_CALLBACK (gtk_dataview_motion_notify_callback), this);
 
@@ -4830,6 +5230,7 @@ bool wxDataViewCtrl::Create(wxWindow *parent,
 
     g_signal_connect (m_treeview, "drag-data-received",
                       G_CALLBACK (gtk_dataview_drag_data_received_callback), this);
+#endif // __WXGTK4__/!__WXGTK4__
 
     return true;
 }

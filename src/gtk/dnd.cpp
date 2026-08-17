@@ -949,6 +949,44 @@ wxDragResult wxDropSource::DoDragDrop(int flags)
     return m_retValue;
 }
 
+wxDropSource::wxDropSource(wxWindow *win,
+                           const wxIcon &iconCopy,
+                           const wxIcon &iconMove,
+                           const wxIcon &iconNone)
+    : m_iconCopy(iconCopy)
+    , m_iconMove(iconMove)
+    , m_iconNone(iconNone)
+{
+    Init(win);
+}
+
+wxDropSource::wxDropSource(wxDataObject& data,
+                           wxWindow *win,
+                           const wxIcon &iconCopy,
+                           const wxIcon &iconMove,
+                           const wxIcon &iconNone)
+    : wxDropSource(win, iconCopy, iconMove, iconNone)
+{
+    SetData( data );
+}
+
+void wxDropSource::Init(wxWindow* win)
+{
+    m_waiting = true;
+    m_retValue = wxDragNone;
+    m_dragContext = nullptr;
+    m_widget = win->m_wxwindow ? win->m_wxwindow : win->m_widget;
+
+    // The icons are stored but never used: see the note about drag icons
+    // above. They are kept so that SetIcon() remains a no-op rather than an
+    // error, and so that this can start working again without an API change
+    // if GTK4 ever grows a way to supply one.
+}
+
+wxDropSource::~wxDropSource()
+{
+}
+
 #else // !__WXGTK4__
 
 wxDropTarget::wxDropTarget( wxDataObject *data )

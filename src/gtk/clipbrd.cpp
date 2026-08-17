@@ -851,8 +851,6 @@ async_targets_selection_received( GtkWidget *WXUNUSED(widget),
 // wxClipboard ctor/dtor
 // ----------------------------------------------------------------------------
 
-wxIMPLEMENT_DYNAMIC_CLASS(wxClipboard,wxObject);
-
 wxClipboard::wxClipboard()
 {
     m_idSelectionGetHandler = 0;
@@ -1248,5 +1246,8 @@ wxDataObject* wxClipboard::GTKGetDataObject( GdkAtom atom )
 }
 
 #endif // __WXGTK4__/!__WXGTK4__
+
+// Needed by both implementations above, so kept outside of them.
+wxIMPLEMENT_DYNAMIC_CLASS(wxClipboard,wxObject);
 
 #endif // wxUSE_CLIPBOARD

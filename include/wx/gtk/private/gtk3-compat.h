@@ -296,6 +296,20 @@ static inline GdkSurface* wx_gtk_widget_get_surface(GtkWidget* widget)
     return native ? gtk_native_get_surface(native) : nullptr;
 }
 
+// Version-neutral spelling of "the native drawing target of this widget", for
+// the few places which need it under both GTK3 and GTK4 and so can't simply be
+// written in terms of one or the other. See the GTK3 counterpart below.
+#define wx_gtk_widget_get_surface_or_window(w) wx_gtk_widget_get_surface(w)
+
+// GTK4 renamed the toplevel state flags along with GdkWindow itself, and
+// renamed iconify/deiconify to say what they do.
+#define GDK_WINDOW_STATE_MAXIMIZED  GDK_TOPLEVEL_STATE_MAXIMIZED
+#define GDK_WINDOW_STATE_FULLSCREEN GDK_TOPLEVEL_STATE_FULLSCREEN
+#define GDK_WINDOW_STATE_ICONIFIED  GDK_TOPLEVEL_STATE_MINIMIZED
+
+#define gtk_window_iconify(window)   gtk_window_minimize(window)
+#define gtk_window_deiconify(window) gtk_window_unminimize(window)
+
 // No widget owns a GdkWindow under GTK4 -- the concept is gone -- so the
 // GTK3 question "does this widget have its own window?" is always answered
 // no. Call sites use it to decide whether coordinates need translating
@@ -308,6 +322,9 @@ static inline gboolean wx_gtk_widget_get_has_window(GtkWidget*)
 #else // !__WXGTK4__
 
 wxGCC_WARNING_SUPPRESS(deprecated-declarations)
+
+// Counterpart of the GTK4 macro above.
+#define wx_gtk_widget_get_surface_or_window(w) gtk_widget_get_window(w)
 
 // Counterpart of the GTK4 stub above: here the question is real, so just
 // forward to GTK.

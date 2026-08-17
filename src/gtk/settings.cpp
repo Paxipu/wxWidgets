@@ -34,7 +34,12 @@
     #include "wx/gtk/private/variant.h"
 #endif
 
+#ifdef __WXGTK4__
+// GdkWindow is gone: this takes the toplevel's GdkSurface now, see toplevel.cpp.
+bool wxGetFrameExtents(GdkSurface* window, wxTopLevelWindow::DecorSize* decorSize);
+#else
 bool wxGetFrameExtents(GdkWindow* window, wxTopLevelWindow::DecorSize* decorSize);
+#endif
 
 // ----------------------------------------------------------------------------
 // wxSystemSettings implementation

@@ -110,7 +110,25 @@ public:
 
     void GTKHandleMapped();
 
+#ifndef __WXGTK4__
+    // GTK4 has no configure-event: see the comment in toplevel.cpp.
     void GTKConfigureEvent(int x, int y);
+#endif
+
+#ifdef __WXGTK3__
+    // Check whether our DPI changed and, if so, notify about it. Called from
+    // configure-event under GTK3 and from notify::scale-factor under GTK4.
+    void GTKUpdateScaleFactor();
+#endif
+
+#ifdef __WXGTK4__
+    // Called when the GdkToplevel state changes, which replaces GTK3's
+    // window-state-event. GTK only reports the new state, so the previous one
+    // is remembered here to know what actually changed.
+    void GTKHandleToplevelState(int state);
+
+    int m_gdkToplevelState = 0;
+#endif
 
     // do *not* call this to iconize the frame, this is a private function!
     void SetIconizeState(bool iconic);

@@ -1939,3 +1939,120 @@ five rewrites let `test_gui` link.
 | `dataview.cpp` | 55 | cell renderers, `GdkWindow` |
 
 Plus the ~12-file tail at 1-5 errors each.
+
+---
+
+## Progress update 21: `toplevel.cpp`, and what GTK4 simply won't do
+
+**944 -> 829 diagnostics, 38 -> 35 failing targets, no regressions.**
+`toplevel.cpp` went from 138 errors to zero. `app.cpp` and `timer.cpp` fell out
+with it, from a shared header fix. Two of the six subsystem rewrites are done.
+
+Unlike `menu.cpp`, this was not one replaced abstraction but a long tail of
+individually small removals -- and the interesting part is how many of them
+have **no replacement at all**, by design.
+
+### Things GTK4 took away from applications on purpose
+
+Each of these is a deliberate decision that the compositor, not the client,
+owns the behaviour. Under Wayland most were never really the client's to
+begin with. There is nothing to work around, so each is `#ifdef`ed out with a
+comment saying why:
+
+| Removed | wx feature affected |
+|---|---|
+| `gtk_window_move()`, `gtk_window_get_position()` | `Move()` has no effect; `wxMoveEvent` reports what wx was *asked* for, not where the window is |
+| `gtk_window_set_position()` | `wxCENTRE_ON_PARENT` for dialogs |
+| `gtk_window_set_keep_above()` | `wxSTAY_ON_TOP` |
+| `gtk_window_set_skip_taskbar_hint()` | `wxFRAME_NO_TASKBAR` |
+| `gtk_window_set_focus_on_map()` | `ShowWithoutActivating()` behaves as plain `Show()` |
+| `gtk_window_set_type_hint()` | dialog/utility window hints |
+| `gdk_window_set_functions()` | `EnableCloseButton()` beyond client side decorations |
+| `gtk_window_set_geometry_hints()` | maximum size and resize increments |
+| `gtk_window_set_icon_list()` | `SetIcons()` -- window icons come from the .desktop file now |
+| `gtk_grab_add()` | `AddGrab()`, now expressed as window modality |
+| `configure-event` | position tracking |
+| X11 property notifications | `_NET_FRAME_EXTENTS` tracking |
+
+Maximum size deserves a note: `wxWindowBase::ConstrainSize()` still clamps
+sizes wx sets itself, so `SetMaxSize()` is honoured for programmatic resizing.
+What is lost is stopping the *user* dragging the window bigger. Minimum size
+survives as a plain `gtk_widget_set_size_request()`.
+
+### The frame extents machinery is gone, and that is a real loss
+
+GTK3 wx learns its window manager decoration size by asking for
+`_NET_FRAME_EXTENTS` and waiting for the X11 property notification, deferring
+the initial `gtk_widget_show()` until the answer arrives so the window is not
+visibly resized a moment after appearing.
+
+GTK4 delivers no X11 property notifications to applications at all. With no
+notification there is nothing to defer *for*, so both halves come out: a GTK4
+wxTopLevelWindow never learns its own decoration size and `m_decorSize` stays
+zero.
+
+How much this matters depends on who draws the decorations. Where GTK draws
+them itself -- client side decorations, the common case now --
+`HasClientDecor()` already made the compensation zero, so nothing changes.
+Where a traditional window manager draws them, `GetSize()`/`SetSize()` on a
+TLW will be off by the frame thickness. `wxGetFrameExtents()` itself still
+works and `wxSystemSettings` still uses it for `wxSYS_FRAMESIZE_X` and
+friends; it is only the TLW's own arithmetic that no longer consults it.
+
+I initially wrote in a comment that the timeout handler "becomes the only path"
+to the extents. That was wrong and is corrected in the code: the timeout is
+only ever started by the deferred show, so removing the latter makes the
+former dead too.
+
+### Things that did map cleanly
+
+* `configure-event`'s DPI half -> `notify::scale-factor`, so `WXNotifyDPIChange()`
+  still fires. Only the position half is lost.
+* `window-state-event` -> `GdkToplevel`'s `notify::state`. GTK reports only the
+  new state, so the previous one is kept in the window to reconstruct the
+  changed mask the existing logic wants.
+* `focus-in`/`focus-out-event` -> `notify::is-active` (already added in an
+  earlier batch, wired up here).
+* `delete-event` -> `close-request`.
+* `gtk_container_forall()` searching for the header bar -> `gtk_window_get_titlebar()`,
+  which is what the search was looking for all along.
+* `gtk_window_resize()` -> `gtk_window_set_default_size()`, which applies to a
+  visible window too.
+* `gdk_window_get_state()` -> `gtk_window_is_maximized()`.
+* The RGBA visual dance in `SetTransparent()` -> nothing needed: GTK4 surfaces
+  always support alpha.
+* `gdk_threads_enter()`/`leave()` -> no-ops. The GDK threads API was removed
+  outright; its replacement is the rule it was deprecated in favour of, that
+  GTK calls happen on the main thread and other threads use `g_idle_add()`.
+  This is in `wx/gtk/private/threads.h`, which is why `app.cpp` and `timer.cpp`
+  came along.
+
+### Two bugs I introduced and caught before committing
+
+Worth recording because both would have compiled and misbehaved silently:
+
+1. I first wrote the GTK4 `gtk_window_set_decorated()` call where the GTK3
+   `gdk_window_set_decorations()` had been -- which is *after* the block that
+   zeroes `m_gdkDecor` once GTK is drawing the decorations itself. That would
+   have undecorated every client-side-decorated window. It has to happen before
+   that block, from the style-derived value.
+2. `EnableCloseButton()` I first implemented by re-calling `GTKHandleRealized()`.
+   That would have re-connected the `notify::state` signal on every call, and
+   would have read the already-zeroed `m_gdkDecor` anyway. It now updates the
+   header bar's decoration layout directly.
+
+The zeroing of `m_gdkDecor` turns out to serve two purposes -- neutering the
+GTK3 setter *and* keying `GetCachedDecorSize()` on "no window manager
+decorations" -- which is why it is kept rather than skipped under GTK4.
+
+### What is left
+
+| File | Errors | Why |
+|---|---|---|
+| `toolbar.cpp` | 141 | `GtkToolbar`/`GtkToolItem` removed outright |
+| `clipbrd.cpp` | 62 | `GdkAtom`/selection model replaced by `GdkClipboard` |
+| `radiobox.cpp` | 58 | `GtkRadioButton` removed |
+| `dataview.cpp` | 55 | cell renderers, `GdkWindow` |
+
+Plus the tail of files at 1-25 errors each. `test_gui` still cannot link, so
+none of the above is runtime-verified.

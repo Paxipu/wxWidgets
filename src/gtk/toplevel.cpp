@@ -69,14 +69,18 @@ extern wxCursor g_globalCursor;
 extern wxCursor g_busyCursor;
 extern wxRecursionGuardFlag g_inSizeAllocate;
 
-#ifdef GDK_WINDOWING_X11
+#if defined(GDK_WINDOWING_X11) && !defined(__WXGTK4__)
+// Both of these belong to the _NET_REQUEST_FRAME_EXTENTS handshake, which GTK4
+// cannot take part in: it delivers no X11 property notifications, so there is
+// nothing to wait for and nothing to record. See property_notify_event().
+
 // Whether _NET_REQUEST_FRAME_EXTENTS support is working
 static enum {
     RFE_STATUS_UNKNOWN, RFE_STATUS_WORKING, RFE_STATUS_BROKEN
 } gs_requestFrameExtentsStatus;
 
 static bool gs_decorCacheValid;
-#endif
+#endif // GDK_WINDOWING_X11 && !__WXGTK4__
 
 #ifdef __WXGTK3__
 static bool HasClientDecor(GtkWidget* widget)
@@ -384,9 +388,15 @@ size_allocate(GtkWidget*, GtkAllocation* alloc, wxTopLevelWindowGTK* win)
 
 extern "C" {
 static gboolean
+#ifdef __WXGTK4__
+// GTK4 replaced "delete-event" with "close-request", which carries no event.
+gtk_frame_delete_callback( GtkWindow *WXUNUSED(window),
+                           wxTopLevelWindowGTK *win )
+#else
 gtk_frame_delete_callback( GtkWidget *WXUNUSED(widget),
                            GdkEvent *WXUNUSED(event),
                            wxTopLevelWindowGTK *win )
+#endif
 {
     if (win->IsEnabled() &&
         (wxModalDialogHook::GetOpenCount() == 0 ||
@@ -401,6 +411,43 @@ gtk_frame_delete_callback( GtkWidget *WXUNUSED(widget),
 //-----------------------------------------------------------------------------
 // "configure_event"
 //-----------------------------------------------------------------------------
+
+#ifdef __WXGTK3__
+
+void wxTopLevelWindowGTK::GTKUpdateScaleFactor()
+{
+    const auto newScaleFactor = GetContentScaleFactor();
+    if ( newScaleFactor != m_scaleFactor )
+    {
+        const auto oldScaleFactor = m_scaleFactor;
+
+        // It seems safer to change it before generating the events to avoid
+        // any chance of reentrancy.
+        m_scaleFactor = newScaleFactor;
+
+        WXNotifyDPIChange(oldScaleFactor, newScaleFactor);
+    }
+}
+
+#endif // __WXGTK3__
+
+#ifdef __WXGTK4__
+
+extern "C" {
+// GTK4 has no "configure-event": an application is not told where the
+// compositor put its window, and gtk_window_get_position() is gone as well, so
+// the wxMoveEvent half of the GTK3 handler below has nothing to work with.
+//
+// The DPI half does have a proper replacement though, and it matters more, so
+// it is driven from the scale factor changing instead.
+static void
+wxgtk_tlw_scale_factor_changed(GObject*, GParamSpec*, wxTopLevelWindowGTK* win)
+{
+    win->GTKUpdateScaleFactor();
+}
+}
+
+#else // !__WXGTK4__
 
 extern "C" {
 static gboolean
@@ -417,17 +464,7 @@ void wxTopLevelWindowGTK::GTKConfigureEvent(int x, int y)
 {
 #ifdef __WXGTK3__
     // First of all check if our DPI has changed.
-    const auto newScaleFactor = GetContentScaleFactor();
-    if ( newScaleFactor != m_scaleFactor )
-    {
-        const auto oldScaleFactor = m_scaleFactor;
-
-        // It seems safer to change it before generating the events to avoid
-        // any chance of reentrancy.
-        m_scaleFactor = newScaleFactor;
-
-        WXNotifyDPIChange(oldScaleFactor, newScaleFactor);
-    }
+    GTKUpdateScaleFactor();
 #endif // __WXGTK3__
 
     wxPoint point;
@@ -458,6 +495,8 @@ void wxTopLevelWindowGTK::GTKConfigureEvent(int x, int y)
         HandleWindowEvent(event);
     }
 }
+
+#endif // __WXGTK4__/!__WXGTK4__
 
 //-----------------------------------------------------------------------------
 // "realize" from m_widget
@@ -662,13 +701,21 @@ wxString wxTopLevelWindowGTK::GetWaylandXDGSessionId() const
 
 #endif // wxHAVE_WAYLAND_SESSION_MANAGEMENT/!wxHAVE_WAYLAND_SESSION_MANAGEMENT
 
-#if GTK_CHECK_VERSION(3,10,0)
+#if GTK_CHECK_VERSION(3,10,0) && !defined(__WXGTK4__)
+// Not needed under GTK4, which has gtk_window_get_titlebar().
 extern "C" {
 static void findTitlebar(GtkWidget* widget, void* data)
 {
     if (GTK_IS_HEADER_BAR(widget))
         *static_cast<GtkWidget**>(data) = widget;
 }
+}
+#endif
+
+#ifdef __WXGTK4__
+extern "C" {
+static void
+wxgtk_tlw_notify_state(GObject* surface, GParamSpec*, wxTopLevelWindowGTK* win);
 }
 #endif
 
@@ -687,23 +734,60 @@ void wxTopLevelWindowGTK::GTKHandleRealized()
         return;
     }
 
-    GdkWindow* window = gtk_widget_get_window(m_widget);
+#ifdef __WXGTK4__
+    GdkSurface* const surface = wx_gtk_widget_get_surface(m_widget);
 
-#ifdef wxHAVE_WAYLAND_SESSION_MANAGEMENT
+    // The iconified/maximized/fullscreen state lives on the GdkToplevel, which
+    // only exists once we're realized, so this can't be connected in Create().
+    if (surface && GDK_IS_TOPLEVEL(surface))
+    {
+        m_gdkToplevelState = gdk_toplevel_get_state(GDK_TOPLEVEL(surface));
+        g_signal_connect(surface, "notify::state",
+                         G_CALLBACK(wxgtk_tlw_notify_state), this);
+    }
+#else
+    GdkWindow* window = gtk_widget_get_window(m_widget);
+#endif
+
+#if defined(wxHAVE_WAYLAND_SESSION_MANAGEMENT) && !defined(__WXGTK4__)
     // We effectively check if SetWaylandXDGSessionId() has been called, which
     // includes the check for the new enough GTK with support for this signal.
+    //
+    // Note that "xdg-toplevel-realized" is a GdkWindow signal, i.e. GTK3 only:
+    // under GTK4 this would have to be redone in terms of GdkToplevel.
     if ( m_xdgSessionData )
     {
         g_signal_connect (window, "xdg-toplevel-realized",
                           G_CALLBACK (wxgtk_tlw_xdg_realized), this);
     }
-#endif // wxHAVE_WAYLAND_SESSION_MANAGEMENT
+#endif // wxHAVE_WAYLAND_SESSION_MANAGEMENT && !__WXGTK4__
+
+#ifdef __WXGTK4__
+    // GTK4 dropped both gdk_window_set_decorations() and
+    // gdk_window_set_functions(): which window manager operations are offered
+    // is no longer under the application's control, only whether the window is
+    // decorated at all is. The finer grained flags still matter below, where
+    // they select the client side decoration layout, which is the only place
+    // GTK4 still honours them.
+    //
+    // This must happen before that block, which zeroes m_gdkDecor once GTK is
+    // drawing the decorations itself.
+    gtk_window_set_decorated(GTK_WINDOW(m_widget), m_gdkDecor != 0);
+#endif
 
 #if GTK_CHECK_VERSION(3,10,0)
     if (wx_is_at_least_gtk3(10))
     {
+#ifdef __WXGTK4__
+        // GTK4 removed gtk_container_forall(), but it also added a direct
+        // accessor for exactly what the GTK3 code was searching for.
+        GtkWidget* titlebar = gtk_window_get_titlebar(GTK_WINDOW(m_widget));
+        if (titlebar && !GTK_IS_HEADER_BAR(titlebar))
+            titlebar = nullptr;
+#else
         GtkWidget* titlebar = nullptr;
         gtk_container_forall(GTK_CONTAINER(m_widget), findTitlebar, &titlebar);
+#endif
         if (titlebar)
         {
 #if GTK_CHECK_VERSION(3,12,0)
@@ -735,8 +819,10 @@ void wxTopLevelWindowGTK::GTKHandleRealized()
     }
 #endif // 3.10
 
+#ifndef __WXGTK4__
     gdk_window_set_decorations(window, (GdkWMDecoration)m_gdkDecor);
     gdk_window_set_functions(window, (GdkWMFunction)m_gdkFunc);
+#endif
 
     const wxIconBundle& icons = GetIcons();
     if (icons.GetIconCount())
@@ -747,9 +833,18 @@ void wxTopLevelWindowGTK::GTKHandleRealized()
         cursor = g_busyCursor.GetCursor();
 
     if (cursor)
+    {
+#ifdef __WXGTK4__
+        wxUnusedVar(surface);
+        gtk_widget_set_cursor(m_widget, cursor);
+#else
         gdk_window_set_cursor(window, cursor);
+#endif
+    }
 
-#ifdef __WXGTK3__
+    // Note that the resize grip workaround which used to be here is gone: the
+    // grip itself was removed in GTK+ 3.14 already and GTK4 has no trace of it.
+#if defined(__WXGTK3__) && !defined(__WXGTK4__)
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     if (gtk_window_get_has_resize_grip(GTK_WINDOW(m_widget)))
     {
@@ -795,7 +890,18 @@ void wxTopLevelWindowGTK::GTKHandleMapped()
     wxLogTrace(TRACE_TLWSIZE, "Mapped for %s", wxDumpWindow(this));
 
     // We couldn't set the app ID before, as it only works for mapped windows.
-#if defined(GDK_WINDOWING_WAYLAND) && GTK_CHECK_VERSION(3,24,22)
+#if defined(GDK_WINDOWING_WAYLAND) && defined(__WXGTK4__)
+    GdkSurface* const surface = wx_gtk_widget_get_surface(m_widget);
+    if (surface && GDK_IS_WAYLAND_TOPLEVEL(surface))
+    {
+        const wxString className(wxTheApp->GetClassName());
+        if (!className.empty())
+        {
+            gdk_wayland_toplevel_set_application_id(
+                GDK_WAYLAND_TOPLEVEL(surface), className.utf8_str());
+        }
+    }
+#elif defined(GDK_WINDOWING_WAYLAND) && GTK_CHECK_VERSION(3,24,22)
     GdkWindow* const window = gtk_widget_get_window(m_widget);
     if (wxGTKImpl::IsWayland(window) && gtk_check_version(3,24,22) == nullptr)
     {
@@ -824,8 +930,10 @@ void wxTopLevelWindowGTK::GTKHandleMapped()
         GTKDoAfterShow();
     }
 
+#ifndef __WXGTK4__
     // restore focus-on-map setting in case ShowWithoutActivating() was called
     gtk_window_set_focus_on_map(GTK_WINDOW(m_widget), true);
+#endif // !__WXGTK4__
 
     // Deferred show is no longer possible
     m_deferShowAllowed = false;
@@ -834,6 +942,42 @@ void wxTopLevelWindowGTK::GTKHandleMapped()
 //-----------------------------------------------------------------------------
 // "window-state-event" from m_widget
 //-----------------------------------------------------------------------------
+
+#ifdef __WXGTK4__
+
+// GTK4 has no "window-state-event": the iconified/maximized/fullscreen bits
+// live on the GdkToplevel and are watched through its "state" property. GTK
+// gives us only the new value, not what changed, so the previous state is kept
+// in the window itself to reconstruct the changed mask the logic below wants.
+void wxTopLevelWindowGTK::GTKHandleToplevelState(int state)
+{
+    const int changed = state ^ m_gdkToplevelState;
+    m_gdkToplevelState = state;
+
+    if (changed & GDK_TOPLEVEL_STATE_MINIMIZED)
+        SetIconizeState((state & GDK_TOPLEVEL_STATE_MINIMIZED) != 0);
+
+    // if maximized bit changed and it is now set
+    if (changed & state & GDK_TOPLEVEL_STATE_MAXIMIZED)
+    {
+        wxMaximizeEvent evt(GetId());
+        evt.SetEventObject(this);
+        HandleWindowEvent(evt);
+    }
+
+    if (changed & GDK_TOPLEVEL_STATE_FULLSCREEN)
+        m_fsIsShowing = (state & GDK_TOPLEVEL_STATE_FULLSCREEN) != 0;
+}
+
+extern "C" {
+static void
+wxgtk_tlw_notify_state(GObject* surface, GParamSpec*, wxTopLevelWindowGTK* win)
+{
+    win->GTKHandleToplevelState(gdk_toplevel_get_state(GDK_TOPLEVEL(surface)));
+}
+}
+
+#else // !__WXGTK4__
 
 extern "C" {
 static gboolean
@@ -859,6 +1003,8 @@ gtk_frame_window_state_callback( GtkWidget* WXUNUSED(widget),
 }
 }
 
+#endif // __WXGTK4__/!__WXGTK4__
+
 //-----------------------------------------------------------------------------
 // "notify::gtk-theme-name" from GtkSettings
 //-----------------------------------------------------------------------------
@@ -873,25 +1019,44 @@ static void notify_gtk_theme_name(GObject*, GParamSpec*, wxTopLevelWindowGTK* wi
 //-----------------------------------------------------------------------------
 
 bool
+#ifdef __WXGTK4__
+wxGetFrameExtents(GdkSurface* window, wxTopLevelWindow::DecorSize* decorSize)
+#else
 wxGetFrameExtents(GdkWindow* window, wxTopLevelWindow::DecorSize* decorSize)
+#endif
 {
 #ifdef GDK_WINDOWING_X11
+#ifdef __WXGTK4__
+    GdkDisplay* display = gdk_surface_get_display(window);
+#else
     GdkDisplay* display = gdk_window_get_display(window);
+#endif
 
 #ifdef __WXGTK3__
     if (!wxGTKImpl::IsX11(display))
         return false;
 #endif
 
+#ifdef __WXGTK4__
+    // GdkAtom, and with it gdk_atom_intern() and the GdkAtom-to-Xatom
+    // conversion, are gone under GTK4: X atoms are interned directly now.
+    static Atom xproperty =
+        XInternAtom(GDK_DISPLAY_XDISPLAY(display), "_NET_FRAME_EXTENTS", False);
+#else
     static GdkAtom property = gdk_atom_intern("_NET_FRAME_EXTENTS", false);
     Atom xproperty = gdk_x11_atom_to_xatom_for_display(display, property);
+#endif
     Atom type;
     int format;
     gulong nitems, bytes_after;
     wxX11Ptr<guchar> data;
     Status status = XGetWindowProperty(
         GDK_DISPLAY_XDISPLAY(display),
+#ifdef __WXGTK4__
+        gdk_x11_surface_get_xid(window),
+#else
         GDK_WINDOW_XID(window),
+#endif
         xproperty,
         0, 4, false, XA_CARDINAL,
         &type, &format, &nitems, &bytes_after, data.Out());
@@ -912,7 +1077,9 @@ wxGetFrameExtents(GdkWindow* window, wxTopLevelWindow::DecorSize* decorSize)
 
     // We need to convert the X11 physical extents to GTK+ "logical" units
     int scale = 1;
-#if GTK_CHECK_VERSION(3,10,0)
+#ifdef __WXGTK4__
+    scale = gdk_surface_get_scale_factor(window);
+#elif GTK_CHECK_VERSION(3,10,0)
     if (wx_is_at_least_gtk3(10))
         scale = gdk_window_get_scale_factor(window);
 #endif
@@ -934,6 +1101,19 @@ wxGetFrameExtents(GdkWindow* window, wxTopLevelWindow::DecorSize* decorSize)
 //-----------------------------------------------------------------------------
 // "property_notify_event" from m_widget
 //-----------------------------------------------------------------------------
+
+// GTK4 does not deliver X11 property notifications to applications at all, so
+// there is no way to be told when _NET_FRAME_EXTENTS changes -- and with the
+// deferred show in Show() gone for the same reason, nothing asks the window
+// manager for them either. A GTK4 wxTopLevelWindow therefore never learns its
+// own decoration size, and m_decorSize stays zero.
+//
+// wxGetFrameExtents() itself still works and is still used, by wxSystemSettings
+// for wxSYS_FRAMESIZE_X and friends. What is lost is the TLW compensating for
+// the decorations in its own size arithmetic, which matters where GTK is not
+// drawing the decorations itself; where it is (client side decorations, the
+// common case now) HasClientDecor() already made the compensation zero.
+#ifndef __WXGTK4__
 
 extern "C" {
 static gboolean property_notify_event(
@@ -961,6 +1141,10 @@ static gboolean property_notify_event(
 }
 }
 
+#endif // !__WXGTK4__
+
+#ifndef __WXGTK4__
+
 extern "C" {
 static gboolean request_frame_extents_timeout(void* data)
 {
@@ -972,11 +1156,14 @@ static gboolean request_frame_extents_timeout(void* data)
     wxTopLevelWindowGTK* win = static_cast<wxTopLevelWindowGTK*>(data);
     win->m_netFrameExtentsTimerId = 0;
     wxTopLevelWindowGTK::DecorSize decorSize = win->m_decorSize;
-    wxGetFrameExtents(gtk_widget_get_window(win->m_widget), &decorSize);
+    wxGetFrameExtents(wx_gtk_widget_get_surface_or_window(win->m_widget),
+                      &decorSize);
     win->GTKUpdateDecorSize(decorSize);
     return false;
 }
 }
+
+#endif // !__WXGTK4__
 #endif // GDK_WINDOWING_X11
 
 // ----------------------------------------------------------------------------
@@ -1037,22 +1224,37 @@ bool wxTopLevelWindowGTK::Create( wxWindow *parent,
     //     e.g. in wxTaskBarIconAreaGTK
     if (m_widget == nullptr)
     {
+#ifdef __WXGTK4__
+        // GTK4 has only toplevels, so gtk_window_new() lost its argument.
+        m_widget = gtk_window_new();
+#else
         m_widget = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+#endif
+
+        // GTK4 removed window type hints and gtk_window_set_position()
+        // entirely: how a window is decorated and where it is placed is the
+        // compositor's decision now, and under Wayland always was. Setting
+        // the window transient for its parent, which is done below, is what
+        // is left of "this is a dialog, centre it on its parent".
         if (GetExtraStyle() & wxTOPLEVEL_EX_DIALOG)
         {
+#ifndef __WXGTK4__
             // Tell WM that this is a dialog window and make it center
             // on parent by default (this is what GtkDialog ctor does):
             gtk_window_set_type_hint(GTK_WINDOW(m_widget),
                                      GDK_WINDOW_TYPE_HINT_DIALOG);
             gtk_window_set_position(GTK_WINDOW(m_widget),
                                     GTK_WIN_POS_CENTER_ON_PARENT);
+#endif
         }
         else
         {
             if (style & wxFRAME_TOOL_WINDOW)
             {
+#ifndef __WXGTK4__
                 gtk_window_set_type_hint(GTK_WINDOW(m_widget),
                                          GDK_WINDOW_TYPE_HINT_UTILITY);
+#endif
 
                 // On some WMs, like KDE, a TOOL_WINDOW will still show
                 // on the taskbar, but on Gnome a TOOL_WINDOW will not.
@@ -1087,6 +1289,10 @@ bool wxTopLevelWindowGTK::Create( wxWindow *parent,
                                       GTK_WINDOW(topParent->m_widget) );
     }
 
+    // Both of these are gone under GTK4: whether a window appears in the
+    // taskbar and how windows are stacked are the compositor's business, not
+    // the application's. There is nothing to fall back on.
+#ifndef __WXGTK4__
     if (style & wxFRAME_NO_TASKBAR)
     {
         gtk_window_set_skip_taskbar_hint(GTK_WINDOW(m_widget), TRUE);
@@ -1096,6 +1302,7 @@ bool wxTopLevelWindowGTK::Create( wxWindow *parent,
     {
         gtk_window_set_keep_above(GTK_WINDOW(m_widget), TRUE);
     }
+#endif // !__WXGTK4__
     if (style & wxMAXIMIZE)
         gtk_window_maximize(GTK_WINDOW(m_widget));
 
@@ -1107,14 +1314,23 @@ bool wxTopLevelWindowGTK::Create( wxWindow *parent,
     gtk_window_set_title( GTK_WINDOW(m_widget), title.utf8_str() );
     gtk_widget_set_can_focus(m_widget, false);
 
-    g_signal_connect (m_widget, "delete_event",
+    g_signal_connect (m_widget,
+#ifdef __WXGTK4__
+                      "close-request",
+#else
+                      "delete_event",
+#endif
                       G_CALLBACK (gtk_frame_delete_callback), this);
 
     // m_mainWidget is a GtkVBox, holding the bars and client area (m_wxwindow)
     m_mainWidget = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_widget_show( m_mainWidget );
     gtk_widget_set_can_focus(m_mainWidget, false);
+#ifdef __WXGTK4__
+    gtk_window_set_child(GTK_WINDOW(m_widget), m_mainWidget);
+#else
     gtk_container_add( GTK_CONTAINER(m_widget), m_mainWidget );
+#endif
 
     // m_wxwindow is the client area
     m_wxwindow = wxPizza::New();
@@ -1134,13 +1350,46 @@ bool wxTopLevelWindowGTK::Create( wxWindow *parent,
 
     if (pos.IsFullySpecified())
     {
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+        // Nothing to do: GTK4 removed gtk_window_move() and offers no
+        // replacement, as a client cannot position its own window under
+        // Wayland. m_x/m_y stay as the caller asked for, so wx still reports
+        // the requested position, but the compositor decides the real one.
+#elif defined(__WXGTK3__)
         gtk_window_move(GTK_WINDOW(m_widget), m_x, m_y);
 #else
         gtk_widget_set_uposition( m_widget, m_x, m_y );
 #endif
     }
 
+#ifdef __WXGTK4__
+    // for some reported size corrections ("map-event" lost its event argument
+    // and became the plain GtkWidget "map" signal)
+    g_signal_connect (m_widget, "map",
+                      G_CALLBACK (gtk_frame_map_callback), this);
+
+    // The iconized/maximized state lives on the GdkToplevel now, which only
+    // exists once we are realized, so that is connected in GTKHandleRealized().
+
+    // There is no replacement for "configure-event": see the comment on
+    // wxgtk_tlw_scale_factor_changed(). This covers the half of it that GTK4
+    // still lets us see.
+    g_signal_connect (m_widget, "notify::scale-factor",
+                      G_CALLBACK (wxgtk_tlw_scale_factor_changed), this);
+
+    // activation
+    g_signal_connect (m_widget, "notify::is-active",
+                      G_CALLBACK (wxgtk_tlw_notify_is_active), this);
+
+    // Note that GTK3's key_press_event handler, which reversed GTK's order so
+    // that the focused child saw a key before the menu accelerators did, has
+    // no GTK4 equivalent and needs none: accelerators are now shortcuts held
+    // by a GtkShortcutController on this window, and a controller on an
+    // ancestor runs in the bubble phase, i.e. after the focused widget's own
+    // controllers. The wx order therefore falls out of the dispatch model
+    // rather than having to be imposed on it -- though, like everything else
+    // in this port, that is not runtime-verified yet.
+#else // !__WXGTK4__
     // for some reported size corrections
     g_signal_connect (m_widget, "map_event",
                       G_CALLBACK (gtk_frame_map_callback), this);
@@ -1164,6 +1413,7 @@ bool wxTopLevelWindowGTK::Create( wxWindow *parent,
     // it conforming to wxWidgets event processing order.
     g_signal_connect (m_widget, "key_press_event",
                       G_CALLBACK (wxgtk_tlw_key_press_event), nullptr);
+#endif // __WXGTK4__/!__WXGTK4__
 
 #ifdef __WXGTK3__
     GdkDisplay* display = gtk_widget_get_display(m_widget);
@@ -1173,9 +1423,14 @@ bool wxTopLevelWindowGTK::Create( wxWindow *parent,
     if (wxGTKImpl::IsX11(display))
 #endif
     {
+#ifndef __WXGTK4__
+        // GTK4 delivers no X11 property notifications, see the comment on
+        // property_notify_event(): the frame extents are only picked up by the
+        // timeout handler there.
         gtk_widget_add_events(m_widget, GDK_PROPERTY_CHANGE_MASK);
         g_signal_connect(m_widget, "property_notify_event",
             G_CALLBACK(property_notify_event), this);
+#endif
     }
 #endif // GDK_WINDOWING_X11
 
@@ -1300,9 +1555,32 @@ bool wxTopLevelWindowGTK::EnableCloseButton( bool enable )
     else
         m_gdkFunc &= ~GDK_FUNC_CLOSE;
 
+#ifdef __WXGTK4__
+    // gdk_window_set_functions() is gone and nothing replaces it: whether the
+    // *window manager* offers a close button is not the application's decision
+    // under GTK4. Where GTK draws the decorations itself, which is the usual
+    // case now, the header bar layout is still ours to set, so honour it there
+    // and accept that it does nothing otherwise.
+    GtkWidget* const titlebar = gtk_window_get_titlebar(GTK_WINDOW(m_widget));
+    if (titlebar && GTK_IS_HEADER_BAR(titlebar))
+    {
+        char* s;
+        g_object_get(gtk_widget_get_settings(m_widget),
+            "gtk-decoration-layout", &s, nullptr);
+        wxString layout(s);
+        g_free(s);
+
+        if (!enable)
+            layout.Replace("close", wxString(), false);
+
+        gtk_header_bar_set_decoration_layout(GTK_HEADER_BAR(titlebar),
+                                             layout.utf8_str());
+    }
+#else
     GdkWindow* window = gtk_widget_get_window(m_widget);
     if (window)
         gdk_window_set_functions(window, (GdkWMFunction)m_gdkFunc);
+#endif
 
     return true;
 }
@@ -1414,14 +1692,21 @@ void wxTopLevelWindowGTK::Refresh( bool WXUNUSED(eraseBackground), const wxRect 
 
     gtk_widget_queue_draw( m_widget );
 
+#ifdef __WXGTK4__
+    // There is no GdkWindow to invalidate separately: queueing a draw on the
+    // widget is the whole of it now.
+    if (m_wxwindow)
+        gtk_widget_queue_draw(m_wxwindow);
+#else
     GdkWindow* window = nullptr;
     if (m_wxwindow)
         window = gtk_widget_get_window(m_wxwindow);
     if (window)
         gdk_window_invalidate_rect(window, nullptr, true);
+#endif
 }
 
-#if defined(__WXGTK3__) && defined(GDK_WINDOWING_X11)
+#if defined(__WXGTK3__) && defined(GDK_WINDOWING_X11) && !defined(__WXGTK4__)
 // Check conditions under which GTK will use Client Side Decorations with X11
 static bool isUsingCSD(GtkWidget* widget)
 {
@@ -1442,13 +1727,18 @@ static bool isUsingCSD(GtkWidget* widget)
 
     return true;
 }
-#endif // __WXGTK3__ && GDK_WINDOWING_X11
+#endif // __WXGTK3__ && GDK_WINDOWING_X11 && !__WXGTK4__
 
 bool wxTopLevelWindowGTK::Show( bool show )
 {
     wxCHECK_MSG(m_widget, false, "invalid frame");
 
-#ifdef GDK_WINDOWING_X11
+// The deferred show below exists to avoid showing a window before the window
+// manager has reported its frame extents, and it is driven entirely by X11
+// property notifications, which GTK4 does not deliver -- see the comment on
+// property_notify_event(). Without them there is nothing to wait *for*, so
+// GTK4 simply shows the window straight away and picks the extents up later.
+#if defined(GDK_WINDOWING_X11) && !defined(__WXGTK4__)
     bool deferShow = show && !m_isShown && !m_isIconized && m_deferShow;
     if (deferShow)
     {
@@ -1548,7 +1838,7 @@ bool wxTopLevelWindowGTK::Show( bool show )
         m_isShown = true;
         return true;
     }
-#endif // GDK_WINDOWING_X11
+#endif // GDK_WINDOWING_X11 && !__WXGTK4__
 
     if (show && !gtk_widget_get_realized(m_widget))
     {
@@ -1589,7 +1879,11 @@ bool wxTopLevelWindowGTK::Show( bool show )
         // make sure window has a non-default position, so when it is shown
         // again, it won't be repositioned by WM as if it were a new window
         // Note that this must be done _after_ the window is hidden.
+#ifndef __WXGTK4__
+        // GTK4 has no gtk_window_move(): a client cannot choose where its
+        // window goes, so it cannot pin it down across a hide/show either.
         gtk_window_move((GtkWindow*)m_widget, m_x, m_y);
+#endif
     }
 
     return change;
@@ -1599,7 +1893,12 @@ void wxTopLevelWindowGTK::ShowWithoutActivating()
 {
     if (!m_isShown)
     {
+#ifndef __WXGTK4__
+        // gtk_window_set_focus_on_map() is gone under GTK4 and has no
+        // replacement: whether a newly mapped window takes the focus is up to
+        // the compositor, so this behaves like a plain Show() there.
         gtk_window_set_focus_on_map(GTK_WINDOW(m_widget), false);
+#endif
         Show(true);
     }
 }
@@ -1674,7 +1973,12 @@ void wxTopLevelWindowGTK::DoSetSize( int x, int y, int width, int height, int si
 
     if ( m_x != old_x || m_y != old_y )
     {
+#ifndef __WXGTK4__
         gtk_window_move( GTK_WINDOW(m_widget), m_x, m_y );
+#endif
+        // Note that under GTK4 nothing actually moved: the event reports the
+        // position wx was asked for, not one GTK confirmed, because GTK4 will
+        // neither position a window nor say where it ended up.
         wxMoveEvent event(wxPoint(m_x, m_y), GetId());
         event.SetEventObject(this);
         HandleWindowEvent(event);
@@ -1706,7 +2010,14 @@ void wxTopLevelWindowGTK::DoSetSize( int x, int y, int width, int height, int si
 
         if (isResizeable)
         {
+#ifdef __WXGTK4__
+            // GTK4 removed gtk_window_resize(): setting the default size is
+            // how a window is resized now, and it applies immediately to an
+            // already visible window too.
+            gtk_window_set_default_size(GTK_WINDOW(m_widget), size.x, size.y);
+#else
             gtk_window_resize(GTK_WINDOW(m_widget), size.x, size.y);
+#endif
         }
         else
         {
@@ -1814,6 +2125,31 @@ void wxTopLevelWindowGTK::DoSetSizeHints( int minW, int minH,
 
     const wxSize minSize = GetMinSize();
     const wxSize maxSize = GetMaxSize();
+
+#ifdef __WXGTK4__
+    wxUnusedVar(maxSize);
+    // GTK4 removed gtk_window_set_geometry_hints() and the whole GdkGeometry
+    // struct with it. Only the minimum size has a replacement, as a plain size
+    // request on the window widget; there is no way to tell GTK4 a maximum
+    // size or a resize increment for a toplevel at all.
+    //
+    // wxWindowBase::ConstrainSize() still clamps sizes wx sets itself, so a
+    // maximum size is honoured for programmatic resizing -- what is lost is
+    // stopping the *user* from dragging the window larger than it.
+    int minWidth = minSize.x,
+        minHeight = minSize.y;
+    if (!HasClientDecor(m_widget))
+    {
+        if (minWidth > 0)
+            minWidth -= m_decorSize.left + m_decorSize.right;
+        if (minHeight > 0)
+            minHeight -= m_decorSize.top + m_decorSize.bottom;
+    }
+
+    gtk_widget_set_size_request(m_widget,
+                                minWidth > 0 ? minWidth : -1,
+                                minHeight > 0 ? minHeight : -1);
+#else
     GdkGeometry hints;
     // always set both min and max hints, otherwise GTK will
     // make assumptions we don't want about the unset values
@@ -1859,6 +2195,7 @@ void wxTopLevelWindowGTK::DoSetSizeHints( int minW, int minH,
     }
     gtk_window_set_geometry_hints(
         (GtkWindow*)m_widget, nullptr, &hints, (GdkWindowHints)hints_mask);
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 void wxTopLevelWindowGTK::GTKUpdateDecorSize(const DecorSize& decorSize)
@@ -1878,7 +2215,11 @@ void wxTopLevelWindowGTK::GTKUpdateDecorSize(const DecorSize& decorSize)
             // so that overall size remains correct
             const int w = wxMax(m_width  - decorSize.left - decorSize.right,  m_minWidth);
             const int h = wxMax(m_height - decorSize.top  - decorSize.bottom, m_minHeight);
+#ifdef __WXGTK4__
+            gtk_window_set_default_size(GTK_WINDOW(m_widget), w, h);
+#else
             gtk_window_resize(GTK_WINDOW(m_widget), w, h);
+#endif
             if (!gtk_window_get_resizable(GTK_WINDOW(m_widget)))
                 gtk_widget_set_size_request(GTK_WIDGET(m_widget), w, h);
         }
@@ -1931,7 +2272,14 @@ void wxTopLevelWindowGTK::GTKUpdateDecorSize(const DecorSize& decorSize)
             if (size.x >= m_minWidth - (decorSize.left + decorSize.right) &&
                 size.y >= m_minHeight - (decorSize.top + decorSize.bottom))
             {
-                gtk_window_resize(GTK_WINDOW(m_widget), size.x, size.y);
+    #ifdef __WXGTK4__
+            // GTK4 removed gtk_window_resize(): setting the default size is
+            // how a window is resized now, and it applies immediately to an
+            // already visible window too.
+            gtk_window_set_default_size(GTK_WINDOW(m_widget), size.x, size.y);
+#else
+            gtk_window_resize(GTK_WINDOW(m_widget), size.x, size.y);
+#endif
                 if (!isResizeable)
                     gtk_widget_set_size_request(GTK_WIDGET(m_widget), size.x, size.y);
                 resized = true;
@@ -2072,6 +2420,20 @@ void wxTopLevelWindowGTK::SetIcons( const wxIconBundle &icons )
     // Setting icons before window is realized can cause a GTK assertion if
     // another TLW is realized before this one, and it has this one as its
     // transient parent. The life demo exibits this problem.
+#ifdef __WXGTK4__
+    // GTK4 removed gtk_window_set_icon_list() and every other way of giving a
+    // window a per-window icon from pixel data: a window's icon comes from its
+    // .desktop file, matched by application ID, and the only programmatic
+    // control left is gtk_window_set_icon_name(), which names a themed icon.
+    //
+    // wxIconBundle holds bitmaps, not theme icon names, so there is nothing to
+    // translate this into. The icons are still stored by the base class, so
+    // GetIcons() keeps working for application code that reads them back.
+    wxUnusedVar(icons);
+#else
+    // Setting icons before window is realized can cause a GTK assertion if
+    // another TLW is realized before this one, and it has this one as its
+    // transient parent. The life demo exibits this problem.
     if (m_widget && gtk_widget_get_realized(m_widget))
     {
         GList* list = nullptr;
@@ -2080,6 +2442,7 @@ void wxTopLevelWindowGTK::SetIcons( const wxIconBundle &icons )
         gtk_window_set_icon_list(GTK_WINDOW(m_widget), list);
         g_list_free(list);
     }
+#endif
 }
 
 // ----------------------------------------------------------------------------
@@ -2096,10 +2459,14 @@ void wxTopLevelWindowGTK::Maximize(bool maximize)
 
 bool wxTopLevelWindowGTK::IsMaximized() const
 {
+#ifdef __WXGTK4__
+    return m_widget && gtk_window_is_maximized(GTK_WINDOW(m_widget));
+#else
     GdkWindow* window = nullptr;
     if (m_widget)
         window = gtk_widget_get_window(m_widget);
     return window && (gdk_window_get_state(window) & GDK_WINDOW_STATE_MAXIMIZED);
+#endif
 }
 
 void wxTopLevelWindowGTK::Restore()
@@ -2192,9 +2559,19 @@ void wxTopLevelWindowGTK::AddGrab()
     {
         wxGUIEventLoop eventLoop;
         m_grabbedEventLoop = &eventLoop;
+#ifdef __WXGTK4__
+        // GTK4 has no gtk_grab_add(): all explicit grabs are gone. Making the
+        // window modal is the supported way of keeping input inside it, and is
+        // what wxWidgets wanted the grab for.
+        const gboolean wasModal = gtk_window_get_modal(GTK_WINDOW(m_widget));
+        gtk_window_set_modal(GTK_WINDOW(m_widget), TRUE);
+        eventLoop.Run();
+        gtk_window_set_modal(GTK_WINDOW(m_widget), wasModal);
+#else
         gtk_grab_add( m_widget );
         eventLoop.Run();
         gtk_grab_remove( m_widget );
+#endif
         m_grabbedEventLoop = nullptr;
     }
 }
@@ -2262,6 +2639,9 @@ void wxTopLevelWindowGTK::SetWindowStyleFlag( long style )
     if (!m_widget)
         return;
 
+    // Neither of these exists under GTK4: stacking and taskbar presence are
+    // the compositor's decisions there, see the matching comment in Create().
+#ifndef __WXGTK4__
     if ( styleChanges & wxSTAY_ON_TOP )
     {
         gtk_window_set_keep_above(GTK_WINDOW(m_widget),
@@ -2273,6 +2653,9 @@ void wxTopLevelWindowGTK::SetWindowStyleFlag( long style )
         gtk_window_set_skip_taskbar_hint(GTK_WINDOW(m_widget),
                                          m_windowStyle & wxFRAME_NO_TASKBAR);
     }
+#else
+    wxUnusedVar(styleChanges);
+#endif
 }
 
 bool wxTopLevelWindowGTK::SetTransparent(wxByte alpha)
@@ -2280,6 +2663,12 @@ bool wxTopLevelWindowGTK::SetTransparent(wxByte alpha)
     wxCHECK_MSG(m_widget, false, "invalid window");
 
 #ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    // No visual to select: GdkScreen and the whole GdkVisual API are gone and
+    // GTK4 surfaces always support an alpha channel, so the GTK3 dance of
+    // finding the RGBA visual and installing it before realization is simply
+    // not needed any more.
+#else
     // RGBA visual is required
     GdkScreen* screen = gtk_widget_get_screen(m_widget);
     GdkVisual* visual = gdk_screen_get_rgba_visual(screen);
@@ -2293,6 +2682,7 @@ bool wxTopLevelWindowGTK::SetTransparent(wxByte alpha)
         }
         gtk_widget_set_visual(m_widget, visual);
     }
+#endif // __WXGTK4__/!__WXGTK4__
 #if GTK_CHECK_VERSION(3,8,0)
     if (wx_is_at_least_gtk3(8))
     {

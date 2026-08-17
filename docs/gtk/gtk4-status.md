@@ -2228,3 +2228,93 @@ Two subsystem rewrites, plus a tail that is now the bulk of it:
 
 then `textctrl.cpp`, `anybutton.cpp`, `notebook.cpp` and a dozen smaller ones.
 `test_gui` still cannot link, so none of this is runtime-verified.
+
+---
+
+## Progress update 24: the clipboard, and a deadlock that isn't documented
+
+**627 -> 574 diagnostics, 33 -> 31 failing targets, no regressions.**
+`clipbrd.cpp` (62 errors) and `dataobj.cpp` both went to zero. Five of the six
+subsystem rewrites are done.
+
+### `wxDataFormat` mapped better than expected
+
+GTK4 removed `GdkAtom`; a clipboard format is a MIME type string. That sounds
+like a type change with comparison consequences, but an atom *was* an interned
+string, and `g_intern_string()` returns the same canonical pointer for equal
+strings. So `NativeFormat` becomes `const char*` and every existing
+compare-by-pointer keeps working untouched.
+
+The one casualty is the `wxDataFormat(const char*)` constructor, which under
+GTK4 would have the same signature as `wxDataFormat(NativeFormat)`. It is
+dropped there; `SetId(NativeFormat)` interns whatever it is handed, so passing
+an ordinary literal still works. The visible difference is that
+`wxDataFormat("text/html")` now classifies as `wxDF_HTML` rather than
+`wxDF_PRIVATE`, which is arguably more correct but is a change.
+
+### The finding worth keeping
+
+`wxClipboard::GetData()` is synchronous and `GdkClipboard` reads are not, so
+the two are bridged with a nested main loop -- the same device already used for
+modal dialogs and popup menus here. What is not obvious, and not documented:
+
+> The `GInputStream` from `gdk_clipboard_read_finish()` must be drained
+> **asynchronously**. When the clipboard is locally owned -- an application
+> reading back what it just copied, the common case -- the writer feeding that
+> stream is our own `GdkContentProvider`, running on the same main context.
+> A blocking `g_output_stream_splice()` therefore deadlocks against it.
+
+Worse, the deadlock is unrecoverable from inside. A `g_timeout_add()` watchdog
+on the nested loop **never fires**, because the loop is blocked inside the read
+callback and never reaches the point where it would dispatch the timeout. The
+first version of the probe hung until an external `timeout` killed it.
+
+`g_output_stream_splice_async()`, completing into the same nested loop, works.
+
+`build/tools/gtk4-invariants.c` now asserts the working pattern end to end --
+offer, advertise, read back through a nested loop, compare the bytes -- with a
+watchdog so a future GTK breaking it fails CI rather than hanging it. Only the
+good pattern is asserted, deliberately: proving the deadlock in CI would mean
+hanging CI.
+
+A second trap, this one merely a documented annotation that is easy to misread:
+`gdk_content_provider_new_union()` takes ownership of the providers passed to
+it. Unreffing them afterwards is a use-after-free that surfaces much later, as
+a crash inside `gdk_content_provider_ref_formats()`.
+
+### A bug of my own, caught by checking rather than assuming
+
+My format-collection helper hardcoded `wxDataObject::Get`. That is right when
+*offering* data, but `GetData()` needs `wxDataObject::Set` -- the formats the
+object can *accept*. They are different lists. Using the providing direction
+when receiving compiles perfectly and makes every paste silently find nothing.
+Found by comparing against the GTK3 path instead of trusting the symmetry.
+
+### Deliberate behaviour changes
+
+* **Data is serialised eagerly.** GTK3 offered it lazily through a
+  `selection_get` callback; GTK4's equivalent means subclassing
+  `GdkContentProvider`. Copying a large object now costs that copy up front,
+  but the bytes cannot go stale under a data object the application mutates or
+  destroys after copying.
+* **`Flush()` returns false.** `gtk_clipboard_store()` is gone; whether the
+  contents outlive the application is the clipboard manager's decision.
+* **`IsSupportedAsync()` got cheaper.** Under GTK3 it meant a round trip to the
+  X server for the `TARGETS` atom. GTK4 already knows the available formats, so
+  the answer is built immediately and only the event delivery stays deferred.
+
+### What is left
+
+| File | Errors |
+|---|---|
+| `dataview.cpp` | 55 |
+| `renderer.cpp` | 50 |
+| `minifram.cpp` | 48 |
+| `window.cpp` | 44 |
+| `dnd.cpp` | 41 |
+| `evtloop.cpp` | 37 |
+
+then `textctrl.cpp`, `anybutton.cpp`, `notebook.cpp`, `filedlg.cpp`,
+`overlay.cpp` and a dozen smaller ones. `dnd.cpp` shares the format model just
+established but uses the separate `GtkDragSource`/`GtkDropTarget` controllers.
+`test_gui` still cannot link, so none of this is runtime-verified.

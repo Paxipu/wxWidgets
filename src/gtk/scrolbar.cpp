@@ -25,8 +25,17 @@
 
 extern "C" {
 static void
+#ifdef __WXGTK4__
+// A GtkScrollbar is not a GtkRange under GTK4 and has no "value_changed" of
+// its own: the value belongs to its adjustment, which is what this is
+// connected to. See wx/gtk/private.h.
+gtk_value_changed(GtkAdjustment*, wxScrollBar* win)
+{
+    wxGtkScrollbar* const range = GTK_SCROLLBAR(win->m_widget);
+#else
 gtk_value_changed(GtkRange* range, wxScrollBar* win)
 {
+#endif
     wxEventType eventType = win->GTKGetScrollEventType(range);
     if (eventType != wxEVT_NULL)
     {
@@ -193,9 +202,14 @@ bool wxScrollBar::Create(wxWindow *parent, wxWindowID id,
     m_widget = gtk_scrollbar_new(GtkOrientation(isVertical), nullptr);
     g_object_ref(m_widget);
 
+#ifdef __WXGTK4__
+    m_scrollBar[0] = GTK_SCROLLBAR(m_widget);
+#else
     m_scrollBar[0] = (GtkRange*)m_widget;
+#endif
 
-    g_signal_connect_after(m_widget, "value_changed",
+    g_signal_connect_after(wxGtkScrollbarValueNotifier(m_scrollBar[0]),
+                     "value_changed",
                      G_CALLBACK(gtk_value_changed), this);
 #ifdef __WXGTK4__
     {
@@ -236,24 +250,24 @@ bool wxScrollBar::Create(wxWindow *parent, wxWindowID id,
 
 int wxScrollBar::GetThumbPosition() const
 {
-    return wxRound(gtk_range_get_value(GTK_RANGE(m_widget)));
+    return wxRound(wxGtkScrollbarGetValue(m_scrollBar[0]));
 }
 
 int wxScrollBar::GetThumbSize() const
 {
-    GtkAdjustment* adj = gtk_range_get_adjustment(GTK_RANGE(m_widget));
+    GtkAdjustment* adj = wxGtkScrollbarGetAdjustment(m_scrollBar[0]);
     return int(gtk_adjustment_get_page_size(adj));
 }
 
 int wxScrollBar::GetPageSize() const
 {
-    GtkAdjustment* adj = gtk_range_get_adjustment(GTK_RANGE(m_widget));
+    GtkAdjustment* adj = wxGtkScrollbarGetAdjustment(m_scrollBar[0]);
     return int(gtk_adjustment_get_page_increment(adj));
 }
 
 int wxScrollBar::GetRange() const
 {
-    GtkAdjustment* adj = gtk_range_get_adjustment(GTK_RANGE(m_widget));
+    GtkAdjustment* adj = wxGtkScrollbarGetAdjustment(m_scrollBar[0]);
     return int(gtk_adjustment_get_upper(adj));
 }
 
@@ -261,13 +275,13 @@ void wxScrollBar::SetThumbPosition( int viewStart )
 {
     if (GetThumbPosition() != viewStart)
     {
-        g_signal_handlers_block_by_func(m_widget,
+        g_signal_handlers_block_by_func(wxGtkScrollbarValueNotifier(m_scrollBar[0]),
             (gpointer)gtk_value_changed, this);
 
-        gtk_range_set_value((GtkRange*)m_widget, viewStart);
-        m_scrollPos[0] = gtk_range_get_value((GtkRange*)m_widget);
+        wxGtkScrollbarSetValue(m_scrollBar[0], viewStart);
+        m_scrollPos[0] = wxGtkScrollbarGetValue(m_scrollBar[0]);
 
-        g_signal_handlers_unblock_by_func(m_widget,
+        g_signal_handlers_unblock_by_func(wxGtkScrollbarValueNotifier(m_scrollBar[0]),
             (gpointer)gtk_value_changed, this);
     }
 }
@@ -284,17 +298,17 @@ void wxScrollBar::SetScrollbar(int position, int thumbSize, int range, int pageS
     else if (pageSize <= 0)
         pageSize = 1;
     g_signal_handlers_block_by_func(m_widget, (void*)gtk_value_changed, this);
-    GtkRange* widget = GTK_RANGE(m_widget);
-    GtkAdjustment* adj = gtk_range_get_adjustment(widget);
+    wxGtkScrollbar* widget = m_scrollBar[0];
+    GtkAdjustment* adj = wxGtkScrollbarGetAdjustment(widget);
 
     g_object_freeze_notify(G_OBJECT(adj));
-    gtk_range_set_increments(widget, 1, pageSize);
+    wxGtkScrollbarSetIncrements(widget, 1, pageSize);
     gtk_adjustment_set_page_size(adj, thumbSize);
-    gtk_range_set_range(widget, 0, range);
+    wxGtkScrollbarSetRange(widget, 0, range);
     g_object_thaw_notify(G_OBJECT(adj));
 
-    gtk_range_set_value(widget, position);
-    m_scrollPos[0] = gtk_range_get_value(widget);
+    wxGtkScrollbarSetValue(widget, position);
+    m_scrollPos[0] = wxGtkScrollbarGetValue(widget);
     g_signal_handlers_unblock_by_func(m_widget, (void*)gtk_value_changed, this);
 }
 

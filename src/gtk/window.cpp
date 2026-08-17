@@ -2394,14 +2394,14 @@ gtk_window_motion_notify_callback( GtkWidget * widget,
 // "scroll_event" (mouse wheel event)
 //-----------------------------------------------------------------------------
 
-static void AdjustRangeValue(GtkRange* range, double step)
+static void AdjustRangeValue(wxGtkScrollbar* range, double step)
 {
     if (gtk_widget_get_visible(GTK_WIDGET(range)))
     {
-        GtkAdjustment* adj = gtk_range_get_adjustment(range);
+        GtkAdjustment* adj = wxGtkScrollbarGetAdjustment(range);
         double value = gtk_adjustment_get_value(adj);
         value += step * gtk_adjustment_get_step_increment(adj);
-        gtk_range_set_value(range, value);
+        wxGtkScrollbarSetValue(range, value);
     }
 }
 
@@ -2412,7 +2412,7 @@ static void AdjustRangeValue(GtkRange* range, double step)
 // than left inline.
 static bool
 wxGTKProcessScrollDeltas(wxWindow* win, wxMouseEvent& event,
-                         GtkRange* range_h, GtkRange* range_v,
+                         wxGtkScrollbar* range_h, wxGtkScrollbar* range_v,
                          bool is_range_h, bool is_range_v,
                          double delta_x, double delta_y)
 {
@@ -2511,8 +2511,8 @@ wx_gtk_scroll_callback(GtkEventControllerScroll* controller,
     event.m_linesPerAction = 3;
     event.m_columnsPerAction = 3;
 
-    GtkRange* const range_h = win->m_scrollBar[wxWindow::ScrollDir_Horz];
-    GtkRange* const range_v = win->m_scrollBar[wxWindow::ScrollDir_Vert];
+    wxGtkScrollbar* const range_h = win->m_scrollBar[wxWindow::ScrollDir_Horz];
+    wxGtkScrollbar* const range_v = win->m_scrollBar[wxWindow::ScrollDir_Vert];
 
     return wxGTKProcessScrollDeltas(win, event, range_h, range_v,
                                     (void*)widget == range_h,
@@ -2532,8 +2532,8 @@ scroll_event(GtkWidget* widget, GdkEventScroll* gdk_event, wxWindow* win)
     event.m_linesPerAction = 3;
     event.m_columnsPerAction = 3;
 
-    GtkRange* range_h = win->m_scrollBar[wxWindow::ScrollDir_Horz];
-    GtkRange* range_v = win->m_scrollBar[wxWindow::ScrollDir_Vert];
+    wxGtkScrollbar* range_h = win->m_scrollBar[wxWindow::ScrollDir_Horz];
+    wxGtkScrollbar* range_v = win->m_scrollBar[wxWindow::ScrollDir_Vert];
     const bool is_range_h = (void*)widget == range_h;
     const bool is_range_v = (void*)widget == range_v;
     GdkScrollDirection direction = gdk_event->direction;
@@ -2682,6 +2682,8 @@ gtk_window_focus_out_callback( GtkWidget * WXUNUSED(widget),
 // "focus"
 //-----------------------------------------------------------------------------
 
+// GTK4 turned this signal into a plain vfunc; see the connection site.
+#ifndef __WXGTK4__
 static gboolean
 wx_window_focus_callback(GtkWidget *widget,
                          GtkDirectionType WXUNUSED(direction),
@@ -2699,6 +2701,7 @@ wx_window_focus_callback(GtkWidget *widget,
     // we didn't change the focus
     return FALSE;
 }
+#endif // !__WXGTK4__
 
 } // extern "C"
 
@@ -3246,9 +3249,21 @@ gtk_window_leave_callback( GtkWidget* widget,
 // "value_changed" from scrollbar
 //-----------------------------------------------------------------------------
 
+// GTK4's GtkScrollbar has no "value-changed" signal of its own: the value
+// belongs to its adjustment, so that is what this is connected to, and it has
+// to find the scrollbar again from there.
+#ifdef __WXGTK4__
+static void
+gtk_scrollbar_value_changed(GtkAdjustment* adj, wxWindow* win)
+{
+    wxGtkScrollbar* const range = win->GTKScrollbarFromAdjustment(adj);
+    if ( !range )
+        return;
+#else
 static void
 gtk_scrollbar_value_changed(GtkRange* range, wxWindow* win)
 {
+#endif
     wxEventType eventType = win->GTKGetScrollEventType(range);
     if (eventType != wxEVT_NULL)
     {
@@ -3296,8 +3311,8 @@ wx_scrollbar_released(GtkGestureClick* gesture, int, double, double, wxWindow* w
     {
         win->m_isScrolling = false;
 
-        GtkRange* const range = GTK_RANGE(gtk_event_controller_get_widget(
-                                    GTK_EVENT_CONTROLLER(gesture)));
+        wxGtkScrollbar* const range = GTK_SCROLLBAR(gtk_event_controller_get_widget(
+                                          GTK_EVENT_CONTROLLER(gesture)));
 
         const int orient = wxWindow::OrientFromScrollDir(
                                         win->ScrollDirFromRange(range));
@@ -3380,12 +3395,24 @@ gtk_window_realized_callback(GtkWidget* WXUNUSED(widget), wxWindowGTK* win)
 
 static void
 #ifdef __WXGTK4__
-// The clip workaround that used it is GTK3 only, see below.
-size_allocate(GtkWidget* WXUNUSED(widget), GtkAllocation* alloc, wxWindow* win)
+// Connected to wxPizza's own signal, which carries no allocation: see the
+// comment at the connection site. (The clip workaround which used the widget
+// argument is GTK3 only, see below.)
+size_allocate(GtkWidget* WXUNUSED(widget), wxWindow* win)
 #else
 size_allocate(GtkWidget* WXUNUSED_IN_GTK2(widget), GtkAllocation* alloc, wxWindow* win)
 #endif
 {
+#ifdef __WXGTK4__
+    // The allocation the GTK3 signal supplied is that of whichever of the two
+    // widgets below the handler was connected to, which is exactly what is
+    // read back here.
+    GtkAllocation allocStorage;
+    gtk_widget_get_allocation(win->m_wxwindow ? win->m_wxwindow : win->m_widget,
+                              &allocStorage);
+    GtkAllocation* const alloc = &allocStorage;
+#endif
+
     int w = alloc->width;
     int h = alloc->height;
 #if GTK_CHECK_VERSION(3,14,0) && !defined(__WXGTK4__)
@@ -3863,8 +3890,13 @@ void wxWindowGTK::GTKCreateScrolledWindowWith(GtkWidget* view)
                                 : GTK_POLICY_NEVER;
     gtk_scrolled_window_set_policy( scrolledWindow, horzPolicy, vertPolicy );
 
+#ifdef __WXGTK4__
+    m_scrollBar[ScrollDir_Horz] = GTK_SCROLLBAR(gtk_scrolled_window_get_hscrollbar(scrolledWindow));
+    m_scrollBar[ScrollDir_Vert] = GTK_SCROLLBAR(gtk_scrolled_window_get_vscrollbar(scrolledWindow));
+#else
     m_scrollBar[ScrollDir_Horz] = GTK_RANGE(gtk_scrolled_window_get_hscrollbar(scrolledWindow));
     m_scrollBar[ScrollDir_Vert] = GTK_RANGE(gtk_scrolled_window_get_vscrollbar(scrolledWindow));
+#endif
 
 #ifdef __WXGTK4__
     gtk_scrolled_window_set_child( scrolledWindow, view );
@@ -3902,7 +3934,8 @@ void wxWindowGTK::GTKCreateScrolledWindowWith(GtkWidget* view)
 #endif
 
         // these handlers get notified when scrollbar slider moves
-        g_signal_connect_after(m_scrollBar[dir], "value_changed",
+        g_signal_connect_after(wxGtkScrollbarValueNotifier(m_scrollBar[dir]),
+                     "value_changed",
                      G_CALLBACK(gtk_scrollbar_value_changed), this);
     }
 
@@ -4183,8 +4216,15 @@ void wxWindowGTK::PostCreation()
     {
         SetCanFocus(false);
 
+#ifndef __WXGTK4__
+        // GtkWidget::focus is a vfunc rather than a signal under GTK4, so
+        // there is nothing to connect to -- and nothing to work around
+        // either: SetCanFocus(false) above sets the "focusable" property,
+        // which GTK4 honours, whereas GTK3's GtkScrolledWindow focused itself
+        // regardless of it, which is what the handler existed to prevent.
         g_signal_connect(m_widget, "focus",
                             G_CALLBACK(wx_window_focus_callback), this);
+#endif // !__WXGTK4__
     }
 
     // connect to the various key and mouse handlers
@@ -4211,8 +4251,35 @@ void wxWindowGTK::PostCreation()
 
     if (!IsTopLevel())
     {
+#ifdef __WXGTK4__
+        // GtkWidget has no "size-allocate" signal any more -- only the vfunc,
+        // which an outside observer cannot connect to. wxPizza emits one of
+        // its own instead (see win_gtk.cpp), and everything wx puts on screen
+        // is either a wxPizza or a child laid out by one, so connecting to
+        // whichever applies covers every case the GTK3 signal did.
+        //
+        // For a child, the parent's signal fires whenever the child could have
+        // been given a new allocation, which is what matters: a child's size
+        // only changes when its parent lays it out, and the handler compares
+        // against the cached size, so a spurious call costs nothing.
+        GtkWidget* notifier = nullptr;
+        if (m_wxwindow)
+            notifier = m_wxwindow;
+        else if (GtkWidget* const parent = gtk_widget_get_parent(m_widget))
+        {
+            if (WX_IS_PIZZA(parent))
+                notifier = parent;
+        }
+
+        if (notifier)
+        {
+            g_signal_connect(notifier, wxPIZZA_SIGNAL_SIZE_ALLOCATED,
+                G_CALLBACK(size_allocate), this);
+        }
+#else
         g_signal_connect(m_wxwindow ? m_wxwindow : m_widget, "size_allocate",
             G_CALLBACK(size_allocate), this);
+#endif
     }
 
 #if GTK_CHECK_VERSION(2, 8, 0)
@@ -5318,7 +5385,7 @@ void wxWindowGTK::ConnectWidget( GtkWidget *widget )
     }
 #else
     g_signal_connect(widget, "scroll_event", G_CALLBACK(scroll_event), this);
-    GtkRange* range = m_scrollBar[ScrollDir_Horz];
+    wxGtkScrollbar* range = m_scrollBar[ScrollDir_Horz];
     if (range)
         g_signal_connect(range, "scroll_event", G_CALLBACK(scroll_event), this);
     range = m_scrollBar[ScrollDir_Vert];
@@ -5627,7 +5694,7 @@ void wxWindowGTK::DoGetClientSize( int *width, int *height ) const
             for ( int i = 0; i < ScrollDir_Max; i++ )
             {
                 // don't account for the scrollbars we don't have
-                GtkRange * const range = m_scrollBar[i];
+                wxGtkScrollbar* const range = m_scrollBar[i];
                 if ( !range )
                     continue;
 
@@ -5647,7 +5714,7 @@ void wxWindowGTK::DoGetClientSize( int *width, int *height ) const
 
                     case GTK_POLICY_AUTOMATIC:
                         // may be shown or not, check
-                        GtkAdjustment *adj = gtk_range_get_adjustment(range);
+                        GtkAdjustment *adj = wxGtkScrollbarGetAdjustment(range);
                         if (gtk_adjustment_get_upper(adj) <= gtk_adjustment_get_page_size(adj))
                             continue;
                 }
@@ -6455,8 +6522,8 @@ void wxWindowGTK::SetLayoutDirection(wxLayoutDirection dir)
 
     GTKSetLayout(m_widget, dir);
 
-    if (GtkRange* range = m_scrollBar[ScrollDir_Horz])
-        gtk_range_set_inverted(range, dir == wxLayout_RightToLeft);
+    if (wxGtkScrollbar* range = m_scrollBar[ScrollDir_Horz])
+        wxGtkScrollbarSetInverted(range, dir == wxLayout_RightToLeft);
 
     if (m_wxwindow && (m_wxwindow != m_widget))
         GTKSetLayout(m_wxwindow, dir);
@@ -6494,10 +6561,16 @@ bool wxWindowGTK::DoNavigateIn(int flags)
     dir = flags & wxNavigationKeyEvent::IsForward ? GTK_DIR_TAB_FORWARD
                                                   : GTK_DIR_TAB_BACKWARD;
 
+#ifdef __WXGTK4__
+    // gtk_widget_child_focus() is the public entry point for what emitting
+    // this signal did; the signal itself is now just a vfunc.
+    return gtk_widget_child_focus(parent->m_widget, dir) != 0;
+#else
     gboolean rc;
     g_signal_emit_by_name(parent->m_widget, "focus", dir, &rc);
 
     return rc != 0;
+#endif
 }
 
 bool wxWindowGTK::GTKWidgetNeedsMnemonic() const
@@ -6878,7 +6951,24 @@ void wxWindowGTK::WarpPointer( int x, int y )
 #endif // __WXGTK4__/!__WXGTK4__
 }
 
-wxWindowGTK::ScrollDir wxWindowGTK::ScrollDirFromRange(GtkRange *range) const
+#ifdef __WXGTK4__
+
+wxGtkScrollbar*
+wxWindowGTK::GTKScrollbarFromAdjustment(GtkAdjustment* adj) const
+{
+    for (int dir = 0; dir < ScrollDir_Max; dir++)
+    {
+        wxGtkScrollbar* const sb = m_scrollBar[dir];
+        if ( sb && gtk_scrollbar_get_adjustment(sb) == adj )
+            return sb;
+    }
+
+    return nullptr;
+}
+
+#endif // __WXGTK4__
+
+wxWindowGTK::ScrollDir wxWindowGTK::ScrollDirFromRange(wxGtkScrollbar *range) const
 {
     // find the scrollbar which generated the event
     for ( int dir = 0; dir < ScrollDir_Max; dir++ )
@@ -6895,15 +6985,15 @@ wxWindowGTK::ScrollDir wxWindowGTK::ScrollDirFromRange(GtkRange *range) const
 bool wxWindowGTK::DoScrollByUnits(ScrollDir dir, ScrollUnit unit, int units)
 {
     bool changed = false;
-    GtkRange* range = m_scrollBar[dir];
+    wxGtkScrollbar* range = m_scrollBar[dir];
     if ( range && units )
     {
-        GtkAdjustment* adj = gtk_range_get_adjustment(range);
+        GtkAdjustment* adj = wxGtkScrollbarGetAdjustment(range);
         double inc = unit == ScrollUnit_Line ? gtk_adjustment_get_step_increment(adj)
                                              : gtk_adjustment_get_page_increment(adj);
 
         const int posOld = wxRound(gtk_adjustment_get_value(adj));
-        gtk_range_set_value(range, posOld + units*inc);
+        wxGtkScrollbarSetValue(range, posOld + units*inc);
 
         changed = wxRound(gtk_adjustment_get_value(adj)) != posOld;
     }
@@ -8252,7 +8342,7 @@ void wxWindowGTK::SetScrollbar(int orient,
                                bool WXUNUSED(update))
 {
     const int dir = ScrollDirFromOrient(orient);
-    GtkRange* const sb = m_scrollBar[dir];
+    wxGtkScrollbar* const sb = m_scrollBar[dir];
     wxCHECK_RET( sb, wxT("this window is not scrollable") );
 
     if (range <= 0)
@@ -8265,32 +8355,32 @@ void wxWindowGTK::SetScrollbar(int orient,
         thumbVisible = 1;
 
     g_signal_handlers_block_by_func(
-        sb, (void*)gtk_scrollbar_value_changed, this);
+        wxGtkScrollbarValueNotifier(sb), (void*)gtk_scrollbar_value_changed, this);
 
-    GtkAdjustment* adj = gtk_range_get_adjustment(sb);
+    GtkAdjustment* adj = wxGtkScrollbarGetAdjustment(sb);
     const bool wasVisible = gtk_adjustment_get_upper(adj) > gtk_adjustment_get_page_size(adj);
 
     g_object_freeze_notify(G_OBJECT(adj));
-    gtk_range_set_increments(sb, 1, thumbVisible);
+    wxGtkScrollbarSetIncrements(sb, 1, thumbVisible);
     gtk_adjustment_set_page_size(adj, thumbVisible);
-    gtk_range_set_range(sb, 0, range);
+    wxGtkScrollbarSetRange(sb, 0, range);
     g_object_thaw_notify(G_OBJECT(adj));
 
-    gtk_range_set_value(sb, pos);
-    m_scrollPos[dir] = gtk_range_get_value(sb);
+    wxGtkScrollbarSetValue(sb, pos);
+    m_scrollPos[dir] = wxGtkScrollbarGetValue(sb);
 
     const bool isVisible = gtk_adjustment_get_upper(adj) > gtk_adjustment_get_page_size(adj);
     if (isVisible != wasVisible)
         m_useCachedClientSize = false;
 
     g_signal_handlers_unblock_by_func(
-        sb, (void*)gtk_scrollbar_value_changed, this);
+        wxGtkScrollbarValueNotifier(sb), (void*)gtk_scrollbar_value_changed, this);
 }
 
 void wxWindowGTK::SetScrollPos(int orient, int pos, bool WXUNUSED(refresh))
 {
     const int dir = ScrollDirFromOrient(orient);
-    GtkRange * const sb = m_scrollBar[dir];
+    wxGtkScrollbar * const sb = m_scrollBar[dir];
     wxCHECK_RET( sb, wxT("this window is not scrollable") );
 
     // This check is more than an optimization. Without it, the slider
@@ -8298,38 +8388,38 @@ void wxWindowGTK::SetScrollPos(int orient, int pos, bool WXUNUSED(refresh))
     if (GetScrollPos(orient) != pos)
     {
         g_signal_handlers_block_by_func(
-            sb, (void*)gtk_scrollbar_value_changed, this);
+            wxGtkScrollbarValueNotifier(sb), (void*)gtk_scrollbar_value_changed, this);
 
-        gtk_range_set_value(sb, pos);
-        m_scrollPos[dir] = gtk_range_get_value(sb);
+        wxGtkScrollbarSetValue(sb, pos);
+        m_scrollPos[dir] = wxGtkScrollbarGetValue(sb);
 
         g_signal_handlers_unblock_by_func(
-            sb, (void*)gtk_scrollbar_value_changed, this);
+            wxGtkScrollbarValueNotifier(sb), (void*)gtk_scrollbar_value_changed, this);
     }
 }
 
 int wxWindowGTK::GetScrollThumb(int orient) const
 {
-    GtkRange * const sb = m_scrollBar[ScrollDirFromOrient(orient)];
+    wxGtkScrollbar * const sb = m_scrollBar[ScrollDirFromOrient(orient)];
     wxCHECK_MSG( sb, 0, wxT("this window is not scrollable") );
 
-    return wxRound(gtk_adjustment_get_page_size(gtk_range_get_adjustment(sb)));
+    return wxRound(gtk_adjustment_get_page_size(wxGtkScrollbarGetAdjustment(sb)));
 }
 
 int wxWindowGTK::GetScrollPos( int orient ) const
 {
-    GtkRange * const sb = m_scrollBar[ScrollDirFromOrient(orient)];
+    wxGtkScrollbar * const sb = m_scrollBar[ScrollDirFromOrient(orient)];
     wxCHECK_MSG( sb, 0, wxT("this window is not scrollable") );
 
-    return wxRound(gtk_range_get_value(sb));
+    return wxRound(wxGtkScrollbarGetValue(sb));
 }
 
 int wxWindowGTK::GetScrollRange( int orient ) const
 {
-    GtkRange * const sb = m_scrollBar[ScrollDirFromOrient(orient)];
+    wxGtkScrollbar * const sb = m_scrollBar[ScrollDirFromOrient(orient)];
     wxCHECK_MSG( sb, 0, wxT("this window is not scrollable") );
 
-    return wxRound(gtk_adjustment_get_upper(gtk_range_get_adjustment(sb)));
+    return wxRound(gtk_adjustment_get_upper(wxGtkScrollbarGetAdjustment(sb)));
 }
 
 // Determine if increment is the same as +/-x, allowing for some small
@@ -8341,13 +8431,13 @@ static inline bool IsScrollIncrement(double increment, double x)
     return fabs(increment - fabs(x)) < tolerance;
 }
 
-wxEventType wxWindowGTK::GTKGetScrollEventType(GtkRange* range)
+wxEventType wxWindowGTK::GTKGetScrollEventType(wxGtkScrollbar* range)
 {
     wxASSERT(range == m_scrollBar[0] || range == m_scrollBar[1]);
 
     const int barIndex = range == m_scrollBar[1];
 
-    GtkAdjustment* adj = gtk_range_get_adjustment(range);
+    GtkAdjustment* adj = wxGtkScrollbarGetAdjustment(range);
     const double value = gtk_adjustment_get_value(adj);
 
     // save previous position

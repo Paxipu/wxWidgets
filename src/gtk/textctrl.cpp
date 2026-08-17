@@ -867,7 +867,11 @@ bool wxTextCtrl::Create( wxWindow *parent,
                                             ? GTK_POLICY_NEVER
                                             : GTK_POLICY_AUTOMATIC );
         // for ScrollLines/Pages
+#ifdef __WXGTK4__
+        m_scrollBar[1] = GTK_SCROLLBAR(gtk_scrolled_window_get_vscrollbar(GTK_SCROLLED_WINDOW(m_widget)));
+#else
         m_scrollBar[1] = GTK_RANGE(gtk_scrolled_window_get_vscrollbar(GTK_SCROLLED_WINDOW(m_widget)));
+#endif
 
         // Insert view into scrolled window
 #ifdef __WXGTK4__

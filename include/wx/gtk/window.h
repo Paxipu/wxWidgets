@@ -29,9 +29,16 @@
 #ifdef __WXGTK4__
 typedef struct _GdkEvent GdkEvent;
 typedef GdkEvent wxGTKNativeKeyEvent;
+
+// See the comment on m_scrollBar below.
+typedef struct _GtkScrollbar GtkScrollbar;
+typedef GtkScrollbar wxGtkScrollbar;
 #else
 typedef struct _GdkEventKey GdkEventKey;
 typedef GdkEventKey wxGTKNativeKeyEvent;
+
+typedef struct _GtkRange GtkRange;
+typedef GtkRange wxGtkScrollbar;
 #endif
 typedef struct _GtkIMContext GtkIMContext;
 
@@ -313,7 +320,7 @@ public:
     virtual bool GTKIsTransparentForMouse() const { return false; }
 
     // Common scroll event handling code for wxWindow and wxScrollBar
-    wxEventType GTKGetScrollEventType(GtkRange* range);
+    wxEventType GTKGetScrollEventType(wxGtkScrollbar* range);
 
     // position and size of the window
     int                  m_x, m_y;
@@ -381,7 +388,11 @@ public:
     enum ScrollDir { ScrollDir_Horz, ScrollDir_Vert, ScrollDir_Max };
 
     // horizontal/vertical scroll bar
-    GtkRange* m_scrollBar[ScrollDir_Max];
+    // GTK4's GtkScrollbar is not a GtkRange any more -- the two are unrelated
+    // widgets now, and a scrollbar's state is reached through its adjustment.
+    // wxGtkScrollbar and the wxGtkScrollbar*() helpers in wx/gtk/private.h
+    // hide the difference; see the comment there.
+    wxGtkScrollbar* m_scrollBar[ScrollDir_Max];
 
     // horizontal/vertical scroll position
     double m_scrollPos[ScrollDir_Max];
@@ -400,7 +411,13 @@ public:
     }
 
     // find the direction of the given scrollbar (must be one of ours)
-    ScrollDir ScrollDirFromRange(GtkRange *range) const;
+    ScrollDir ScrollDirFromRange(wxGtkScrollbar *range) const;
+#ifdef __WXGTK4__
+    // Under GTK4 the value-changed notification comes from the scrollbar's
+    // adjustment rather than from the scrollbar, so the handler has to find
+    // its way back. Returns nullptr if the adjustment is not one of ours.
+    wxGtkScrollbar* GTKScrollbarFromAdjustment(GtkAdjustment* adj) const;
+#endif // __WXGTK4__
 
     // Set the given cursor for the window.
     void GTKSetCursor(const wxCursor& cursor);

@@ -715,6 +715,13 @@ int wxTextEntry::GTKGetEntryTextLength(GtkEntry* entry)
 
 void wxTextEntry::GTKConnectClipboardSignals(GtkWidget* entry)
 {
+#ifdef __WXGTK4__
+    // These signals belong to the GtkText inside a GtkEntry now, not to the
+    // entry itself. A GtkTextView, which is what a multiline wxTextCtrl uses,
+    // still has them and is returned unchanged.
+    entry = wx_gtk_entry_get_text_widget(entry);
+#endif
+
     g_signal_connect(entry, "copy-clipboard",
                      G_CALLBACK (wx_gtk_copy_clipboard_callback),
                      GetEditableWindow());

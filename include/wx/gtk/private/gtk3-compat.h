@@ -534,11 +534,37 @@ static inline void wx_gtk_button_set_relief(GtkButton* button,
 #define gtk_entry_get_width_chars(entry) \
             gtk_editable_get_width_chars(GTK_EDITABLE(entry))
 
+// A GtkEntry's text is edited by a private GtkText widget inside it under
+// GTK4, and that is what owns the editing signals and actions -- not the entry
+// itself, which is only a frame around it. Anything which used to be done to a
+// GtkEntry directly has to be done to this instead.
+//
+// Returns the widget itself when it is already a GtkText (or a GtkTextView, or
+// anything else which is not an entry), so callers do not have to check.
+static inline GtkWidget* wx_gtk_entry_get_text_widget(GtkWidget* widget)
+{
+    if ( GTK_IS_ENTRY(widget) )
+    {
+        for ( GtkWidget* c = gtk_widget_get_first_child(widget);
+              c;
+              c = gtk_widget_get_next_sibling(c) )
+        {
+            if ( GTK_IS_TEXT(c) )
+                return c;
+        }
+    }
+
+    return widget;
+}
+
 // The clipboard operations on an editable became widget actions.
 static inline void wx_gtk_editable_clipboard(GtkEditable* editable,
                                              const char* action)
 {
-    gtk_widget_activate_action(GTK_WIDGET(editable), action, nullptr);
+    // The actions live on the GtkText: gtk_widget_activate_action() searches
+    // the widget and its ancestors, so asking the entry would not find them.
+    gtk_widget_activate_action(
+        wx_gtk_entry_get_text_widget(GTK_WIDGET(editable)), action, nullptr);
 }
 #define gtk_editable_copy_clipboard(e)  wx_gtk_editable_clipboard(e, "clipboard.copy")
 #define gtk_editable_cut_clipboard(e)   wx_gtk_editable_clipboard(e, "clipboard.cut")

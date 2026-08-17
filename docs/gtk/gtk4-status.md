@@ -2728,3 +2728,84 @@ the same stand-ins.
 plus `filedlg.cpp`, `overlay.cpp` and a handful of smaller ones. `dnd.cpp` is
 the last full model replacement. `test_gui` still cannot link, so none of this
 is runtime-verified.
+
+---
+
+## Progress update 30: drag and drop -- the last model replacement
+
+**367 -> 317 diagnostics, 25 -> 24 failing targets, no regressions.**
+`dnd.cpp` went from 41 errors to zero.
+
+With this every subsystem identified at the start as needing a rewrite rather
+than a translation is done: menus, toplevel windows, toolbars, radio boxes, the
+clipboard and now drag and drop.
+
+### What was replaced
+
+| GTK3 | GTK4 |
+| --- | --- |
+| `gtk_drag_dest_set()` + four signals | a `GtkDropTargetAsync` controller |
+| `GdkDragContext` | `GdkDrop` receiving, `GdkDrag` sending |
+| `GtkTargetList` | `GdkContentFormats` |
+| `GtkSelectionData` | an asynchronous read of the drop |
+| `gtk_drag_begin()` | `gdk_drag_begin()` with a `GdkContentProvider` |
+| `gtk_drag_finish()` | `gdk_drop_finish()` |
+
+### One structural difference worth stating
+
+GTK3's `gtk_drag_dest_set()` could be told to supply **no** formats and **no**
+actions -- the comment in the GTK3 code explains that this is deliberate, so
+that wx can react individually in `drag_motion` and `drag_drop` and allow
+dropping on only a small area.
+
+`GtkDropTargetAsync` requires both when it is constructed. It is therefore
+given the data object's accepted formats and every action wx might return, and
+the per-position decision stays where it was: the handlers return the action to
+use, or none, for each motion. The behaviour is preserved; only the place the
+defaults are declared moved.
+
+### A complication that disappeared
+
+`GdkDrop` reports only the set of actions the source offers. There is no
+separate "suggested action", which GTK3 had and which was the source of the
+most confused code in this file: the suggestion was always `wxDragCopy` even
+when a move was wanted, so `GTKFigureOutSuggestedAction()` had to weigh it
+against the actions mask, and carried a disabled block with a comment from the
+original author saying he did not understand the code below it.
+
+Choosing directly from the offered set is simpler, and that block goes with it.
+
+### The third asynchronous bridge
+
+Dropped data no longer arrives attached to the drop; it has to be read. So
+`wxDropTarget::GetData()`, which is synchronous, drives an asynchronous read
+over a nested main loop -- the same device as `wxClipboard::GetData()`,
+`wxDropSource::DoDragDrop()`, modal dialogs and popup menus.
+
+It reuses what the clipboard probe established, including the part that is not
+documented anywhere: the stream must be drained with
+`g_output_stream_splice_async()`. The blocking version deadlocks against a
+locally owned source and no watchdog can recover, because the loop is stuck
+inside the read callback. That finding has now paid for itself twice.
+
+### Capability lost: custom drag icons
+
+`wxDropSource::SetIcon()` has no effect. The GTK3 implementation creates an
+override-redirect window, draws the icon into it and shapes it with
+`gtk_widget_shape_combine_region()`; none of those exist under GTK4. GTK
+derives a drag icon from the content provider instead, so a drag still shows
+something, just not the application's bitmap.
+
+### What is left
+
+No model replacements remain -- everything below is ordinary porting:
+
+| File | Errors |
+|---|---|
+| `dataview.cpp` | 55 |
+| `textctrl.cpp` | 21 |
+| `notebook.cpp` | 19 |
+
+plus `filedlg.cpp`, `overlay.cpp` and a handful of smaller ones. `test_gui`
+still cannot link, so none of this is runtime-verified -- which remains the
+largest risk in the port, unchanged since the beginning.

@@ -116,7 +116,13 @@ void wxBitmapComboBox::GTKCreateComboBoxWidget()
 
     GType imageType;
     const char* imageAttr;
-#if GTK_CHECK_VERSION(3,10,0)
+#ifdef __WXGTK4__
+    // GtkCellRendererPixbuf has no "surface" property any more. Its GTK4
+    // replacement is "texture", taking a GdkTexture -- note that it is not
+    // "paintable", which the renderer does not have either.
+    imageType = GDK_TYPE_TEXTURE;
+    imageAttr = "texture";
+#elif GTK_CHECK_VERSION(3,10,0)
     if (wx_is_at_least_gtk3(10))
     {
         imageType = CAIRO_GOBJECT_TYPE_SURFACE;
@@ -124,10 +130,12 @@ void wxBitmapComboBox::GTKCreateComboBoxWidget()
     }
     else
 #endif
+#ifndef __WXGTK4__
     {
         imageType = G_TYPE_OBJECT;
         imageAttr = "pixbuf";
     }
+#endif // !__WXGTK4__
     store = gtk_list_store_new(2, imageType, G_TYPE_STRING);
 
     if ( HasFlag(wxCB_READONLY) )
@@ -223,26 +231,25 @@ void wxBitmapComboBox::SetItemBitmap(unsigned int n, const wxBitmapBundle& bitma
         if ( gtk_tree_model_iter_nth_child( model, &iter, nullptr, n ) )
         {
             wxGtkValue value0;
+#ifdef __WXGTK4__
+            // A texture carries no device scale, unlike the cairo surface it
+            // replaces, so the scale factor is not round-tripped through the
+            // model any more; GetItemBitmap() below says the same.
+            {
+                g_value_init(value0, GDK_TYPE_TEXTURE);
+
+                GdkTexture* const texture =
+                    gdk_texture_new_for_pixbuf(bmp.GetPixbuf());
+                g_value_set_object(value0, texture);
+                g_object_unref(texture);
+            }
+#else // !__WXGTK4__
 #if GTK_CHECK_VERSION(3,10,0)
             if (wx_is_at_least_gtk3(10))
             {
                 g_value_init(value0, CAIRO_GOBJECT_TYPE_SURFACE);
-#ifdef __WXGTK4__
-                // The GdkWindow argument only ever selected the scale factor
-                // to create the surface for, which is applied explicitly just
-                // below anyway.
-                cairo_surface_t* surface = cairo_image_surface_create(
-                    CAIRO_FORMAT_ARGB32, bmp.GetWidth(), bmp.GetHeight());
-                {
-                    cairo_t* const cr = cairo_create(surface);
-                    gdk_cairo_set_source_pixbuf(cr, bmp.GetPixbuf(), 0, 0);
-                    cairo_paint(cr);
-                    cairo_destroy(cr);
-                }
-#else
                 cairo_surface_t* surface = gdk_cairo_surface_create_from_pixbuf(
                     bmp.GetPixbuf(), 1, gtk_widget_get_window(m_widget));
-#endif
                 const double scaleFactor = bmp.GetScaleFactor();
                 cairo_surface_set_device_scale(surface, scaleFactor, scaleFactor);
                 g_value_set_boxed(value0, surface);
@@ -254,6 +261,7 @@ void wxBitmapComboBox::SetItemBitmap(unsigned int n, const wxBitmapBundle& bitma
                 g_value_init(value0, G_TYPE_OBJECT);
                 g_value_set_object( value0, bmp.GetPixbuf() );
             }
+#endif // __WXGTK4__/!__WXGTK4__
             gtk_list_store_set_value( GTK_LIST_STORE(model), &iter,
                                       m_bitmapCellIndex, value0 );
         }
@@ -273,6 +281,24 @@ wxBitmap wxBitmapComboBox::GetItemBitmap(unsigned int n) const
         wxGtkValue value;
         gtk_tree_model_get_value( model, &iter,
                                   m_bitmapCellIndex, value );
+#ifdef __WXGTK4__
+        {
+            // See SetItemBitmap(): a texture has no device scale, so the
+            // bitmap comes back at its default scale factor of 1.
+            GdkTexture* const texture = GDK_TEXTURE(g_value_get_object(value));
+            if (texture)
+            {
+                // Not gdk_texture_download() into a pixbuf's own buffer: that
+                // writes premultiplied ARGB in native byte order, which is not
+                // what a GdkPixbuf holds. This does the conversion.
+                //
+                // wxBitmap takes ownership of the pixbuf, which is why there
+                // is no unref here and why the GTK3 branch below, whose pixbuf
+                // is borrowed from the GValue, has to add a reference first.
+                bitmap = wxBitmap(gdk_pixbuf_get_from_texture(texture));
+            }
+        }
+#else // !__WXGTK4__
 #if GTK_CHECK_VERSION(3,10,0)
         if (wx_is_at_least_gtk3(10))
         {
@@ -297,6 +323,7 @@ wxBitmap wxBitmapComboBox::GetItemBitmap(unsigned int n) const
                 bitmap = wxBitmap(pixbuf);
             }
         }
+#endif // __WXGTK4__/!__WXGTK4__
     }
 
     return bitmap;

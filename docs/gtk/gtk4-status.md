@@ -2945,3 +2945,78 @@ or a CI invariant -- but the number of behaviours that can only be confirmed by
 looking at a window is now the whole of the remaining risk.
 
 Next: link `test_gui`, then the samples.
+
+## Progress update 32: it runs
+
+`test_gui` links, starts, and runs the suite. This is the first time any of
+this port has been executed, and running it immediately found things that no
+amount of compiling could:
+
+| | GTK criticals per full run |
+|---|---|
+| First run | ~20,000 |
+| After the scrollbar and size-event fixes | ~4,500 |
+| After the CSS and version-guard fixes | 22 |
+| Now | 1 |
+
+The one that remains is GtkComboBox complaining about its own internal
+`GtkStack` during the combobox selection test.
+
+The suite reaches the rich text control before aborting on heap corruption,
+with **18 failed assertions across 15 test cases** to that point. That is the
+honest measure of where the port stands: it works well enough to run several
+hundred test cases, and is not finished.
+
+### The bug class the compiler cannot see
+
+`G_CALLBACK()` casts a handler's type away. Every place this port changed a
+signal name for GTK4 without checking the new signal's *signature* is a
+silent, undiagnosable landmine, and two of them were:
+
+- `toplevel.cpp` connected to GTK4's `map`, whose handler takes no event,
+  while keeping GTK3's three-parameter `map-event` handler. The wxWindow
+  pointer arrived in the wrong argument and the first window shown crashed.
+- `notebook.cpp` nearly repeated it two commits later, caught only because
+  the mistake was fresh.
+
+Anything connecting a GTK4 signal in this port should be read with the
+signature in hand, not just the name.
+
+### The one that was worst
+
+`gtk_check_version()` reports a version *mismatch*, not a version *ordering*:
+it requires the major version to match exactly, so under GTK4 it answers
+"incompatible" to every GTK 3.x requirement. This codebase asks it about sixty
+times, always meaning "do we have at least this GTK3 feature level" -- so
+every one of those guards was quietly running its oldest fallback.
+
+That is how `GTKApplyWidgetStyle()` came to emit a raw Pango font description
+as CSS, which GTK4's parser rejects, meaning **no wxWindow's font was being
+applied at all**. It compiled, it ran, and it silently did the wrong thing. It
+is shimmed centrally now, and both halves of the real function's behaviour are
+recorded in `gtk4-invariants` so the shim cannot outlive its reason.
+
+There is no telling what else in those sixty guards was affected; each is
+worth a look.
+
+### Model changes found only by running
+
+| What | Why it could not be caught by compiling |
+|---|---|
+| `GtkScrollbar` is not a `GtkRange` | `GTK_RANGE()` compiles and fails at run time; every scrollbar operation was a no-op, so scrolling could not have worked |
+| `GtkWidget` has no `size-allocate` signal | The connection compiles; no control was getting `wxEVT_SIZE` |
+| `GtkEntry`'s editing signals belong to its private `GtkText` | Connecting to the entry compiles and never fires |
+| `GtkCellRendererPixbuf` has `texture`, not `surface` -- and not `paintable` either | Attribute names are strings |
+| GTK4's CSS parser requires a trailing `;` and a unit on the font size | Stylesheets are strings |
+
+The last two are pinned by new checks in `gtk4-invariants`, now at 38 checks,
+0 failed, and isolated in `docs/gtk/probes/gtk4-css-parser.c`.
+
+### Next
+
+1. The heap corruption in the rich text control -- the only thing stopping a
+   complete run.
+2. The 18 failing assertions, which are concentrated in the graphics and grid
+   tests.
+3. A sweep of the sixty `gtk_check_version()` guards, now that they evaluate
+   the way they were written to.

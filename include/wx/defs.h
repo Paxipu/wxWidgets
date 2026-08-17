@@ -2990,6 +2990,8 @@ typedef struct _GSimpleActionGroup    GSimpleActionGroup;
 typedef struct _GMainLoop             GMainLoop;
 typedef struct _GtkEventController    GtkEventController;
 typedef struct _GtkShortcutController GtkShortcutController;
+typedef struct _GdkClipboard          GdkClipboard;
+typedef struct _GdkContentProvider    GdkContentProvider;
 #endif /* __WXGTK4__ */
 
 typedef GtkWidget *WXWidget;

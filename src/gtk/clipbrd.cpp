@@ -38,6 +38,417 @@
 
 typedef wxScopedArray<wxDataFormat> wxDataFormatArray;
 
+#ifdef __WXGTK4__
+
+// ============================================================================
+// GTK4: GdkClipboard
+// ============================================================================
+//
+// GTK4 removed the X11 selection protocol wholesale -- gtk_selection_*, the
+// invisible owner widget, "selection_get"/"selection_received" and GdkAtom
+// targets are all gone. A clipboard is a GdkClipboard which owns a
+// GdkContentProvider, and reading it is asynchronous.
+//
+// wxClipboard's API is synchronous, so GetData() bridges the two with a nested
+// main loop, the same way modal dialogs and popup menus do elsewhere in this
+// port. The critical detail -- see docs/gtk/probes/gtk4-clipboard.c -- is that
+// the whole read, including draining the GInputStream, must stay asynchronous
+// and be pumped by that one loop. When the clipboard is locally owned the
+// stream's writer is our own content provider, running on the same main
+// context, so a blocking g_output_stream_splice() deadlocks against it and no
+// watchdog can recover: the loop is stuck inside the read callback.
+
+static const wxString TRACE_CLIPBOARD = wxT("clipboard");
+
+// Defined in dataobj.cpp: the alternative spelling of a text format, as the
+// two in use ("UTF8_STRING"/"text/plain;charset=utf-8" and "STRING"/
+// "text/plain") are interchangeable and which one is offered is up to the
+// other side.
+extern wxDataFormat::NativeFormat
+wxGTKGetAltWaylandFormat(wxDataFormat::NativeFormat format);
+
+namespace
+{
+
+// Collect the MIME types a data object handles in the given direction: Get
+// for the formats it can provide when we put it on the clipboard, Set for the
+// ones it can accept when we fill it from the clipboard. These are not the
+// same list and using the wrong one silently finds nothing.
+void GetDataObjectFormats(wxDataObject* data,
+                          wxDataObject::Direction dir,
+                          wxVector<wxDataFormat>& formats)
+{
+    const size_t count = data->GetFormatCount(dir);
+    if ( !count )
+        return;
+
+    wxDataFormatArray all(new wxDataFormat[count]);
+    data->GetAllFormats(all.get(), dir);
+
+    for ( size_t i = 0; i < count; i++ )
+        formats.push_back(all[i]);
+}
+
+// State shared with the async callbacks for the duration of one read.
+struct ClipboardRead
+{
+    GMainLoop* loop = nullptr;
+    GOutputStream* out = nullptr;
+    GBytes* bytes = nullptr;
+    bool finished = false;
+};
+
+extern "C" {
+
+void wx_clipboard_spliced(GObject* src, GAsyncResult* res, gpointer user_data)
+{
+    ClipboardRead* const read = static_cast<ClipboardRead*>(user_data);
+
+    if ( g_output_stream_splice_finish(G_OUTPUT_STREAM(src), res, nullptr) >= 0 )
+    {
+        read->bytes = g_memory_output_stream_steal_as_bytes(
+                        G_MEMORY_OUTPUT_STREAM(src));
+    }
+
+    read->finished = true;
+    g_main_loop_quit(read->loop);
+}
+
+void wx_clipboard_read_done(GObject* src, GAsyncResult* res, gpointer user_data)
+{
+    ClipboardRead* const read = static_cast<ClipboardRead*>(user_data);
+
+    GError* error = nullptr;
+    GInputStream* const stream =
+        gdk_clipboard_read_finish(GDK_CLIPBOARD(src), res, nullptr, &error);
+
+    if ( !stream )
+    {
+        if ( error )
+        {
+            wxLogTrace(TRACE_CLIPBOARD, "clipboard read failed: %s",
+                       error->message);
+            g_error_free(error);
+        }
+
+        read->finished = true;
+        g_main_loop_quit(read->loop);
+        return;
+    }
+
+    // Asynchronously, deliberately: see the comment at the top of this block.
+    read->out = g_memory_output_stream_new_resizable();
+    g_output_stream_splice_async(read->out, stream,
+                                 GOutputStreamSpliceFlags(
+                                    G_OUTPUT_STREAM_SPLICE_CLOSE_SOURCE |
+                                    G_OUTPUT_STREAM_SPLICE_CLOSE_TARGET),
+                                 G_PRIORITY_DEFAULT, nullptr,
+                                 wx_clipboard_spliced, read);
+    g_object_unref(stream);
+}
+
+} // extern "C"
+
+// Read one format off the clipboard, blocking until it is available. Returns
+// null if the clipboard doesn't have it, or if reading it failed.
+GBytes* ReadFormatSync(GdkClipboard* clipboard, const char* mime)
+{
+    const char* mimes[2] = { mime, nullptr };
+
+    ClipboardRead read;
+    read.loop = g_main_loop_new(nullptr, FALSE);
+
+    gdk_clipboard_read_async(clipboard, mimes, G_PRIORITY_DEFAULT, nullptr,
+                             wx_clipboard_read_done, &read);
+
+    // The callbacks always quit the loop, on the failure path too, so this
+    // can't be entered without a way out.
+    g_main_loop_run(read.loop);
+    g_main_loop_unref(read.loop);
+
+    if ( read.out )
+        g_object_unref(read.out);
+
+    return read.bytes;
+}
+
+} // anonymous namespace
+
+wxClipboard::wxClipboard()
+{
+    m_open = false;
+    m_receivedData = nullptr;
+    m_formatSupported = false;
+}
+
+wxClipboard::~wxClipboard()
+{
+    Clear();
+}
+
+// ----------------------------------------------------------------------------
+// wxClipboard helper functions
+// ----------------------------------------------------------------------------
+
+GdkClipboard* wxClipboard::GTKGetClipboard() const
+{
+    GdkDisplay* const display = gdk_display_get_default();
+    if ( !display )
+        return nullptr;
+
+    return m_usePrimary ? gdk_display_get_primary_clipboard(display)
+                        : gdk_display_get_clipboard(display);
+}
+
+void wxClipboard::GTKClearData(Kind kind)
+{
+    Data(kind).reset();
+}
+
+GdkContentProvider* wxClipboard::GTKMakeContentProvider()
+{
+    wxDataObject* const data = Data().get();
+    if ( !data )
+        return nullptr;
+
+    wxVector<wxDataFormat> formats;
+    GetDataObjectFormats(data, wxDataObject::Get, formats);
+    if ( formats.empty() )
+        return nullptr;
+
+    // Note that the data is serialised here rather than when the clipboard is
+    // actually read. GTK3 offered it lazily, through a "selection_get"
+    // callback; GTK4's equivalent would mean subclassing GdkContentProvider,
+    // and this way the bytes cannot go stale under a data object the
+    // application mutates or destroys after copying.
+    wxVector<GdkContentProvider*> providers;
+    for ( size_t i = 0; i < formats.size(); i++ )
+    {
+        const wxDataFormat& format = formats[i];
+
+        const size_t size = data->GetDataSize(format);
+        if ( !size )
+            continue;
+
+        wxCharBuffer buf(size);
+        if ( !data->GetDataHere(format, buf.data()) )
+            continue;
+
+        GBytes* const bytes = g_bytes_new(buf.data(), size);
+        providers.push_back(
+            gdk_content_provider_new_for_bytes(format.GetFormatId(), bytes));
+        g_bytes_unref(bytes);
+    }
+
+    if ( providers.empty() )
+        return nullptr;
+
+    if ( providers.size() == 1 )
+        return providers[0];
+
+    // gdk_content_provider_new_union() takes ownership of the providers it is
+    // given, so they must not be unreffed here.
+    return gdk_content_provider_new_union(&providers[0], providers.size());
+}
+
+bool wxClipboard::DoIsSupported(const wxDataFormat& format)
+{
+    wxCHECK_MSG( format, false, wxT("invalid clipboard format") );
+
+    GdkClipboard* const clipboard = GTKGetClipboard();
+    if ( !clipboard )
+        return false;
+
+    GdkContentFormats* const formats = gdk_clipboard_get_formats(clipboard);
+    if ( !formats )
+        return false;
+
+    if ( gdk_content_formats_contain_mime_type(formats, format.GetFormatId()) )
+        return true;
+
+    // Text has two spellings and which one is offered depends on the other
+    // side, so accept either, as the GTK3 code did.
+    const wxDataFormat::NativeFormat alt =
+        wxGTKGetAltWaylandFormat(format.GetFormatId());
+
+    return alt && gdk_content_formats_contain_mime_type(formats, alt);
+}
+
+// ----------------------------------------------------------------------------
+// wxClipboard public API implementation
+// ----------------------------------------------------------------------------
+
+void wxClipboard::Clear()
+{
+    if ( GdkClipboard* const clipboard = GTKGetClipboard() )
+        gdk_clipboard_set_content(clipboard, nullptr);
+
+    Data().reset();
+
+    m_formatSupported = false;
+}
+
+bool wxClipboard::Flush()
+{
+    // There is no equivalent under GTK4: gtk_clipboard_store() is gone and
+    // whether the contents outlive the application is entirely up to the
+    // clipboard manager, which an application cannot ask to persist them.
+    return false;
+}
+
+bool wxClipboard::Open()
+{
+    wxCHECK_MSG( !m_open, false, wxT("clipboard already open") );
+
+    m_open = true;
+
+    return true;
+}
+
+bool wxClipboard::SetData( wxDataObject *data )
+{
+    wxCHECK_MSG( m_open, false, wxT("clipboard not open") );
+    wxCHECK_MSG( data, false, wxT("data is invalid") );
+
+    return AddData( data );
+}
+
+bool wxClipboard::AddData( wxDataObject *data )
+{
+    wxCHECK_MSG( m_open, false, wxT("clipboard not open") );
+    wxCHECK_MSG( data, false, wxT("data is invalid") );
+
+    // we can only store one wxDataObject so clear the old one
+    Data().reset(data);
+
+    GdkClipboard* const clipboard = GTKGetClipboard();
+    if ( !clipboard )
+        return false;
+
+    GdkContentProvider* const provider = GTKMakeContentProvider();
+    if ( !provider )
+        return false;
+
+    const bool ok = gdk_clipboard_set_content(clipboard, provider) != 0;
+    g_object_unref(provider);
+
+    return ok;
+}
+
+void wxClipboard::Close()
+{
+    wxCHECK_RET( m_open, wxT("clipboard not open") );
+
+    m_open = false;
+}
+
+bool wxClipboard::IsOpened() const
+{
+    return m_open;
+}
+
+bool wxClipboard::IsSupported( const wxDataFormat& format )
+{
+    return DoIsSupported(format);
+}
+
+bool wxClipboard::IsSupportedAsync( wxEvtHandler *sink )
+{
+    if ( m_sink )
+        return false;  // currently busy, come back later
+
+    wxCHECK_MSG( sink, false, wxT("no sink given") );
+
+    GdkClipboard* const clipboard = GTKGetClipboard();
+    if ( !clipboard )
+        return false;
+
+    // Unlike GTK3, where this meant a round trip through the X server for the
+    // TARGETS atom, GTK4 already knows what the clipboard holds, so the answer
+    // can be built right away. The event is still queued rather than sent
+    // directly to keep the asynchronous contract this function documents.
+    wxClipboardEvent* const event = new wxClipboardEvent(wxEVT_CLIPBOARD_CHANGED);
+    event->SetEventObject( this );
+
+    if ( GdkContentFormats* const formats = gdk_clipboard_get_formats(clipboard) )
+    {
+        gsize n = 0;
+        const char* const* const mimes =
+            gdk_content_formats_get_mime_types(formats, &n);
+
+        for ( gsize i = 0; i < n; i++ )
+        {
+            const wxDataFormat format(mimes[i]);
+
+            wxLogTrace(TRACE_CLIPBOARD, wxT("\t%s"), format.GetId());
+
+            event->AddFormat( format );
+        }
+    }
+
+    sink->QueueEvent( event );
+
+    return true;
+}
+
+bool wxClipboard::GetData( wxDataObject& data )
+{
+    wxCHECK_MSG( m_open, false, wxT("clipboard not open") );
+
+    GdkClipboard* const clipboard = GTKGetClipboard();
+    if ( !clipboard )
+        return false;
+
+    wxVector<wxDataFormat> formats;
+    GetDataObjectFormats(&data, wxDataObject::Set, formats);
+
+    for ( size_t i = 0; i < formats.size(); i++ )
+    {
+        const wxDataFormat& format = formats[i];
+
+        if ( !DoIsSupported(format) )
+            continue;
+
+        // The other side may be offering the alternative spelling of a text
+        // format rather than the one we asked for.
+        wxDataFormat::NativeFormat mime = format.GetFormatId();
+        GdkContentFormats* const avail = gdk_clipboard_get_formats(clipboard);
+        if ( !gdk_content_formats_contain_mime_type(avail, mime) )
+        {
+            const wxDataFormat::NativeFormat alt =
+                wxGTKGetAltWaylandFormat(mime);
+            if ( alt && gdk_content_formats_contain_mime_type(avail, alt) )
+                mime = alt;
+        }
+
+        wxLogTrace(TRACE_CLIPBOARD, wxT("Requesting format %s"),
+                   format.GetId());
+
+        GBytes* const bytes = ReadFormatSync(clipboard, mime);
+        if ( !bytes )
+            continue;
+
+        gsize size = 0;
+        gconstpointer const ptr = g_bytes_get_data(bytes, &size);
+
+        const bool ok = data.SetData(format, size, ptr);
+
+        g_bytes_unref(bytes);
+
+        if ( ok )
+            return true;
+
+        wxLogTrace(TRACE_CLIPBOARD,
+                   wxT("Failed to set data in the requested format"));
+    }
+
+    wxLogTrace(TRACE_CLIPBOARD, wxT("GetData(): format not found"));
+
+    return false;
+}
+
+#else // !__WXGTK4__
+
 // ----------------------------------------------------------------------------
 // data
 // ----------------------------------------------------------------------------
@@ -835,5 +1246,7 @@ wxDataObject* wxClipboard::GTKGetDataObject( GdkAtom atom )
         return nullptr;
     }
 }
+
+#endif // __WXGTK4__/!__WXGTK4__
 
 #endif // wxUSE_CLIPBOARD

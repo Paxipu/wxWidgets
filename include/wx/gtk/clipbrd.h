@@ -68,6 +68,17 @@ public:
     // implementation from now on
     // --------------------------
 
+#ifdef __WXGTK4__
+    // GTK4 replaced the X11 selection protocol -- an invisible owner widget,
+    // "selection_get"/"selection_received" signals and GdkAtom targets -- with
+    // GdkClipboard, which owns a GdkContentProvider and is read back
+    // asynchronously. None of the callbacks below have a counterpart, so this
+    // is the whole of the GTK-facing interface now.
+    GdkClipboard* GTKGetClipboard() const;
+
+    // clear the data for the given clipboard kind
+    void GTKClearData(Kind kind);
+#else
     // get our clipboard item (depending on m_usePrimary value)
     GdkAtom GTKGetClipboardAtom() const;
 
@@ -82,6 +93,7 @@ public:
 
     // called when available target information is received
     bool GTKOnTargetReceived(const wxDataFormat& format);
+#endif // __WXGTK4__/!__WXGTK4__
 
 private:
     // the data object for the specific selection
@@ -97,14 +109,23 @@ private:
     }
 
 
+#ifndef __WXGTK4__
     // set or unset selection ownership
     bool SetSelectionOwner(bool set = true);
 
     // get the atom corresponding to the given format if it's supported
     GdkAtom DoGetTarget(const wxDataFormat& format);
+#endif
 
     // just check if the given format is supported
     bool DoIsSupported(const wxDataFormat& format);
+
+#ifdef __WXGTK4__
+    // Build a GdkContentProvider offering every format of the data object
+    // currently set for this clipboard, or null if there is none. The data is
+    // serialised eagerly, see the comment in clipbrd.cpp.
+    GdkContentProvider* GTKMakeContentProvider();
+#endif
 
 
     // both of these pointers can be non-null simultaneously but we only use
@@ -117,6 +138,7 @@ private:
     // that GTK callbacks could access it
     wxDataObject *m_receivedData;
 
+#ifndef __WXGTK4__
     // used to pass information about the format we need from DoIsSupported()
     // to GTKOnTargetReceived() and return the supported format from the latter
     GdkAtom m_targetRequested;
@@ -126,6 +148,7 @@ private:
 
     // ID of the connection to "selection_get" signal, initially 0.
     unsigned long m_idSelectionGetHandler;
+#endif // !__WXGTK4__
 
     bool m_open;
     bool m_formatSupported;
@@ -134,7 +157,9 @@ public:
     // async stuff
     wxEvtHandlerRef    m_sink;
 private:
+#ifndef __WXGTK4__
     GtkWidget         *m_targetsWidgetAsync;  // for getting list of supported formats
+#endif
 
     wxDECLARE_DYNAMIC_CLASS(wxClipboard);
 };

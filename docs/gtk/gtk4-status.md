@@ -2490,3 +2490,75 @@ port done file by file.
 
 plus `filedlg.cpp`, `overlay.cpp` and a handful of smaller ones. `test_gui`
 still cannot link, so none of this is runtime-verified.
+
+---
+
+## Progress update 27: `minifram.cpp`
+
+**495 -> 447 diagnostics, 28 -> 27 failing targets, no regressions.**
+`minifram.cpp` went from 48 errors to zero.
+
+### Two things the GTK3 code used that GTK4 has no form of
+
+`wxMiniFrame` draws its own title bar and borders and implements dragging
+itself. Both halves needed rebuilding, for different reasons.
+
+**Somewhere to draw.** The GTK3 code puts a `GtkEventBox` between the window
+and its contents, drawing the decorations in the box's `draw` handler --
+the comment there says it uses an event box rather than `m_widget` because
+otherwise "setting the resize cursor has no effect".
+
+Under GTK4 neither half of that reasoning survives: `GtkEventBox` is gone, and
+no widget needs one anyway since input arrives through controllers rather than
+through a widget's own window. But there is still nowhere to draw, because GTK4
+has no `draw` signal on an arbitrary widget.
+
+The replacement is a `GtkOverlay` whose main child is a `GtkDrawingArea`, with
+the frame's contents laid over it. That gets both halves right at once: the
+decorations are painted underneath, and because the contents are inset by the
+border and title margins, the uncovered edges are exactly the region where
+clicks should reach the decorations.
+
+One correction was needed after writing it: a `GtkOverlay` takes its size from
+its *main* child, which here is a drawing area with no natural size, so the
+frame requested nothing at all. `gtk_overlay_set_measure_overlay()` makes it
+measure the contents instead.
+
+**Moving the window.** The GTK3 code has two paths: under Wayland it calls
+`gtk_window_begin_move_drag()` and lets the compositor do it, and otherwise it
+grabs the pointer and calls `gtk_window_move()` on every motion event.
+
+The second path has no GTK4 form at all -- there are no pointer grabs and no
+way to position a window -- so the compositor-driven drag, previously the
+Wayland-only path, is now the only one. It is `gdk_toplevel_begin_move()` and
+`gdk_toplevel_begin_resize()` on the frame's `GdkToplevel`, started from a
+`GtkGestureClick`. There is also no button-release handler any more: the drag
+ends at the compositor rather than being tracked here.
+
+Consequently `m_isDragMove` and `m_dragOffset` are `#ifdef`ed out of the header
+under GTK4, which is how the missing-member errors first pointed at this.
+
+### Smaller pieces
+
+* `gdk_window_raise()` -> `gtk_window_present()`.
+* `gdk_window_set_cursor()` with `GDK_BOTTOM_RIGHT_CORNER` ->
+  `gtk_widget_set_cursor_from_name(widget, "se-resize")`.
+* `gdk_window_invalidate_rect()` in `SetTitle()` -> queueing a draw on the
+  drawing area.
+* The decoration drawing, which was duplicated across the GTK2 and GTK3 draw
+  callbacks, is factored into one function all three versions call. Adding a
+  third copy for GTK4 was the alternative.
+
+### What is left
+
+| File | Errors |
+|---|---|
+| `dataview.cpp` | 55 |
+| `window.cpp` | 44 |
+| `dnd.cpp` | 41 |
+| `evtloop.cpp` | 37 |
+| `textctrl.cpp` | 21 |
+| `notebook.cpp` | 19 |
+
+plus `filedlg.cpp`, `overlay.cpp` and a handful of smaller ones. `test_gui`
+still cannot link, so none of this is runtime-verified.

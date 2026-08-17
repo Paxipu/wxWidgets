@@ -2145,3 +2145,86 @@ the disabled bitmap is no longer chosen lazily when the widget draws.
 
 Plus the tail of smaller files. `test_gui` still cannot link, so none of this
 is runtime-verified.
+
+---
+
+## Progress update 23: `radiobox.cpp`
+
+**685 -> 627 diagnostics, 34 -> 33 failing targets, no regressions.**
+`radiobox.cpp` went from 58 errors to zero. Four of the six subsystem rewrites
+are done.
+
+### One type fewer, rather than a replacement
+
+`GtkRadioButton` was not replaced under GTK4, it was *merged*: a
+`GtkCheckButton` with a group **is** a radio button. So unlike the menu and the
+toolbar, there was no new model to design here -- the mapping is
+`GtkRadioButton` -> `GtkCheckButton`, with grouping done by pointing each
+button at the first one instead of threading a `GSList` through successive
+construction calls.
+
+Two consequences worth noting:
+
+* `GtkCheckButton` no longer derives from `GtkToggleButton`, so the state is
+  read with `gtk_check_button_get_active()` and the signal to watch is
+  `toggled` rather than `clicked`.
+* It owns its label internally -- there is no child `GtkLabel` to reach through
+  `gtk_bin_get_child()`. `GetString()`/`SetString()` go through
+  `gtk_check_button_get_label()`/`set_label()`, and the places that used to
+  disable or restyle the label widget separately simply don't need to: the
+  button dims and themes its own label.
+
+### The ordering question I checked rather than assumed
+
+`wxRadioBox::Create()` activates the first button as soon as it is made, and
+only then creates and groups the remaining ones. Under GTK3 that is fine
+because the group is a `GSList` passed forward. Under GTK4 a button *joins* an
+existing group afterwards, which raises the question of whether joining resets
+the group's selection.
+
+A probe mirroring the construction order exactly confirmed it does not: the
+first button is still active after the others join, and exactly one is active.
+Worth checking rather than assuming, because the failure would have been a
+radio box that silently starts with nothing selected -- the same class of bug
+found in `toolbar.cpp`, and it would have looked identical.
+
+### Event plumbing
+
+* `key-press-event` -> `GtkEventControllerKey`. The handler navigates between
+  buttons with the arrow keys and forwards Tab to the parent; only the way GTK
+  hands over the key changed, so the logic was factored into one function both
+  versions call.
+* `focus-in-event`/`focus-out-event` -> `GtkEventControllerFocus`, whose
+  `enter`/`leave` signals carry no event and return nothing.
+* **`size-allocate` is gone entirely.** The GTK3 code cached each button's
+  rectangle as it changed, purely so `GetItemFromPoint()` could hit-test it.
+  There is no such signal under GTK4, so the rectangle is computed on demand
+  with `gtk_widget_compute_bounds()` -- which is where it was actually needed
+  all along, and drops a cache that had to be kept in sync.
+* `GtkShadowType` is gone, so `wxNO_BORDER` adds the `flat` style class to the
+  frame rather than setting a shadow type.
+
+### A recurring pattern in this port
+
+The GTK3 build check caught a stray brace that left `extern "C"` closed one
+function early -- the third time in this port that keeping both builds green
+after every batch has caught a preprocessor or brace mistake the GTK4 build
+happily accepted. Compiling both configurations is not redundancy here; the
+`#ifdef` interleaving makes it the actual test.
+
+### What is left
+
+Two subsystem rewrites, plus a tail that is now the bulk of it:
+
+| File | Errors |
+|---|---|
+| `clipbrd.cpp` | 62 |
+| `dataview.cpp` | 55 |
+| `renderer.cpp` | 50 |
+| `minifram.cpp` | 48 |
+| `window.cpp` | 44 |
+| `dnd.cpp` | 41 |
+| `evtloop.cpp` | 37 |
+
+then `textctrl.cpp`, `anybutton.cpp`, `notebook.cpp` and a dozen smaller ones.
+`test_gui` still cannot link, so none of this is runtime-verified.

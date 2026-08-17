@@ -65,10 +65,17 @@ inline GtkWidget* CreateGtkSearchEntryIfAvailable()
 extern "C" {
 
 static void
+#ifdef __WXGTK4__
+// GTK4's "icon-press" carries no event.
+wx_gtk_icon_press(GtkEntry* WXUNUSED(entry),
+                  gint position,
+                  wxSearchCtrl* ctrl)
+#else
 wx_gtk_icon_press(GtkEntry* WXUNUSED(entry),
                   gint position,
                   GdkEventButton* WXUNUSED(event),
                   wxSearchCtrl* ctrl)
+#endif
 {
     if ( position == GTK_ENTRY_ICON_PRIMARY )
     {
@@ -95,6 +102,10 @@ wx_gtk_icon_press(GtkEntry* WXUNUSED(entry),
     }
 }
 
+#ifndef __WXGTK4__
+// GtkEntry has no "event" signal under GTK4, and needs none here: the motion
+// this works around being swallowed over an inactive icon is delivered by the
+// window's own motion controller instead, see window.cpp.
 static gboolean
 wx_gtk_entry_event(GtkEntry* WXUNUSED(entry),
                    GdkEvent* event,
@@ -116,6 +127,7 @@ wx_gtk_entry_event(GtkEntry* WXUNUSED(entry),
 
     return FALSE;
 }
+#endif // !__WXGTK4__
 
 }
 
@@ -234,7 +246,9 @@ void wxSearchCtrl::GTKCreateSearchEntryWidget()
 
     g_signal_connect(m_entry, "icon-press", G_CALLBACK(wx_gtk_icon_press), this);
 
+#ifndef __WXGTK4__
     g_signal_connect(m_entry, "event", G_CALLBACK(wx_gtk_entry_event), this);
+#endif
 }
 
 GtkEditable *wxSearchCtrl::GetEditable() const
@@ -403,9 +417,19 @@ wxSize wxSearchCtrl::DoGetSizeFromTextSize(int xlen, int ylen) const
     {
         // If text is empty, there is no "clear" icon, and GtkEntry preferred size
         // does not account for it. So add in size of primary icon as a substitute.
+#ifdef __WXGTK4__
+        // gtk_entry_get_icon_pixbuf() is gone: the icon is a GdkPaintable now,
+        // which reports its own width directly.
+        if (GdkPaintable* const icon =
+                gtk_entry_get_icon_paintable(m_entry, GTK_ENTRY_ICON_PRIMARY))
+        {
+            size.x += gdk_paintable_get_intrinsic_width(icon);
+        }
+#else
         GdkPixbuf* pixbuf = gtk_entry_get_icon_pixbuf(m_entry, GTK_ENTRY_ICON_PRIMARY);
         if (pixbuf)
             size.x += gdk_pixbuf_get_width(pixbuf);
+#endif
 
         // Also account for secondary icon margin
         wxGtkStyleContext sc(GetContentScaleFactor());

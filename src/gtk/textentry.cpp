@@ -128,9 +128,17 @@ extern "C" {
 // to send a single wxEVT_TEXT even if we received several (typically two, when
 // the selected text in the control is replaced by new text) "changed" signals.
 static gboolean
+#ifdef __WXGTK4__
+// "event-after" is gone with the rest of the GdkEvent-based signals; under
+// GTK4 this is driven from the key controller instead, see GTKEntryOnKeypress().
+wx_gtk_text_after_key_press(GtkWidget*,
+                            GdkEvent* WXUNUSED(gdk_event),
+                            wxTextEntry* entry)
+#else
 wx_gtk_text_after_key_press(GtkWidget*,
                             GdkEventKey* WXUNUSED(gdk_event),
                             wxTextEntry* entry)
+#endif
 {
     wxTextCoalesceData* const data = entry->GTKGetCoalesceData();
     wxCHECK_MSG( data, FALSE, "must be non-null if this handler is called" );
@@ -987,6 +995,14 @@ int wxTextEntry::GTKEntryIMFilterKeypress(wxGTKNativeKeyEvent* event) const
     GTKEntryOnKeypress(GTK_WIDGET(GetEntry()));
 
     int result = false;
+#ifdef __WXGTK4__
+    // gtk_entry_im_context_filter_keypress() was removed and GTK4 exposes no
+    // way to hand an event to an entry's own input method context: the entry
+    // owns it privately. Reporting "not filtered" means wx goes on to handle
+    // the key itself, which is the safe answer -- the cost is that composing
+    // via an input method inside a wxTextEntry is not routed through wx.
+    wxUnusedVar(event);
+#else
 #if GTK_CHECK_VERSION(2, 22, 0)
     if (wx_is_at_least_gtk2(22))
     {
@@ -995,6 +1011,7 @@ int wxTextEntry::GTKEntryIMFilterKeypress(wxGTKNativeKeyEvent* event) const
 #else // GTK+ < 2.22
     wxUnusedVar(event);
 #endif // GTK+ 2.22+
+#endif // __WXGTK4__/!__WXGTK4__
 
     return result;
 }

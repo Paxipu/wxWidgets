@@ -227,8 +227,22 @@ void wxBitmapComboBox::SetItemBitmap(unsigned int n, const wxBitmapBundle& bitma
             if (wx_is_at_least_gtk3(10))
             {
                 g_value_init(value0, CAIRO_GOBJECT_TYPE_SURFACE);
+#ifdef __WXGTK4__
+                // The GdkWindow argument only ever selected the scale factor
+                // to create the surface for, which is applied explicitly just
+                // below anyway.
+                cairo_surface_t* surface = cairo_image_surface_create(
+                    CAIRO_FORMAT_ARGB32, bmp.GetWidth(), bmp.GetHeight());
+                {
+                    cairo_t* const cr = cairo_create(surface);
+                    gdk_cairo_set_source_pixbuf(cr, bmp.GetPixbuf(), 0, 0);
+                    cairo_paint(cr);
+                    cairo_destroy(cr);
+                }
+#else
                 cairo_surface_t* surface = gdk_cairo_surface_create_from_pixbuf(
                     bmp.GetPixbuf(), 1, gtk_widget_get_window(m_widget));
+#endif
                 const double scaleFactor = bmp.GetScaleFactor();
                 cairo_surface_set_device_scale(surface, scaleFactor, scaleFactor);
                 g_value_set_boxed(value0, surface);

@@ -310,6 +310,43 @@ static inline GdkSurface* wx_gtk_widget_get_surface(GtkWidget* widget)
 #define gtk_window_iconify(window)   gtk_window_minimize(window)
 #define gtk_window_deiconify(window) gtk_window_unminimize(window)
 
+// GTK4 moved the text of an entry to the GtkEditable interface it implements,
+// so these are the same operations under a different name.
+#define gtk_entry_get_text(entry) \
+            gtk_editable_get_text(GTK_EDITABLE(entry))
+#define gtk_entry_set_text(entry, text) \
+            gtk_editable_set_text(GTK_EDITABLE(entry), text)
+#define gtk_entry_set_width_chars(entry, n) \
+            gtk_editable_set_width_chars(GTK_EDITABLE(entry), n)
+#define gtk_entry_get_width_chars(entry) \
+            gtk_editable_get_width_chars(GTK_EDITABLE(entry))
+
+// The clipboard operations on an editable became widget actions.
+static inline void wx_gtk_editable_clipboard(GtkEditable* editable,
+                                             const char* action)
+{
+    gtk_widget_activate_action(GTK_WIDGET(editable), action, nullptr);
+}
+#define gtk_editable_copy_clipboard(e)  wx_gtk_editable_clipboard(e, "clipboard.copy")
+#define gtk_editable_cut_clipboard(e)   wx_gtk_editable_clipboard(e, "clipboard.cut")
+#define gtk_editable_paste_clipboard(e) wx_gtk_editable_clipboard(e, "clipboard.paste")
+
+// gtk_window_activate_default() was replaced by a widget-level call which,
+// unlike it, reports nothing. Callers here use the result to decide whether
+// anything happened, so check for a default widget first.
+static inline gboolean wx_gtk_window_activate_default(GtkWindow* window)
+{
+    GtkWidget* const def = gtk_window_get_default_widget(window);
+    if ( !def || !gtk_widget_get_sensitive(def) )
+        return FALSE;
+
+    gtk_widget_activate_default(GTK_WIDGET(window));
+
+    return TRUE;
+}
+#define gtk_window_activate_default(window) \
+            wx_gtk_window_activate_default(window)
+
 // GTK4 removed GtkStateType, the pre-3.0 enumeration of widget states, leaving
 // only the GtkStateFlags bitfield.
 //

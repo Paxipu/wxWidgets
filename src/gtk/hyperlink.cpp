@@ -131,9 +131,18 @@ bool wxHyperlinkCtrl::Create(wxWindow *parent, wxWindowID id,
         else if (HasFlag(wxHL_ALIGN_RIGHT))
             x_alignment = 1;
 
+#ifdef __WXGTK4__
+        // gtk_button_set_alignment() is gone: a button's child is aligned with
+        // the ordinary halign property now.
+        gtk_widget_set_halign(m_widget,
+                              x_alignment < 0.25f ? GTK_ALIGN_START
+                            : x_alignment > 0.75f ? GTK_ALIGN_END
+                                                  : GTK_ALIGN_CENTER);
+#else
         wxGCC_WARNING_SUPPRESS(deprecated-declarations)
         gtk_button_set_alignment(GTK_BUTTON(m_widget), x_alignment, 0.5f);
         wxGCC_WARNING_RESTORE()
+#endif
 
         // set to non empty strings both the url and the label
         SetURL(url.empty() ? label : url);

@@ -2318,3 +2318,84 @@ then `textctrl.cpp`, `anybutton.cpp`, `notebook.cpp`, `filedlg.cpp`,
 `overlay.cpp` and a dozen smaller ones. `dnd.cpp` shares the format model just
 established but uses the separate `GtkDragSource`/`GtkDropTarget` controllers.
 `test_gui` still cannot link, so none of this is runtime-verified.
+
+---
+
+## Progress update 25: `wxGtkImage` gets a GTK4 form
+
+**574 -> 551 diagnostics, 31 -> 29 failing targets, no regressions.**
+`image_gtk.cpp` and `anybutton.cpp` (21 errors) both went to zero.
+
+### Factoring a workaround that had appeared three times
+
+`GtkImage` is a final type under GTK4, so `wxGtkImage` -- which derives from it
+in order to pick the right bitmap variant for the scale factor and enabled
+state *at the moment it draws* -- has no GTK4 form, and `image.h` could not
+even be included.
+
+`menu.cpp` and `toolbar.cpp` each worked around that locally, both open-coding
+the same "choose the variant, push it in as a `GdkTexture`" logic.
+`anybutton.cpp` needed it too, with `statbmp.cpp`, `notebook.cpp` and
+`dataview.cpp` queued behind it. Three occurrences was enough: the lazy choice
+is now made eagerly in one place, with callers re-pushing when the state it
+depends on changes.
+
+The interface is deliberately close to the GTK3 one so that call sites differ
+by as little as possible -- `image->Set(b)` becomes `wxGtkImage::Set(image, b)`
+and `WX_GTK_IS_IMAGE()` still works. `SetDisabled()` is part of it because
+deriving a disabled bitmap from the normal one when the bundle has none is
+exactly what the GTK3 class did while drawing, and would otherwise have been
+reinvented at each call site as well.
+
+`anybutton.cpp` then fell in a single pass, which is the evidence that
+factoring rather than copying a third time was right.
+
+One HiDPI detail is captured in the helper rather than left to each caller:
+given only a texture, `GtkImage` lays it out at its *device* pixel size, so it
+draws twice too large on a scaled display unless the logical pixel size is set
+explicitly.
+
+### Buttons hold one child
+
+GTK4 removed `gtk_button_get_image()` and `gtk_button_set_image()` as well. A
+button has exactly one child there, so an image shown beside a label is a box
+we assemble; two local helpers keep the rest of `anybutton.cpp` reading as it
+did, finding the image rather than asking for it. The image is reparented
+rather than recreated when the content is rebuilt, so a bitmap already on it
+survives a label change.
+
+`gtk_button_set_image_position()` went with them and has no replacement: the
+image sits where we put it, before the label, so `wxLEFT` is honoured and the
+other positions are not.
+
+### A note on ordering
+
+`dnd.cpp` was going to be next but was deferred. It is a full model
+replacement on the scale of `menu.cpp` -- `GtkDragSource`/`GtkDropTarget`
+controllers, `GdkDrop`, and a *second* asynchronous-to-synchronous bridge, for
+both `GetData()` and `DoDragDrop()` -- and is better started fresh than left
+half-finished.
+
+`renderer.cpp` is deferred for the opposite reason: it looks mechanical
+(`GtkStateType` -> `GtkStateFlags`) but the constants do not map by value --
+`GTK_STATE_INSENSITIVE` is 4 while `GTK_STATE_FLAG_INSENSITIVE` is 8 -- so a
+substitution done quickly would compile and silently render the wrong states.
+Notably the existing GTK3 code already casts one to the other in places, which
+is worth looking at properly rather than preserving by reflex.
+
+### What is left
+
+| File | Errors |
+|---|---|
+| `dataview.cpp` | 55 |
+| `renderer.cpp` | 50 |
+| `minifram.cpp` | 48 |
+| `window.cpp` | 44 |
+| `dnd.cpp` | 41 |
+| `evtloop.cpp` | 37 |
+| `textctrl.cpp` | 21 |
+| `notebook.cpp` | 19 |
+
+plus `filedlg.cpp`, `overlay.cpp` and a handful of smaller ones. `evtloop.cpp`
+needs the `gtk_main` family replaced with `GMainContext`. `test_gui` still
+cannot link, so none of this is runtime-verified.

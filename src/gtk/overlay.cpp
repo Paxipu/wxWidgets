@@ -16,6 +16,7 @@
 #include "wx/gtk/private/wrapgtk.h"
 #include "wx/gtk/private/backend.h"
 #include "wx/gtk/private/gtk3-compat.h"
+#include "wx/gtk/private/win_gtk.h"
 
 class wxOverlayImpl: public wxOverlay::Impl
 {
@@ -39,14 +40,34 @@ public:
 
 wxOverlay::Impl* wxOverlay::Create()
 {
+#ifdef __WXGTK4__
+    // Unlike the GTK3 implementation below, which is only worth its while on
+    // Wayland, the GTK4 one is used everywhere: it does not need a surface of
+    // its own at all, while the generic implementation needs to read the
+    // window's pixels back, which no GTK4 backend can do.
+    return new wxOverlayImpl;
+#else
     if (wxGTKImpl::IsWayland(nullptr))
         return new wxOverlayImpl;
 
     // Use generic
     return nullptr;
+#endif
 }
 
 extern "C" {
+#ifdef __WXGTK4__
+static void draw(GtkDrawingArea*, cairo_t* cr, int, int, void* data)
+{
+    wxOverlayImpl* const overlay = static_cast<wxOverlayImpl*>(data);
+    if (overlay->m_surface)
+    {
+        cairo_set_source_surface(cr, overlay->m_surface, 0, 0);
+        cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+        cairo_paint(cr);
+    }
+}
+#else
 static gboolean draw(GtkWidget*, cairo_t* cr, wxOverlayImpl* overlay)
 {
     if (overlay->m_surface)
@@ -64,6 +85,7 @@ static gboolean map_event(GtkWidget* widget, GdkEvent*, wxOverlayImpl* overlay)
     g_signal_handlers_disconnect_by_data(widget, overlay);
     return false;
 }
+#endif // __WXGTK4__/!__WXGTK4__
 } // extern "C"
 
 wxOverlayImpl::wxOverlayImpl()
@@ -80,7 +102,11 @@ wxOverlayImpl::~wxOverlayImpl()
         cairo_surface_destroy(m_surface);
     if (m_overlay)
     {
+#ifdef __WXGTK4__
+        gtk_widget_unparent(m_overlay);
+#else
         gtk_widget_destroy(m_overlay);
+#endif
         g_object_unref(m_overlay);
     }
 }
@@ -99,6 +125,28 @@ void wxOverlayImpl::Init(wxDC* dc, int x, int y, int width, int height)
     wxCHECK_RET(win && m_cr, "invalid dc for wxOverlay");
 
     m_target = win->GetConnectWidget();
+
+#ifdef __WXGTK4__
+    // GTK4 has none of the pieces the GTK3 implementation below is built from:
+    // no GTK_WINDOW_POPUP, no gtk_window_move() to place it with, no RGBA
+    // visual selection and no input shapes.  It does not need them either,
+    // though, because it renders a whole toplevel as one scene: a sibling
+    // widget added last to the target's wxPizza is simply drawn on top of
+    // everything else in it, which is all the overlay ever wanted.
+    if (m_overlay == nullptr)
+    {
+        m_overlay = gtk_drawing_area_new();
+        g_object_ref(m_overlay);
+
+        gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(m_overlay),
+                                       draw, this, nullptr);
+
+        // The overlay must be transparent for mouse events. This replaces the
+        // 1x1 input shape hack below and, unlike it, is exact.
+        gtk_widget_set_can_target(m_overlay, false);
+        gtk_widget_set_can_focus(m_overlay, false);
+    }
+#else // !__WXGTK4__
     GtkWidget* const tlw = gtk_widget_get_toplevel(m_target);
     if (m_overlay == nullptr)
     {
@@ -124,6 +172,7 @@ void wxOverlayImpl::Init(wxDC* dc, int x, int y, int width, int height)
     gtk_widget_input_shape_combine_region(m_overlay, nullptr);
     gtk_widget_input_shape_combine_region(m_overlay, region);
     cairo_region_destroy(region);
+#endif // __WXGTK4__/!__WXGTK4__
 
     // Convert to device space
     double d1 = x;
@@ -149,11 +198,17 @@ void wxOverlayImpl::Init(wxDC* dc, int x, int y, int width, int height)
     }
 
     gtk_widget_set_size_request(m_overlay, m_rect.width, m_rect.height);
+#ifdef __WXGTK4__
+    // Nothing has to be mapped first here: the overlay is laid out by its
+    // parent like any other child widget, so it can be placed straight away.
+    PositionOverlay(m_target);
+#else
     // Underlying window must be mapped before overlay can be positioned on it
     if (gtk_widget_get_mapped(tlw))
         PositionOverlay(tlw);
     else
         g_signal_connect(tlw, "map-event", G_CALLBACK(map_event), this);
+#endif
 }
 
 void wxOverlayImpl::BeginDrawing(wxDC*)
@@ -207,6 +262,31 @@ void wxOverlayImpl::Reset()
         gtk_widget_hide(m_overlay);
 }
 
+#ifdef __WXGTK4__
+
+void wxOverlayImpl::PositionOverlay(GtkWidget* target)
+{
+    wxCHECK_RET( WX_IS_PIZZA(target),
+                 "wxOverlay needs a wxPizza to place its overlay in" );
+
+    wxPizza* const pizza = WX_PIZZA(target);
+
+    if (gtk_widget_get_parent(m_overlay) == target)
+    {
+        pizza->move(m_overlay, m_rect.x, m_rect.y, m_rect.width, m_rect.height);
+    }
+    else
+    {
+        // put() adds the overlay as the last child, and GtkFixed draws its
+        // children in order, so this is also what puts it on top.
+        pizza->put(m_overlay, m_rect.x, m_rect.y, m_rect.width, m_rect.height);
+    }
+
+    gtk_widget_show(m_overlay);
+}
+
+#else // !__WXGTK4__
+
 void wxOverlayImpl::PositionOverlay(GtkWidget* tlw)
 {
     int x, y;
@@ -214,5 +294,7 @@ void wxOverlayImpl::PositionOverlay(GtkWidget* tlw)
     gtk_window_move(GTK_WINDOW(m_overlay), x, y);
     gtk_widget_show(m_overlay);
 }
+
+#endif // __WXGTK4__/!__WXGTK4__
 
 #endif // __WXGTK3__

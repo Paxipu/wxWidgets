@@ -39,8 +39,14 @@ public:
     virtual wxLayoutDirection GetLayoutDirection() const override;
 
 protected:
+#ifdef __WXGTK4__
+    // Set m_size from the given (valid) widget: there is no GdkWindow left to
+    // ask, and a GdkSurface is the whole toplevel rather than the widget.
+    void InitSize(GtkWidget* widget);
+#else
     // Set m_size from the given (valid) GdkWindow.
     void InitSize(GdkWindow* window);
+#endif
     void AdjustForRTL(cairo_t* cr);
 
     wxSize m_size;

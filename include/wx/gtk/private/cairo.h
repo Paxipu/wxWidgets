@@ -10,6 +10,13 @@
 #ifndef _WX_GTK_PRIVATE_CAIRO_H_
 #define _WX_GTK_PRIVATE_CAIRO_H_
 
+// Everything here is about drawing straight onto a GdkWindow, outside of any
+// paint handler. GTK4 has no such thing: gdk_cairo_create() is gone and a
+// GdkSurface cannot be drawn to at all except from a snapshot callback, where
+// GTK hands out the context itself. See src/gtk/dc.cpp for what wx does about
+// this.
+#ifndef __WXGTK4__
+
 // ----------------------------------------------------------------------------
 // Redefine GDK function to avoiding deprecation warnings
 // ----------------------------------------------------------------------------
@@ -51,5 +58,7 @@ private:
 };
 
 } // namespace wxGTKImpl
+
+#endif // !__WXGTK4__
 
 #endif // _WX_GTK_PRIVATE_CAIRO_H_

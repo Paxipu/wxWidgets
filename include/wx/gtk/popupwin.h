@@ -41,6 +41,12 @@ protected:
 
     virtual void DoMoveWindow(int x, int y, int width, int height) override;
 
+#ifdef __WXGTK4__
+    // Place the GtkPopover which stands in for the popup toplevel under GTK4,
+    // see popupwin.cpp.
+    void GTKUpdatePointingTo();
+#endif // __WXGTK4__
+
 #ifdef __WXUNIVERSAL__
     wxDECLARE_EVENT_TABLE();
 #endif

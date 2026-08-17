@@ -2615,6 +2615,29 @@ static gboolean wxgtk_window_popup_menu_callback(GtkWidget*, wxWindowGTK* win)
     return win->GTKProcessEvent(event);
 }
 
+#ifdef __WXGTK4__
+// GtkWidget::popup-menu is gone: GTK4 widgets which have a context menu expose
+// it as a "menu.popup" action instead, and there is no signal for a widget
+// which doesn't. What the signal actually reported was the two key bindings
+// that emitted it, so those are watched for directly.
+static gboolean
+wxgtk_window_context_menu_key(GtkEventControllerKey* controller,
+                              guint keyval,
+                              guint WXUNUSED(keycode),
+                              GdkModifierType state,
+                              wxWindowGTK* win)
+{
+    const bool isMenuKey = keyval == GDK_KEY_Menu;
+    const bool isShiftF10 = keyval == GDK_KEY_F10 && (state & GDK_SHIFT_MASK);
+
+    if ( !isMenuKey && !isShiftF10 )
+        return FALSE;
+
+    return wxgtk_window_popup_menu_callback(
+        gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(controller)), win);
+}
+#endif // __WXGTK4__
+
 //-----------------------------------------------------------------------------
 // "focus_in_event"
 //-----------------------------------------------------------------------------
@@ -5303,8 +5326,17 @@ void wxWindowGTK::ConnectWidget( GtkWidget *widget )
         g_signal_connect(range, "scroll_event", G_CALLBACK(scroll_event), this);
 #endif
 
+#ifdef __WXGTK4__
+    {
+        GtkEventController* const key = gtk_event_controller_key_new();
+        g_signal_connect (key, "key-pressed",
+                          G_CALLBACK (wxgtk_window_context_menu_key), this);
+        gtk_widget_add_controller(widget, key);
+    }
+#else
     g_signal_connect (widget, "popup_menu",
                      G_CALLBACK (wxgtk_window_popup_menu_callback), this);
+#endif
 #ifndef __WXGTK4__
     // Under GTK4 these are signals of the motion controller connected above.
     g_signal_connect (widget, "enter_notify_event",

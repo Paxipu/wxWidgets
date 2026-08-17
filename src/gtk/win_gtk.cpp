@@ -57,6 +57,14 @@ struct wxPizzaClass
 };
 
 #ifdef __WXGTK4__
+// GTK4 removed GtkWidget's "size-allocate" signal along with the GtkAllocation
+// its handlers were given; only the vfunc is left, which is not something an
+// outside observer can connect to. wxTopLevelWindowGTK does need to know when
+// its client area has been laid out, so wxPizza provides a signal of its own,
+// emitted from the vfunc below. Named distinctly on purpose: it is not GTK3's
+// signal under another name and carries no allocation.
+static guint gs_signalSizeAllocated;
+
 // GTK4's size_allocate vfunc signature dropped GtkAllocation* (position is
 // no longer this widget's own concern -- only its own width/height/baseline
 // are, since it no longer owns a window to position) in favor of separate
@@ -83,6 +91,8 @@ static void pizza_size_allocate(GtkWidget* widget, int width, int WXUNUSED(heigh
                 child->widget, child->x, child->y, child->width, child->height, w);
         }
     }
+
+    g_signal_emit(widget, gs_signalSizeAllocated, 0);
 }
 #else
 static void pizza_size_allocate(GtkWidget* widget, GtkAllocation* alloc)
@@ -427,6 +437,11 @@ static void class_init(void* g_class, void*)
 #ifdef __WXGTK4__
     widget_class->measure = pizza_measure;
     widget_class->snapshot = pizza_snapshot;
+
+    gs_signalSizeAllocated = g_signal_new("wx-size-allocated",
+        G_TYPE_FROM_CLASS(g_class), G_SIGNAL_RUN_LAST, 0,
+        nullptr, nullptr, nullptr, G_TYPE_NONE, 0);
+
     GObjectClass *gobject_class = G_OBJECT_CLASS(g_class);
     gobject_class->set_property = pizza_set_property;
     gobject_class->get_property = pizza_get_property;
@@ -463,6 +478,9 @@ static void class_init(void* g_class, void*)
 }
 
 } // extern "C"
+
+WXDLLIMPEXP_DATA_CORE(const char* const)
+wxPIZZA_SIGNAL_SIZE_ALLOCATED = "wx-size-allocated";
 
 GType wxPizza::type()
 {

@@ -248,10 +248,16 @@ extern "C" {
 static void
 wxgtk_tlw_notify_is_active(GObject*, GParamSpec*, wxTopLevelWindowGTK* win)
 {
-    if (gtk_window_is_active(GTK_WINDOW(win->m_widget)))
+    const bool active = gtk_window_is_active(GTK_WINDOW(win->m_widget)) != 0;
+
+    if (active)
         wxgtk_tlw_activated(win);
     else
         wxgtk_tlw_deactivated();
+
+    // This is also the only remaining source for wxEVT_ACTIVATE_APP: the
+    // focus-event emission hooks app.cpp used for it have no GTK4 equivalent.
+    wxGTKAppNotifyWindowActivated(active);
 }
 }
 
@@ -327,9 +333,24 @@ wxgtk_tlw_key_press_event(GtkWidget *widget, GdkEventKey *event)
 //-----------------------------------------------------------------------------
 
 extern "C" {
+#ifdef __WXGTK4__
+// wxPizza's own signal, which carries no allocation: see win_gtk.cpp. The
+// sizes below are read from the widgets rather than from the parameter anyway,
+// so only the unused one goes.
+static void
+size_allocate(GtkWidget* client, wxTopLevelWindowGTK* win)
+#else
 static void
 size_allocate(GtkWidget*, GtkAllocation* alloc, wxTopLevelWindowGTK* win)
+#endif
 {
+#ifdef __WXGTK4__
+    // The signal carries no allocation, but the widget it came from has one.
+    GtkAllocation allocStorage;
+    gtk_widget_get_allocation(client, &allocStorage);
+    GtkAllocation* const alloc = &allocStorage;
+#endif
+
     win->m_useCachedClientSize = true;
     GtkAllocation a;
     gtk_widget_get_allocation(win->m_widget, &a);
@@ -875,6 +896,16 @@ void wxTopLevelWindowGTK::GTKHandleUnrealized()
 //-----------------------------------------------------------------------------
 
 extern "C" {
+#ifdef __WXGTK4__
+// GTK4's "map" carries no event and returns nothing, unlike GTK3's
+// "map-event". The signature has to match or the user data lands in the wrong
+// argument -- and G_CALLBACK() casts it away, so nothing but a crash says so.
+static void
+gtk_frame_map_callback( GtkWidget*, wxTopLevelWindow *win )
+{
+    win->GTKHandleMapped();
+}
+#else
 static gboolean
 gtk_frame_map_callback( GtkWidget*,
                         GdkEvent * WXUNUSED(event),
@@ -883,6 +914,7 @@ gtk_frame_map_callback( GtkWidget*,
     win->GTKHandleMapped();
     return false;
 }
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 void wxTopLevelWindowGTK::GTKHandleMapped()
@@ -1343,8 +1375,13 @@ bool wxTopLevelWindowGTK::Create( wxWindow *parent,
 
     if (m_parent) m_parent->AddChild( this );
 
+#ifdef __WXGTK4__
+    g_signal_connect(m_wxwindow, wxPIZZA_SIGNAL_SIZE_ALLOCATED,
+        G_CALLBACK(size_allocate), this);
+#else
     g_signal_connect(m_wxwindow, "size_allocate",
         G_CALLBACK(size_allocate), this);
+#endif
 
     PostCreation();
 

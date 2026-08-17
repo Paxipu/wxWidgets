@@ -50,6 +50,8 @@
 //-----------------------------------------------------------------------------
 
 // One-shot signal emission hook, to install idle handler.
+// Only used by the emission hooks below, which GTK4 has nothing to install.
+#ifndef __WXGTK4__
 extern "C" {
 static gboolean
 wx_emission_hook(GSignalInvocationHint*, guint, const GValue*, gpointer data)
@@ -64,10 +66,23 @@ wx_emission_hook(GSignalInvocationHint*, guint, const GValue*, gpointer data)
     return false;
 }
 }
+#endif // !__WXGTK4__
 
 // Add signal emission hooks, to re-install idle handler when needed.
 static void wx_add_idle_hooks()
 {
+#ifdef __WXGTK4__
+    // Neither GtkWidget::event nor GtkWidget::size-allocate exists any more --
+    // GTK4 delivers events to controllers rather than through a signal on the
+    // widget, and size allocation is a vfunc with no signal at all. There is
+    // no general "something happened to a widget" signal left to hook, so the
+    // idle handler is re-armed only by WakeUpIdle(), which is what wx's own
+    // event dispatch calls.
+    //
+    // Leaving the GTK3 code here would not merely be a no-op: g_signal_lookup()
+    // returns 0 for both names and g_signal_add_emission_hook() then asserts,
+    // twice per call, which is how this was noticed.
+#else
     // "event" hook
     {
         static bool hook_installed;
@@ -96,6 +111,7 @@ static void wx_add_idle_hooks()
                 sig_id, 0, wx_emission_hook, &hook_installed, nullptr);
         }
     }
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 extern "C" {
@@ -108,6 +124,18 @@ static gboolean wxapp_idle_callback(gpointer)
 // 0: no change, 1: focus in, 2: focus out
 static wxUIntPtr gs_focusChange;
 
+#ifdef __WXGTK4__
+
+// GTK4 has no focus-in-event/focus-out-event to hook, so this is told about
+// the change instead: toplevel.cpp already watches each window's "is-active"
+// property, which is what the hooks were filtering the focus events down to.
+void wxGTKAppNotifyWindowActivated(bool active)
+{
+    gs_focusChange = active ? 1 : 2;
+}
+
+#else // !__WXGTK4__
+
 extern "C" {
 static gboolean
 wx_focus_event_hook(GSignalInvocationHint*, unsigned, const GValue* param_values, void* data)
@@ -119,6 +147,8 @@ wx_focus_event_hook(GSignalInvocationHint*, unsigned, const GValue* param_values
     return true;
 }
 }
+
+#endif // __WXGTK4__/!__WXGTK4__
 
 bool wxApp::DoIdle()
 {
@@ -586,13 +616,18 @@ bool wxApp::Initialize(int& argc_, wxChar **argv_)
     const GType widgetType = GTK_TYPE_WIDGET;
     g_type_class_ref(widgetType);
 
+#ifndef __WXGTK4__
     // focus in/out hooks used for generating wxEVT_ACTIVATE_APP
+    //
+    // Under GTK4 these signals are gone; wxGTKAppNotifyWindowActivated() above
+    // is called from toplevel.cpp instead.
     g_signal_add_emission_hook(
         g_signal_lookup("focus_in_event", widgetType),
         0, wx_focus_event_hook, GINT_TO_POINTER(1), nullptr);
     g_signal_add_emission_hook(
         g_signal_lookup("focus_out_event", widgetType),
         0, wx_focus_event_hook, GINT_TO_POINTER(2), nullptr);
+#endif // !__WXGTK4__
 
     WakeUpIdle();
 

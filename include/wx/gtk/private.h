@@ -44,6 +44,13 @@ extern const gchar *wx_pango_version_check(int major, int minor, int micro);
 // various private helper functions
 // ----------------------------------------------------------------------------
 
+#ifdef __WXGTK4__
+// Called from toplevel.cpp when a top level window is activated or
+// deactivated, so that wxApp can generate wxEVT_ACTIVATE_APP: GTK4 has no
+// focus-in/out signals for src/gtk/app.cpp to hook for this.
+WXDLLIMPEXP_CORE void wxGTKAppNotifyWindowActivated(bool active);
+#endif // __WXGTK4__
+
 namespace wxGTKPrivate
 {
 

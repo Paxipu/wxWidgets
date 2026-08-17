@@ -31,6 +31,7 @@
 
 #include "wx/gtk/private.h"
 #include "wx/gtk/private/gtk3-compat.h"
+#include "wx/gtk/private/object.h"
 #include "wx/gtk/private/threads.h"
 
 #if wxUSE_SPELLCHECK && defined(__WXGTK3__)
@@ -42,6 +43,51 @@ extern "C" {
 // ----------------------------------------------------------------------------
 // helpers
 // ----------------------------------------------------------------------------
+
+#ifdef __WXGTK4__
+
+// wx indents and tab stops are in tenths of a millimetre, so they have to be
+// scaled by the physical resolution of the monitor the control is on.
+//
+// GdkScreen, which the GTK3 code below asks, is gone; the per-monitor
+// geometry is the replacement, with the primary monitor standing in when the
+// control isn't on screen yet and has no surface to be located by.
+static float wxGTKGetPixelsPerTenthMM(GtkWidget* text)
+{
+    GdkDisplay* const display = gtk_widget_get_display(text);
+    if ( !display )
+        return 1.0f;
+
+    GdkMonitor* monitor = nullptr;
+
+    if ( GdkSurface* const surface = wx_gtk_widget_get_surface_or_window(text) )
+        monitor = gdk_display_get_monitor_at_surface(display, surface);
+
+    if ( !monitor )
+    {
+        // gdk_display_get_primary_monitor() is gone too, so use the first one.
+        GListModel* const monitors = gdk_display_get_monitors(display);
+        if ( monitors && g_list_model_get_n_items(monitors) )
+        {
+            monitor = static_cast<GdkMonitor*>(g_list_model_get_item(monitors, 0));
+            g_object_unref(monitor); // the list model keeps its own reference
+        }
+    }
+
+    if ( !monitor )
+        return 1.0f;
+
+    const int widthMM = gdk_monitor_get_width_mm(monitor);
+    if ( widthMM <= 0 )
+        return 1.0f;
+
+    GdkRectangle rect;
+    gdk_monitor_get_geometry(monitor, &rect);
+
+    return float(rect.width) / widthMM / 10;
+}
+
+#endif // __WXGTK4__
 
 extern "C" {
 static void wxGtkOnRemoveTag(GtkTextBuffer *buffer,
@@ -296,11 +342,7 @@ static void wxGtkTextApplyTagsFromAttr(GtkWidget *text,
 
         // Convert indent from 1/10th of a mm into pixels
 #ifdef __WXGTK4__
-        GdkMonitor* monitor = gdk_display_get_monitor_at_window(
-            gtk_widget_get_display(text), gtk_widget_get_window(text));
-        GdkRectangle rect;
-        gdk_monitor_get_geometry(monitor, &rect);
-        float factor = float(rect.width) / gdk_monitor_get_width_mm(monitor);
+        float factor = wxGTKGetPixelsPerTenthMM(text);
 #else
         wxGCC_WARNING_SUPPRESS(deprecated-declarations)
         float factor =
@@ -363,11 +405,7 @@ static void wxGtkTextApplyTagsFromAttr(GtkWidget *text,
         {
             // Factor to convert from 1/10th of a mm into pixels
 #ifdef __WXGTK4__
-            GdkMonitor* monitor = gdk_display_get_monitor_at_window(
-                gtk_widget_get_display(text), gtk_widget_get_window(text));
-            GdkRectangle rect;
-            gdk_monitor_get_geometry(monitor, &rect);
-            float factor = float(rect.width) / gdk_monitor_get_width_mm(monitor);
+            float factor = wxGTKGetPixelsPerTenthMM(text);
 #else
             wxGCC_WARNING_SUPPRESS(deprecated-declarations)
             float factor =
@@ -660,6 +698,14 @@ au_delete_range_callback(GtkTextBuffer * WXUNUSED(buffer),
 //  "populate_popup" from text control and "unmap" from its poup menu
 //-----------------------------------------------------------------------------
 
+// GTK4 removed the "populate-popup" signal along with GtkMenu itself: the
+// context menu of a text widget is a GtkPopoverMenu built from the GMenuModel
+// set with gtk_text_set_extra_menu(), and there is no hook which runs while it
+// is up. wx only used this to suppress the focus-out event the menu caused, so
+// nothing is lost beyond that suppression -- and a popover, unlike a menu, does
+// not take the focus away from the text widget in the first place.
+#ifndef __WXGTK4__
+
 extern "C" {
 static void
 gtk_textctrl_popup_unmap( GtkMenu *WXUNUSED(menu), wxTextCtrl* win )
@@ -677,6 +723,8 @@ gtk_textctrl_populate_popup( GtkEntry *WXUNUSED(entry), GtkMenu *menu, wxTextCtr
     g_signal_connect (menu, "unmap", G_CALLBACK (gtk_textctrl_popup_unmap), win );
 }
 }
+
+#endif // !__WXGTK4__
 
 //-----------------------------------------------------------------------------
 //  "mark_set"
@@ -875,9 +923,11 @@ bool wxTextCtrl::Create( wxWindow *parent,
     GTKConnectChangedSignal();
 
     // Catch to disable focus out handling
+#ifndef __WXGTK4__
     g_signal_connect (m_text, "populate_popup",
                       G_CALLBACK (gtk_textctrl_populate_popup),
                       this);
+#endif // !__WXGTK4__
 
     if (!value.empty())
     {
@@ -1700,6 +1750,46 @@ wxTextCtrl::HitTest(const wxPoint& pt, long *pos) const
         // Note that contrary to what GTK+ documentation implies, the
         // horizontal offset already accounts for scrolling, i.e. it will be
         // negative if text is scrolled.
+#ifdef __WXGTK4__
+        // gtk_entry_get_layout() and gtk_entry_get_layout_offsets() are gone:
+        // the layout belongs to the private GtkText widget inside the entry
+        // and is not reachable from outside any more.
+        //
+        // Translating the point into that widget's own coordinate space does
+        // account for the entry's border, padding and any icons, which is most
+        // of what the layout offset used to provide, and a layout built from
+        // the same widget and text measures identically. What is not accounted
+        // for is horizontal scrolling of a text longer than the entry, as
+        // nothing in GTK4 reports how far the text has been scrolled.
+        GtkWidget* textWidget = m_text;
+        for ( GtkWidget* c = gtk_widget_get_first_child(m_text);
+              c;
+              c = gtk_widget_get_next_sibling(c) )
+        {
+            if ( GTK_IS_TEXT(c) )
+            {
+                textWidget = c;
+                break;
+            }
+        }
+
+        graphene_point_t ptWidget = GRAPHENE_POINT_INIT(float(x), float(y));
+        graphene_point_t ptInText;
+        if ( gtk_widget_compute_point(m_text, textWidget,
+                                      &ptWidget, &ptInText) )
+        {
+            x = int(ptInText.x);
+            y = int(ptInText.y);
+        }
+
+        // And scale the coordinates for Pango.
+        x *= PANGO_SCALE;
+        y *= PANGO_SCALE;
+
+        wxGtkObject<PangoLayout> const
+            layout(gtk_widget_create_pango_layout(textWidget,
+                                                  GetValue().utf8_str()));
+#else // !__WXGTK4__
         gint ofsX = 0,
              ofsY = 0;
         gtk_entry_get_layout_offsets(GTK_ENTRY(m_text), &ofsX, &ofsY);
@@ -1712,6 +1802,7 @@ wxTextCtrl::HitTest(const wxPoint& pt, long *pos) const
         y *= PANGO_SCALE;
 
         PangoLayout* const layout = gtk_entry_get_layout(GTK_ENTRY(m_text));
+#endif // __WXGTK4__/!__WXGTK4__
 
         int idx = -1,
             ofs = 0;
@@ -2070,6 +2161,127 @@ bool wxTextCtrl::GetStyle(long position, wxTextAttr& style)
     GtkTextIter positioni;
     gtk_text_buffer_get_iter_at_offset(m_buffer, &positioni, position);
 
+#ifdef __WXGTK4__
+    // GtkTextAttributes and gtk_text_iter_get_attributes() are both gone from
+    // GTK4's public API, so the effective attributes at a position can no
+    // longer be asked for as a resolved whole. What can still be read are the
+    // tags applied there, which is where they all come from -- and, since wx
+    // only ever styles text by applying tags of its own in SetStyle(), reading
+    // them back covers everything wx itself put in.
+    //
+    // Text styled some other way, e.g. through GTKSetPangoMarkup() below,
+    // reports only what its own tags carry, and the default attributes of the
+    // view are not folded in: m_defaultStyle stands in for those, exactly as
+    // it does when there are no attributes at all.
+    style = m_defaultStyle;
+
+    GSList* const tags = gtk_text_iter_get_tags(&positioni);
+    if ( !tags )
+        return true;
+
+    // Later tags take priority over earlier ones, which is the order the list
+    // is already in.
+    for ( GSList* tagp = tags; tagp != nullptr; tagp = tagp->next )
+    {
+        GtkTextTag* const tag = static_cast<GtkTextTag*>(tagp->data);
+
+        gboolean isSet = FALSE;
+        GdkRGBA* rgba = nullptr;
+
+        g_object_get(tag, "background-set", &isSet, nullptr);
+        if ( isSet )
+        {
+            g_object_get(tag, "background-rgba", &rgba, nullptr);
+            if ( rgba )
+            {
+                style.SetBackgroundColour(wxColour(*rgba));
+                gdk_rgba_free(rgba);
+            }
+        }
+
+        g_object_get(tag, "foreground-set", &isSet, nullptr);
+        if ( isSet )
+        {
+            rgba = nullptr;
+            g_object_get(tag, "foreground-rgba", &rgba, nullptr);
+            if ( rgba )
+            {
+                style.SetTextColour(wxColour(*rgba));
+                gdk_rgba_free(rgba);
+            }
+        }
+
+        PangoFontDescription* desc = nullptr;
+        g_object_get(tag, "font-desc", &desc, nullptr);
+        if ( desc )
+        {
+            const wxGtkString descString(pango_font_description_to_string(desc));
+
+            wxFont font;
+            if ( font.SetNativeFontInfo(wxString(descString)) )
+                style.SetFont(font);
+
+            pango_font_description_free(desc);
+        }
+
+        g_object_get(tag, "underline-set", &isSet, nullptr);
+        if ( isSet )
+        {
+            PangoUnderline underline = PANGO_UNDERLINE_NONE;
+            g_object_get(tag, "underline", &underline, nullptr);
+
+            wxTextAttrUnderlineType underlineType;
+            switch ( underline )
+            {
+                case PANGO_UNDERLINE_SINGLE:
+                    underlineType = wxTEXT_ATTR_UNDERLINE_SOLID;
+                    break;
+                case PANGO_UNDERLINE_DOUBLE:
+                    underlineType = wxTEXT_ATTR_UNDERLINE_DOUBLE;
+                    break;
+                case PANGO_UNDERLINE_ERROR:
+                    underlineType = wxTEXT_ATTR_UNDERLINE_SPECIAL;
+                    break;
+                default:
+                    underlineType = wxTEXT_ATTR_UNDERLINE_NONE;
+                    break;
+            }
+
+            if ( underlineType != wxTEXT_ATTR_UNDERLINE_NONE )
+            {
+                wxColour underlineColour = wxNullColour;
+
+                gboolean underlineColourSet = FALSE;
+                g_object_get(tag, "underline-rgba-set", &underlineColourSet, nullptr);
+                if ( underlineColourSet )
+                {
+                    rgba = nullptr;
+                    g_object_get(tag, "underline-rgba", &rgba, nullptr);
+                    if ( rgba )
+                    {
+                        underlineColour = wxColour(*rgba);
+                        gdk_rgba_free(rgba);
+                    }
+                }
+
+                style.SetFontUnderlined(underlineType, underlineColour);
+            }
+        }
+
+        g_object_get(tag, "strikethrough-set", &isSet, nullptr);
+        if ( isSet )
+        {
+            gboolean strikethrough = FALSE;
+            g_object_get(tag, "strikethrough", &strikethrough, nullptr);
+            if ( strikethrough )
+                style.SetFontStrikethrough(true);
+        }
+    }
+
+    g_slist_free(tags);
+
+    // TODO: set alignment, tabs and indents
+#else // !__WXGTK4__
     // Obtain a copy of the default attributes
     GtkTextAttributes * const
         pattr = gtk_text_view_get_default_attributes(GTK_TEXT_VIEW(m_text));
@@ -2149,6 +2361,7 @@ bool wxTextCtrl::GetStyle(long position, wxTextAttr& style)
 
         // TODO: set alignment, tabs and indents
     }
+#endif // __WXGTK4__/!__WXGTK4__
 
     return true;
 }

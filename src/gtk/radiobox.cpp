@@ -562,11 +562,15 @@ void wxRadioBox::SetSelection( int n )
 
     wxCHECK_RET( n >= 0 && n < (int)m_buttonsInfo.size(), wxT("radiobox wrong index") );
 
-    GtkToggleButton *button = GTK_TOGGLE_BUTTON( m_buttonsInfo[n].button );
-
     GtkDisableEvents();
 
-    gtk_toggle_button_set_active( button, 1 );
+#ifdef __WXGTK4__
+    // GtkCheckButton is not a GtkToggleButton under GTK4: it has an equivalent
+    // API of its own, and the cast is invalid rather than merely deprecated.
+    gtk_check_button_set_active( m_buttonsInfo[n].button, TRUE );
+#else
+    gtk_toggle_button_set_active( GTK_TOGGLE_BUTTON( m_buttonsInfo[n].button ), 1 );
+#endif
 
     GtkEnableEvents();
 }
@@ -579,8 +583,11 @@ int wxRadioBox::GetSelection(void) const
 
     for ( const auto& info : m_buttonsInfo )
     {
-        GtkToggleButton *button = GTK_TOGGLE_BUTTON( info.button );
-        if (gtk_toggle_button_get_active(button)) return count;
+#ifdef __WXGTK4__
+        if (gtk_check_button_get_active(info.button)) return count;
+#else
+        if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(info.button))) return count;
+#endif
         count++;
     }
 

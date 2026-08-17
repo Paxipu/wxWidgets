@@ -7526,6 +7526,52 @@ PangoContext *wxWindowGTK::GTKGetPangoDefaultContext()
 }
 
 #ifdef __WXGTK3__
+
+// GTK4's CSS parser insists that the last declaration in a block be terminated
+// with a semicolon, which GTK3's did not -- and every stylesheet wx builds,
+// here and in half a dozen controls, is written in the shorter form. Rather
+// than fix each of them and trust nobody to write another, put the semicolon
+// in where it is missing on the way through.
+//
+// See docs/gtk/probes/gtk4-css-parser.c; this is also checked for by
+// build/tools/gtk4-invariants.c, as nothing documents it.
+static void wxGTKLoadCssData(GtkCssProvider* provider, const char* style)
+{
+#ifdef __WXGTK4__
+    wxCharBuffer fixed;
+    if ( style )
+    {
+        wxString css;
+        css.reserve(strlen(style) + 8);
+
+        for ( const char* p = style; *p; p++ )
+        {
+            if ( *p == '}' )
+            {
+                // Look back past any whitespace: an empty block needs nothing
+                // adding to it, and one already terminated must not get a
+                // second semicolon.
+                const char* q = p;
+                while ( q > style && isspace(static_cast<unsigned char>(q[-1])) )
+                    q--;
+
+                if ( q > style && q[-1] != ';' && q[-1] != '{' )
+                    css += ';';
+            }
+
+            css += *p;
+        }
+
+        fixed = css.utf8_str();
+        style = fixed.data();
+    }
+
+    gtk_css_provider_load_from_data(provider, style, -1);
+#else
+    gtk_css_provider_load_from_data(provider, style, -1, nullptr);
+#endif
+}
+
 void wxWindowGTK::GTKApplyCssStyle(GtkCssProvider* provider, const char* style)
 {
     wxCHECK_RET(m_widget, "invalid window");
@@ -7533,11 +7579,7 @@ void wxWindowGTK::GTKApplyCssStyle(GtkCssProvider* provider, const char* style)
     gtk_style_context_remove_provider(gtk_widget_get_style_context(m_widget),
                                       GTK_STYLE_PROVIDER(provider));
 
-    #ifdef __WXGTK4__
-    gtk_css_provider_load_from_data(provider, style, -1);
-#else
-    gtk_css_provider_load_from_data(provider, style, -1, nullptr);
-#endif
+    wxGTKLoadCssData(provider, style);
 
     gtk_style_context_add_provider(gtk_widget_get_style_context(m_widget),
                                    GTK_STYLE_PROVIDER(provider),
@@ -7636,6 +7678,10 @@ void wxWindowGTK::GTKApplyWidgetStyle(bool forceStyle)
         }
         if (isFont)
         {
+            // Remembered so that the whole shorthand can be dropped again if
+            // it turns out to have no size, see below.
+            const gsize cssFontStart = css->len;
+
             g_string_append(css, "font:");
             const PangoFontDescription* pfd = m_font.GetNativeFontInfo()->description;
             if (gtk_check_version(3,22,0))
@@ -7718,6 +7764,23 @@ void wxWindowGTK::GTKApplyWidgetStyle(bool forceStyle)
                     g_string_append_printf(css, "\"%s\"",
                         pango_font_description_get_family(pfd));
                 }
+#ifdef __WXGTK4__
+                // The CSS "font" shorthand requires a size, and GTK4's parser
+                // enforces it: without one the whole declaration is rejected
+                // and the font is not applied at all. Fall back to naming the
+                // family alone in that case, which is the only part of the
+                // description there is anything to say about.
+                if ( !(pfm & PANGO_FONT_MASK_SIZE) )
+                {
+                    g_string_truncate(css, cssFontStart);
+
+                    if (pfm & PANGO_FONT_MASK_FAMILY)
+                    {
+                        g_string_append_printf(css, "font-family:\"%s\";",
+                            pango_font_description_get_family(pfd));
+                    }
+                }
+#endif // __WXGTK4__
             }
         }
         g_string_append_c(css, '}');
@@ -7756,13 +7819,7 @@ void wxWindowGTK::GTKApplyWidgetStyle(bool forceStyle)
         wxGtkString s(g_string_free(css, false));
         if (m_styleProvider)
         {
-#ifdef __WXGTK4__
-            gtk_css_provider_load_from_data(
-                GTK_CSS_PROVIDER(m_styleProvider), s, -1);
-#else
-            gtk_css_provider_load_from_data(
-                GTK_CSS_PROVIDER(m_styleProvider), s, -1, nullptr);
-#endif
+            wxGTKLoadCssData(GTK_CSS_PROVIDER(m_styleProvider), s);
             DoApplyWidgetStyle(nullptr);
         }
 #else

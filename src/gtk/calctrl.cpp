@@ -26,11 +26,26 @@ static void gtk_day_selected_callback(GtkWidget *WXUNUSED(widget),
     cal->GTKGenerateEvent(wxEVT_CALENDAR_SEL_CHANGED);
 }
 
+#ifdef __WXGTK4__
+// GtkCalendar has no "day-selected-double-click" signal any more, so the
+// double click is detected directly. A gesture reports the press count, so
+// there is nothing to keep track of.
+static void gtk_calendar_double_click_callback(GtkGestureClick* WXUNUSED(gesture),
+                                               int nPress,
+                                               double WXUNUSED(x),
+                                               double WXUNUSED(y),
+                                               wxGtkCalendarCtrl *cal)
+{
+    if ( nPress == 2 )
+        cal->GTKGenerateEvent(wxEVT_CALENDAR_DOUBLECLICKED);
+}
+#else
 static void gtk_day_selected_double_click_callback(GtkWidget *WXUNUSED(widget),
                                                    wxGtkCalendarCtrl *cal)
 {
     cal->GTKGenerateEvent(wxEVT_CALENDAR_DOUBLECLICKED);
 }
+#endif // __WXGTK4__/!__WXGTK4__
 
 static void gtk_month_changed_callback(GtkWidget *WXUNUSED(widget),
                                        wxGtkCalendarCtrl *cal)
@@ -86,12 +101,35 @@ bool wxGtkCalendarCtrl::Create(wxWindow *parent,
     g_signal_connect_after(m_widget, "day-selected",
                            G_CALLBACK (gtk_day_selected_callback),
                            this);
+#ifdef __WXGTK4__
+    // GtkCalendar lost "day-selected-double-click" -- activating a day is
+    // reported by the double click itself now, so that is what is watched for.
+    {
+        GtkGesture* const click = gtk_gesture_click_new();
+        g_signal_connect(click, "pressed",
+                         G_CALLBACK (gtk_calendar_double_click_callback), this);
+        gtk_widget_add_controller(m_widget, GTK_EVENT_CONTROLLER(click));
+    }
+
+    // It also lost "month-changed", but the four signals below, which say
+    // exactly how the month changed, are all still there and between them
+    // cover every way it can.
+    g_signal_connect_after(m_widget, "prev-month",
+                           G_CALLBACK (gtk_month_changed_callback), this);
+    g_signal_connect_after(m_widget, "next-month",
+                           G_CALLBACK (gtk_month_changed_callback), this);
+    g_signal_connect_after(m_widget, "prev-year",
+                           G_CALLBACK (gtk_month_changed_callback), this);
+    g_signal_connect_after(m_widget, "next-year",
+                           G_CALLBACK (gtk_month_changed_callback), this);
+#else // !__WXGTK4__
     g_signal_connect_after(m_widget, "day-selected-double-click",
                            G_CALLBACK (gtk_day_selected_double_click_callback),
                            this);
     g_signal_connect_after(m_widget, "month-changed",
                            G_CALLBACK (gtk_month_changed_callback),
                            this);
+#endif // __WXGTK4__/!__WXGTK4__
 
     // connect callbacks that send deprecated events
     g_signal_connect_after(m_widget, "prev-month",

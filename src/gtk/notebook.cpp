@@ -52,7 +52,11 @@ public:
 
 
 extern "C" {
+#ifdef __WXGTK4__
+static void event_after(GtkNotebook*, GtkWidget*, guint, wxNotebook*);
+#else
 static void event_after(GtkNotebook*, GdkEvent*, wxNotebook*);
+#endif
 }
 
 //-----------------------------------------------------------------------------
@@ -88,6 +92,41 @@ switch_page(GtkNotebook* widget, GtkNotebookPage*, int page, wxNotebook* win)
 // "event_after" from m_widget
 //-----------------------------------------------------------------------------
 
+// GTK4 removed the "event-after" signal along with the rest of the
+// GdkEvent-level ones. What this does is undo a page switch the application
+// vetoed, once GTK has finished the switch it started -- deferring to an idle
+// source gives the same "after the current event has been dealt with"
+// guarantee, as in slider.cpp.
+#ifdef __WXGTK4__
+extern "C" {
+static gboolean event_after_idle(void* data);
+
+// Connected to "switch-page", so it takes that signal's parameters: getting
+// this wrong is invisible to the compiler, G_CALLBACK() having cast the type
+// away, and lands the user data in the wrong argument.
+static void event_after(GtkNotebook* widget, GtkWidget*, guint, wxNotebook* win)
+{
+    g_signal_handlers_block_by_func(widget, (void*)event_after, win);
+
+    g_idle_add(event_after_idle, win);
+}
+
+static gboolean event_after_idle(void* data)
+{
+    wxNotebook* const win = static_cast<wxNotebook*>(data);
+    GtkNotebook* const widget = GTK_NOTEBOOK(win->m_widget);
+
+    g_signal_handlers_block_by_func(widget, (void*)switch_page, win);
+
+    // restore previous selection
+    gtk_notebook_set_current_page(widget, win->m_oldSelection);
+
+    g_signal_handlers_unblock_by_func(widget, (void*)switch_page, win);
+
+    return G_SOURCE_REMOVE;
+}
+}
+#else // !__WXGTK4__
 extern "C" {
 static void event_after(GtkNotebook* widget, GdkEvent*, wxNotebook* win)
 {
@@ -100,6 +139,7 @@ static void event_after(GtkNotebook* widget, GdkEvent*, wxNotebook* win)
     g_signal_handlers_unblock_by_func(widget, (void*)switch_page, win);
 }
 }
+#endif // __WXGTK4__/!__WXGTK4__
 
 //-----------------------------------------------------------------------------
 // InsertChild callback for wxNotebook
@@ -188,7 +228,15 @@ bool wxNotebook::Create(wxWindow *parent, wxWindowID id,
                       G_CALLBACK(switch_page_after), this);
     g_signal_handlers_block_by_func(m_widget, (void*)switch_page_after, this);
 
+#ifdef __WXGTK4__
+    // "event-after" is gone. The veto path only needs something which runs
+    // once GTK has settled, and the handler arms an idle source for that; a
+    // second, blocked handler on the same page-switch signal is what gets it
+    // there, keeping the existing block/unblock protocol unchanged.
+    g_signal_connect_after(m_widget, "switch-page", G_CALLBACK(event_after), this);
+#else
     g_signal_connect(m_widget, "event_after", G_CALLBACK(event_after), this);
+#endif
     g_signal_handlers_block_by_func(m_widget, (void*)event_after, this);
 
     m_parent->DoAddChild( this );

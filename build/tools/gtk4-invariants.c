@@ -881,6 +881,75 @@ static void test_combo_box_internals(void)
     g_object_unref(combo);
 }
 
+/* --------------------------------------------------------------------------
+ * Two things about GTK4 which are not written down anywhere and which cost
+ * this port real, silent misbehaviour before running the test suite exposed
+ * them. See docs/gtk/probes/gtk4-css-parser.c.
+ * -------------------------------------------------------------------------- */
+
+static int g_cssErrors;
+
+static void on_css_error(GtkCssProvider*, GtkCssSection*, const GError*, gpointer)
+{
+    g_cssErrors++;
+}
+
+static int css_parses(const char* css)
+{
+    GtkCssProvider* const p = gtk_css_provider_new();
+
+    g_cssErrors = 0;
+    g_signal_connect(p, "parsing-error", G_CALLBACK(on_css_error), NULL);
+    gtk_css_provider_load_from_data(p, css, -1);
+    g_object_unref(p);
+
+    return g_cssErrors == 0;
+}
+
+static void test_css_parser_strictness(void)
+{
+    printf("CSS parser strictness:\n");
+
+    check(!css_parses("*{color:rgb(0,0,0)}"),
+          "a block's last declaration must end with a semicolon",
+          "if GTK4 has relaxed this, wxGTKLoadCssData() in window.cpp is "
+          "inserting semicolons it no longer needs to -- harmless, but the "
+          "comment there is then wrong");
+
+    /* Positive control: the same declaration, terminated. */
+    check(css_parses("*{color:rgb(0,0,0);}"),
+          "the same declaration parses once terminated",
+          "something other than the semicolon is being rejected here");
+
+    check(!css_parses("*{font:Sans 10;}"),
+          "the font shorthand rejects a size with no unit",
+          "wxWindowGTK::GTKApplyWidgetStyle() works around this by dropping "
+          "the shorthand when the description has no size");
+
+    check(css_parses("*{font:10pt Sans;}"),
+          "the same font parses with a unit on the size",
+          "the font shorthand is being rejected for some other reason");
+}
+
+static void test_version_check_semantics(void)
+{
+    printf("gtk_check_version() against GTK3 requirements:\n");
+
+    /* This is the one that hurt: about sixty guards in src/gtk mean "do we
+     * have at least this GTK3 feature level", and gtk_check_version() answers
+     * "no" to every one of them under GTK4 because it compares the major
+     * version for equality rather than for order. gtk3-compat.h shims it. */
+    check(gtk_check_version(3, 22, 0) != NULL,
+          "gtk_check_version() reports GTK4 as NOT satisfying a GTK 3.x requirement",
+          "if GTK4 has changed this to an ordering comparison, the shim in "
+          "gtk3-compat.h is redundant and should be removed rather than left "
+          "to disagree with the library");
+
+    check(gtk_check_version(4, 0, 0) == NULL,
+          "and does report a GTK 4.0 requirement as satisfied",
+          "the shim must keep passing GTK4 requirements through unchanged");
+}
+
 static void test_indicator_nodes(void)
 {
     GtkWidget* checkbtn;
@@ -963,6 +1032,10 @@ int main(void)
     test_indicator_nodes();
     printf("\n");
     test_combo_box_internals();
+    printf("\n");
+    test_css_parser_strictness();
+    printf("\n");
+    test_version_check_semantics();
 #ifdef HAVE_XTEST
     printf("\n");
     test_gesture_claim_semantics();

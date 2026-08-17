@@ -278,9 +278,16 @@ static void gtk_assert_dialog_copy_callback(GtkWidget*, GtkAssertDialog* dlg)
 extern "C" {
 static void gtk_assert_dialog_continue_callback(GtkWidget*, GtkAssertDialog* dlg)
 {
-    gint response =
-        gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON(dlg->shownexttime)) ?
-            GTK_ASSERT_DIALOG_CONTINUE : GTK_ASSERT_DIALOG_CONTINUE_SUPPRESSING;
+    // GtkCheckButton is not a GtkToggleButton under GTK4, so the cast is
+    // invalid there rather than merely deprecated.
+#ifdef __WXGTK4__
+    const gboolean active = gtk_check_button_get_active(GTK_CHECK_BUTTON(dlg->shownexttime));
+#else
+    const gboolean active = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(dlg->shownexttime));
+#endif
+
+    gint response = active ? GTK_ASSERT_DIALOG_CONTINUE
+                           : GTK_ASSERT_DIALOG_CONTINUE_SUPPRESSING;
 
     gtk_dialog_response (GTK_DIALOG(dlg), response);
 }

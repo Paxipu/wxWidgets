@@ -65,6 +65,25 @@ wxgtk_button_released_callback(GtkWidget *WXUNUSED(widget), wxAnyButton *button)
     button->GTKReleased();
 }
 
+#ifdef __WXGTK4__
+// GtkButton has no "pressed"/"released" signals under GTK4; what they told wx
+// about is the "active" property, which is still there.
+static void
+wxgtk_button_active_callback(GObject* obj, GParamSpec*, wxAnyButton* button)
+{
+    if ( button->GTKShouldIgnoreEvent() )
+        return;
+
+    gboolean active = FALSE;
+    g_object_get(obj, "active", &active, nullptr);
+
+    if ( active )
+        button->GTKPressed();
+    else
+        button->GTKReleased();
+}
+#endif // __WXGTK4__
+
 } // extern "C"
 
 //-----------------------------------------------------------------------------
@@ -386,6 +405,19 @@ void wxAnyButton::DoSetBitmap(const wxBitmapBundle& bitmap, State which)
                 {
                     // we need to install the callbacks to be notified about
                     // the button pressed state change
+#ifdef __WXGTK4__
+                    // GtkButton's "pressed" and "released" signals are gone --
+                    // a button is driven by a gesture now, and the state they
+                    // reported is the "active" property, which is still there
+                    // and is what a bitmap for State_Pressed follows.
+                    g_signal_connect
+                    (
+                        m_widget,
+                        "notify::active",
+                        G_CALLBACK(wxgtk_button_active_callback),
+                        this
+                    );
+#else
                     g_signal_connect
                     (
                         m_widget,
@@ -401,6 +433,7 @@ void wxAnyButton::DoSetBitmap(const wxBitmapBundle& bitmap, State which)
                         G_CALLBACK(wxgtk_button_released_callback),
                         this
                     );
+#endif // __WXGTK4__/!__WXGTK4__
                 }
             }
             else // no valid bitmap

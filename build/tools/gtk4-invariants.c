@@ -675,6 +675,140 @@ static void test_toolbar_substitutes(void)
     gtk_window_destroy(GTK_WINDOW(win));
 }
 
+/* ------------------------------------------------------------------------
+ * Clipboard.
+ *
+ * GTK4 replaced the X11-style selection protocol with GdkClipboard, whose
+ * reads are asynchronous, while wxClipboard::GetData() is synchronous. The
+ * port bridges that with a nested main loop, which is only sound because the
+ * whole read -- including draining the GInputStream -- stays asynchronous and
+ * is pumped by that one loop.
+ *
+ * This matters more than it looks. When the clipboard is locally owned, the
+ * writer feeding that stream is our own GdkContentProvider, running on the
+ * same main context. Draining the stream with a BLOCKING splice therefore
+ * deadlocks, and does so unrecoverably: the loop is blocked inside the read
+ * callback, so it cannot even dispatch a timeout to rescue itself.
+ *
+ * Only the working pattern is asserted here -- deliberately, since asserting
+ * the broken one would mean hanging CI. If GTK ever changes so that the async
+ * pattern stops completing, the watchdog below turns it into a failure rather
+ * than a hung build.
+ * ------------------------------------------------------------------------ */
+
+typedef struct {
+    GMainLoop* loop;
+    GOutputStream* out;
+    GBytes* bytes;
+    int timedout;
+} ClipboardRead;
+
+static gboolean clipboard_watchdog(gpointer data)
+{
+    ClipboardRead* r = data;
+    r->timedout = 1;
+    g_main_loop_quit(r->loop);
+    return G_SOURCE_REMOVE;
+}
+
+static void clipboard_spliced(GObject* src, GAsyncResult* res, gpointer data)
+{
+    ClipboardRead* r = data;
+    g_output_stream_splice_finish(G_OUTPUT_STREAM(src), res, NULL);
+    r->bytes = g_memory_output_stream_steal_as_bytes(G_MEMORY_OUTPUT_STREAM(src));
+    g_main_loop_quit(r->loop);
+}
+
+static void clipboard_read_done(GObject* src, GAsyncResult* res, gpointer data)
+{
+    ClipboardRead* r = data;
+    GInputStream* stream = gdk_clipboard_read_finish(GDK_CLIPBOARD(src), res,
+                                                     NULL, NULL);
+    if (!stream)
+    {
+        g_main_loop_quit(r->loop);
+        return;
+    }
+
+    /* Async, not g_output_stream_splice(): see the comment above. */
+    r->out = g_memory_output_stream_new_resizable();
+    g_output_stream_splice_async(r->out, stream,
+                                 G_OUTPUT_STREAM_SPLICE_CLOSE_SOURCE |
+                                 G_OUTPUT_STREAM_SPLICE_CLOSE_TARGET,
+                                 G_PRIORITY_DEFAULT, NULL,
+                                 clipboard_spliced, r);
+    g_object_unref(stream);
+}
+
+static void test_clipboard_sync_bridge(void)
+{
+    GdkClipboard* cb;
+    GdkContentProvider* provider;
+    GBytes* bytes;
+    ClipboardRead r;
+    const char* mimes[2];
+    guint watchdog;
+    gsize size = 0;
+    const char* data;
+    int i;
+
+    printf("Clipboard synchronous bridge:\n");
+
+    cb = gdk_display_get_clipboard(gdk_display_get_default());
+
+    bytes = g_bytes_new_static("hello", 5);
+    provider = gdk_content_provider_new_for_bytes("application/x-wx-invariant",
+                                                  bytes);
+    g_bytes_unref(bytes);
+
+    check(gdk_clipboard_set_content(cb, provider),
+          "a content provider can be put on the clipboard",
+          "wxClipboard cannot offer data at all");
+    g_object_unref(provider);
+
+    for (i = 0; i < 100; i++)
+        g_main_context_iteration(NULL, FALSE);
+
+    check(gdk_content_formats_contain_mime_type(gdk_clipboard_get_formats(cb),
+                                                "application/x-wx-invariant"),
+          "the clipboard advertises the offered format",
+          "wxClipboard::IsSupported() cannot see its own data");
+
+    memset(&r, 0, sizeof(r));
+    r.loop = g_main_loop_new(NULL, FALSE);
+    watchdog = g_timeout_add(5000, clipboard_watchdog, &r);
+
+    mimes[0] = "application/x-wx-invariant";
+    mimes[1] = NULL;
+    gdk_clipboard_read_async(cb, mimes, G_PRIORITY_DEFAULT, NULL,
+                             clipboard_read_done, &r);
+    g_main_loop_run(r.loop);
+
+    if (!r.timedout)
+        g_source_remove(watchdog);
+
+    check(!r.timedout,
+          "an async clipboard read completes inside a nested main loop",
+          "wxClipboard::GetData() can no longer be made synchronous this way");
+
+    data = r.bytes ? g_bytes_get_data(r.bytes, &size) : NULL;
+    check(data && size == 5 && memcmp(data, "hello", 5) == 0,
+          "the data read back is what was offered",
+          "clipboard round-trip is lossy");
+
+    if (r.bytes)
+        g_bytes_unref(r.bytes);
+    if (r.out)
+        g_object_unref(r.out);
+    g_main_loop_unref(r.loop);
+
+    /* wxDataFormat compares formats by pointer, which only works because an
+     * interned string is canonical -- the property GdkAtom used to provide. */
+    check(g_intern_string("text/html") == g_intern_string("text/html"),
+          "g_intern_string() returns a canonical pointer per string",
+          "wxDataFormat can no longer compare formats by pointer");
+}
+
 int main(void)
 {
     if (!gtk_init_check())
@@ -704,6 +838,8 @@ int main(void)
     test_menu_model_mechanics();
     printf("\n");
     test_toolbar_substitutes();
+    printf("\n");
+    test_clipboard_sync_bridge();
 #ifdef HAVE_XTEST
     printf("\n");
     test_gesture_claim_semantics();

@@ -28,6 +28,7 @@
 #include "wx/generic/filepickerg.h"
 
 #include "wx/gtk/private.h"
+#include "wx/gtk/private/gtk3-compat.h"
 
 // ============================================================================
 // implementation
@@ -64,6 +65,11 @@ bool wxFileButton::Create( wxWindow *parent, wxWindowID id,
 {
     // we can't use the native button for wxFLP_SAVE pickers as it can only
     // open existing files and there is no way to create a new file using it
+    //
+    // Under GTK4 there is no native button to use at all: GtkFileChooserButton
+    // was removed, and GTK's own answer is a plain button which opens a file
+    // dialog -- which is exactly what wxGenericFileButton below already is.
+#ifndef __WXGTK4__
     if (!(style & wxFLP_SAVE) && !(style & wxFLP_USE_TEXTCTRL))
     {
         // VERY IMPORTANT: this code is identical to relative code in wxDirButton;
@@ -128,6 +134,7 @@ bool wxFileButton::Create( wxWindow *parent, wxWindowID id,
         PostCreation(size);
     }
     else // Use generic implementation.
+#endif // !__WXGTK4__
     {
         if ( !wxControl::Create(parent, id, pos, size, wxBORDER_NONE, validator, name) )
             return false;
@@ -300,6 +307,9 @@ bool wxDirButton::Create( wxWindow *parent, wxWindowID id,
                         long style, const wxValidator& validator,
                         const wxString &name )
 {
+    // See the comment in wxFileButton::Create() about GTK4 not having a
+    // native button to use here any more.
+#ifndef __WXGTK4__
     if (!(style & wxDIRP_USE_TEXTCTRL))
     {
         // VERY IMPORTANT: this code is identic to relative code in wxFileButton;
@@ -363,6 +373,7 @@ bool wxDirButton::Create( wxWindow *parent, wxWindowID id,
         SetInitialSize(size);
     }
     else // Use generic implementation.
+#endif // !__WXGTK4__
     {
         if ( !wxControl::Create(parent, id, pos, size, wxBORDER_NONE, validator, name) )
             return false;

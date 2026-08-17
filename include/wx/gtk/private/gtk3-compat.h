@@ -314,6 +314,142 @@ static inline GdkSurface* wx_gtk_widget_get_surface(GtkWidget* widget)
 #define gtk_widget_set_margin_left(w, m)  gtk_widget_set_margin_start(w, m)
 #define gtk_widget_set_margin_right(w, m) gtk_widget_set_margin_end(w, m)
 
+// ----------------------------------------------------------------------------
+// GtkFileChooser: paths became GFiles
+//
+// GTK4 dropped every char*-taking entry point of GtkFileChooser in favour of
+// the GFile-taking one next to it. The conversion is mechanical and the
+// ownership rules are the same as they were, so it belongs here rather than
+// being spelled out at each of the two dozen call sites in filedlg.cpp,
+// filectrl.cpp and filepicker.cpp.
+// ----------------------------------------------------------------------------
+
+// Returned string must be freed with g_free(), as the GTK3 function's was.
+static inline char* wx_gtk_file_chooser_get_filename(GtkFileChooser* chooser)
+{
+    GFile* const file = gtk_file_chooser_get_file(chooser);
+    if ( !file )
+        return nullptr;
+
+    char* const path = g_file_get_path(file);
+    g_object_unref(file);
+
+    return path;
+}
+#define gtk_file_chooser_get_filename(c) \
+            wx_gtk_file_chooser_get_filename(c)
+
+static inline gboolean
+wx_gtk_file_chooser_set_filename(GtkFileChooser* chooser, const char* name)
+{
+    GFile* const file = g_file_new_for_path(name);
+    const gboolean ok = gtk_file_chooser_set_file(chooser, file, nullptr);
+    g_object_unref(file);
+
+    return ok;
+}
+#define gtk_file_chooser_set_filename(c, n) \
+            wx_gtk_file_chooser_set_filename(c, n)
+
+static inline char* wx_gtk_file_chooser_get_current_folder(GtkFileChooser* chooser)
+{
+    GFile* const file = gtk_file_chooser_get_current_folder(chooser);
+    if ( !file )
+        return nullptr;
+
+    char* const path = g_file_get_path(file);
+    g_object_unref(file);
+
+    return path;
+}
+#define gtk_file_chooser_get_current_folder(c) \
+            wx_gtk_file_chooser_get_current_folder(c)
+
+static inline gboolean
+wx_gtk_file_chooser_set_current_folder(GtkFileChooser* chooser, const char* name)
+{
+    GFile* const file = g_file_new_for_path(name);
+    const gboolean ok = gtk_file_chooser_set_current_folder(chooser, file, nullptr);
+    g_object_unref(file);
+
+    return ok;
+}
+#define gtk_file_chooser_set_current_folder(c, n) \
+            wx_gtk_file_chooser_set_current_folder(c, n)
+
+// As in GTK3, the returned list owns the strings: free with
+// g_slist_free_full(list, g_free).
+static inline GSList* wx_gtk_file_chooser_get_filenames(GtkFileChooser* chooser)
+{
+    GSList* list = nullptr;
+
+    GListModel* const files = gtk_file_chooser_get_files(chooser);
+    if ( files )
+    {
+        const guint n = g_list_model_get_n_items(files);
+        for ( guint i = n; i > 0; i-- )
+        {
+            GFile* const file = G_FILE(g_list_model_get_item(files, i - 1));
+            list = g_slist_prepend(list, g_file_get_path(file));
+            g_object_unref(file);
+        }
+
+        g_object_unref(files);
+    }
+
+    return list;
+}
+#define gtk_file_chooser_get_filenames(c) \
+            wx_gtk_file_chooser_get_filenames(c)
+
+// As in GTK3, the filters themselves stay owned by the chooser and only the
+// list has to be freed, with g_slist_free().
+static inline GSList* wx_gtk_file_chooser_list_filters(GtkFileChooser* chooser)
+{
+    GSList* list = nullptr;
+
+    GListModel* const filters = gtk_file_chooser_get_filters(chooser);
+    if ( filters )
+    {
+        const guint n = g_list_model_get_n_items(filters);
+        for ( guint i = n; i > 0; i-- )
+        {
+            gpointer const filter = g_list_model_get_item(filters, i - 1);
+            list = g_slist_prepend(list, filter);
+            g_object_unref(filter);
+        }
+
+        g_object_unref(filters);
+    }
+
+    return list;
+}
+#define gtk_file_chooser_list_filters(c) \
+            wx_gtk_file_chooser_list_filters(c)
+
+static inline gboolean
+wx_gtk_file_chooser_add_shortcut_folder(GtkFileChooser* chooser,
+                                        const char* name,
+                                        GError** error)
+{
+    GFile* const file = g_file_new_for_path(name);
+    const gboolean ok =
+        gtk_file_chooser_add_shortcut_folder(chooser, file, error);
+    g_object_unref(file);
+
+    return ok;
+}
+#define gtk_file_chooser_add_shortcut_folder(c, n, e) \
+            wx_gtk_file_chooser_add_shortcut_folder(c, n, e)
+
+// GTK4 always confirms before overwriting and offers no way to turn it off,
+// which is what every wx caller wanted anyhow.
+#define gtk_file_chooser_set_do_overwrite_confirmation(c, b) wxUnusedVar(b)
+
+// Showing hidden files is up to the user now: there is no API for it, and the
+// file chooser remembers the user's own choice across dialogs.
+#define gtk_file_chooser_set_show_hidden(c, b) wxUnusedVar(b)
+
 // A GtkScrolledWindow always creates its own adjustments now, so the two
 // arguments which were almost always nullptr anyhow are gone.  Note that this
 // must stay variadic: code written for GTK4 calls it without any arguments and

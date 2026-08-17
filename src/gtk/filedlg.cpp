@@ -122,6 +122,13 @@ static void gtk_filedialog_response_callback(GtkWidget *w,
         gtk_filedialog_cancel_callback(w, dialog);
 }
 
+// GTK4 removed the whole preview mechanism from GtkFileChooser: there is no
+// preview widget, no "update-preview" signal and no way to ask which file the
+// preview should be of. The "selection-changed" signal went with it, which is
+// what told wx about the selection in the first place, so both of these are
+// GTK3-only. See wxFD_PREVIEW below.
+#ifndef __WXGTK4__
+
 static void gtk_filedialog_selchanged_callback(GtkFileChooser *chooser,
                                                wxFileDialog *dialog)
 {
@@ -151,6 +158,8 @@ static void gtk_filedialog_update_preview_callback(GtkFileChooser *chooser,
     gtk_file_chooser_set_preview_widget_active(chooser, have_preview);
 }
 
+#endif // !__WXGTK4__
+
 #if GTK_CHECK_VERSION(3,20,0)
 static void wx_filedialog_show(GtkWidget*, wxFileDialog* win)
 {
@@ -168,8 +177,17 @@ void wxFileDialog::AddChildGTK(wxWindowGTK* child)
     gtk_widget_set_size_request(
         child->m_widget, child->GetMinWidth(), child->m_height);
 
+#ifdef __WXGTK4__
+    // gtk_file_chooser_set_extra_widget() is gone: GTK4 only lets a chooser be
+    // extended with the fixed set of controls gtk_file_chooser_add_choice()
+    // offers, not with an arbitrary widget, so a wxFileDialog extra control
+    // cannot be shown at all. It is still created and owned as before, just
+    // never attached to anything.
+    wxUnusedVar(child);
+#else
     gtk_file_chooser_set_extra_widget(
         GTK_FILE_CHOOSER(m_widget), child->m_widget);
+#endif
 }
 
 //-----------------------------------------------------------------------------
@@ -293,8 +311,10 @@ bool wxFileDialog::Create(wxWindow *parent, const wxString& message,
     g_signal_connect (m_widget, "response",
         G_CALLBACK (gtk_filedialog_response_callback), this);
 
+#ifndef __WXGTK4__
     g_signal_connect (m_widget, "selection-changed",
         G_CALLBACK (gtk_filedialog_selchanged_callback), this);
+#endif // !__WXGTK4__
 
      // deal with extensions/filters
     SetWildcard(wildCard);
@@ -371,6 +391,7 @@ bool wxFileDialog::Create(wxWindow *parent, const wxString& message,
         }
     }
 
+#ifndef __WXGTK4__
     if ( style & wxFD_PREVIEW )
     {
         GtkWidget *previewImage = gtk_image_new();
@@ -380,6 +401,7 @@ bool wxFileDialog::Create(wxWindow *parent, const wxString& message,
                          G_CALLBACK(gtk_filedialog_update_preview_callback),
                          previewImage);
     }
+#endif // !__WXGTK4__
 
     if (style & wxFD_SHOW_HIDDEN)
     {
@@ -393,6 +415,7 @@ bool wxFileDialog::Create(wxWindow *parent, const wxString& message,
 
 wxFileDialog::~wxFileDialog()
 {
+#ifndef __WXGTK4__
     if (m_extraControl)
     {
         // get chooser to drop its reference right now, allowing wxWindow dtor
@@ -400,6 +423,7 @@ wxFileDialog::~wxFileDialog()
         gtk_file_chooser_set_extra_widget(
             GTK_FILE_CHOOSER(m_widget), nullptr);
     }
+#endif // !__WXGTK4__
     delete m_fcNative;
     if (m_fileChooserNative)
         g_object_unref(m_fileChooserNative);

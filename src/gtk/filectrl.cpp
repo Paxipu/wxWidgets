@@ -14,6 +14,7 @@
 #include "wx/filectrl.h"
 
 #include "wx/gtk/private.h"
+#include "wx/gtk/private/gtk3-compat.h"
 #include "wx/filename.h"
 #include "wx/scopeguard.h"
 #include "wx/tokenzr.h"
@@ -96,7 +97,12 @@ bool wxGtkFileChooser::SetPath( const wxString& path )
             return gtk_file_chooser_set_filename( m_widget, path.utf8_str() ) != 0;
 
         case GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER:
+#ifndef __WXGTK4__
+        // GTK4 dropped this action: creating a folder is something the user
+        // does from inside a SELECT_FOLDER chooser rather than a mode of its
+        // own, so there is no separate case left to handle here.
         case GTK_FILE_CHOOSER_ACTION_CREATE_FOLDER:
+#endif
             break;
     }
 

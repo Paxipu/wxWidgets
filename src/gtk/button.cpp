@@ -19,6 +19,7 @@
 
 #include "wx/gtk/private.h"
 #include "wx/gtk/private/list.h"
+#include "wx/gtk/private/gtk3-compat.h"
 
 // ----------------------------------------------------------------------------
 // GTK callbacks

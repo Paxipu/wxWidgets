@@ -33,6 +33,7 @@
 #include "wx/gtk/private/object.h"
 #include "wx/gtk/private/treeentry_gtk.h"
 #include "wx/gtk/private/treeview.h"
+#include "wx/gtk/private/gtk3-compat.h"
 
 //-----------------------------------------------------------------------------
 // data

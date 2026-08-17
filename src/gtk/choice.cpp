@@ -21,6 +21,7 @@
 #include "wx/gtk/private/eventsdisabler.h"
 #include "wx/gtk/private/list.h"
 #include "wx/gtk/private/value.h"
+#include "wx/gtk/private/gtk3-compat.h"
 
 // ----------------------------------------------------------------------------
 // GTK callbacks

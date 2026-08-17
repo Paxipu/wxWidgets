@@ -15,6 +15,7 @@
 #include "wx/window.h"
 #include "wx/gtk/private/wrapgtk.h"
 #include "wx/gtk/private/backend.h"
+#include "wx/gtk/private/gtk3-compat.h"
 
 class wxOverlayImpl: public wxOverlay::Impl
 {

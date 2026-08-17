@@ -310,6 +310,15 @@ static inline GdkSurface* wx_gtk_widget_get_surface(GtkWidget* widget)
 #define gtk_window_iconify(window)   gtk_window_minimize(window)
 #define gtk_window_deiconify(window) gtk_window_unminimize(window)
 
+// Plain renames, same semantics.
+#define gtk_widget_set_margin_left(w, m)  gtk_widget_set_margin_start(w, m)
+#define gtk_widget_set_margin_right(w, m) gtk_widget_set_margin_end(w, m)
+
+// GTK4 dropped the widget-level child notify freeze in favour of the GObject
+// one it was always implemented in terms of.
+#define gtk_widget_freeze_child_notify(w) g_object_freeze_notify(G_OBJECT(w))
+#define gtk_widget_thaw_child_notify(w)   g_object_thaw_notify(G_OBJECT(w))
+
 // GTK4 moved the text of an entry to the GtkEditable interface it implements,
 // so these are the same operations under a different name.
 #define gtk_entry_get_text(entry) \

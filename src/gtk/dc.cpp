@@ -22,6 +22,7 @@
 
 #include "wx/gtk/private/wrapgtk.h"
 #include "wx/gtk/private/cairo.h"
+#include "wx/gtk/private/gtk3-compat.h"
 
 wxGTKCairoDCImpl::wxGTKCairoDCImpl(wxDC* owner)
     : wxGCDCImpl(owner)

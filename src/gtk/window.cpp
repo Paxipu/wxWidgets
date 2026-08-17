@@ -252,6 +252,9 @@ namespace wxGTKImpl
 class SetLastMouseEvent
 {
 public:
+#ifndef __WXGTK4__
+    // GdkEventButton and GdkEventMotion don't exist under GTK4, where the
+    // controller callbacks already have a plain GdkEvent to pass.
     explicit SetLastMouseEvent(GdkEventButton* event)
     {
         g_lastMouseEvent = reinterpret_cast<GdkEvent*>(event);
@@ -261,6 +264,7 @@ public:
     {
         g_lastMouseEvent = reinterpret_cast<GdkEvent*>(event);
     }
+#endif // !__WXGTK4__
 
     ~SetLastMouseEvent()
     {
@@ -753,6 +757,8 @@ draw_border(GtkWidget* widget, GdkEventExpose* gdk_event, wxWindow* win)
 // "parent_set" from m_wxwindow
 //-----------------------------------------------------------------------------
 
+#ifndef __WXGTK4__
+
 extern "C" {
 static void
 parent_set(GtkWidget* widget, GtkWidget* old_parent, wxWindow* win)
@@ -773,6 +779,8 @@ parent_set(GtkWidget* widget, GtkWidget* old_parent, wxWindow* win)
     }
 }
 }
+
+#endif // !__WXGTK4__
 #endif // !__WXGTK4__
 #endif // !__WXUNIVERSAL__
 
@@ -1427,6 +1435,8 @@ bool SendCharHookEvent(const wxKeyEvent& event, wxWindow *win)
 // in wxWidgets, so this code avoids handling them in any parent wxWindow,
 // while still allowing the event to propagate so things like native keyboard
 // navigation will work.
+#ifndef __WXGTK4__
+
 static bool gs_isNewEvent;
 
 template <typename EventType>
@@ -1451,6 +1461,8 @@ bool EventAlreadyProcessed(const EventType* event)
 
     return false;
 }
+
+#endif // !__WXGTK4__
 
 } // anonymous namespace
 
@@ -2607,6 +2619,19 @@ static gboolean wxgtk_window_popup_menu_callback(GtkWidget*, wxWindowGTK* win)
 // "focus_in_event"
 //-----------------------------------------------------------------------------
 
+#ifdef __WXGTK4__
+static void
+wx_window_focus_in( GtkEventControllerFocus*, wxWindowGTK *win )
+{
+    win->GTKHandleFocusIn();
+}
+
+static void
+wx_window_focus_out( GtkEventControllerFocus*, wxWindowGTK *win )
+{
+    win->GTKHandleFocusOut();
+}
+#else
 static gboolean
 gtk_window_focus_in_callback( GtkWidget * WXUNUSED(widget),
                               GdkEventFocus *WXUNUSED(event),
@@ -2614,11 +2639,13 @@ gtk_window_focus_in_callback( GtkWidget * WXUNUSED(widget),
 {
     return win->GTKHandleFocusIn();
 }
+#endif
 
 //-----------------------------------------------------------------------------
 // "focus_out_event"
 //-----------------------------------------------------------------------------
 
+#ifndef __WXGTK4__
 static gboolean
 gtk_window_focus_out_callback( GtkWidget * WXUNUSED(widget),
                                GdkEventFocus * WXUNUSED(gdk_event),
@@ -2626,6 +2653,7 @@ gtk_window_focus_out_callback( GtkWidget * WXUNUSED(widget),
 {
     return win->GTKHandleFocusOut();
 }
+#endif
 
 //-----------------------------------------------------------------------------
 // "focus"
@@ -3220,6 +3248,46 @@ gtk_scrollbar_value_changed(GtkRange* range, wxWindow* win)
 // "button_press_event" from scrollbar
 //-----------------------------------------------------------------------------
 
+#ifdef __WXGTK4__
+
+// GtkRange has no button-press-event under GTK4, and the "event_after" dance
+// the GTK3 code needs -- because GtkRange consumes the release, so the thumb
+// release event has to be deferred until after its own handler has run -- is
+// unnecessary here: a gesture in the capture phase sees the press and the
+// release before GtkRange does, so both can be handled directly.
+extern "C" {
+static void
+wx_scrollbar_pressed(GtkGestureClick*, int, double, double, wxWindow* win)
+{
+    g_blockEventsOnScroll = true;
+    win->m_mouseButtonDown = true;
+}
+
+static void
+wx_scrollbar_released(GtkGestureClick* gesture, int, double, double, wxWindow* win)
+{
+    g_blockEventsOnScroll = false;
+    win->m_mouseButtonDown = false;
+
+    if (win->m_isScrolling)
+    {
+        win->m_isScrolling = false;
+
+        GtkRange* const range = GTK_RANGE(gtk_event_controller_get_widget(
+                                    GTK_EVENT_CONTROLLER(gesture)));
+
+        const int orient = wxWindow::OrientFromScrollDir(
+                                        win->ScrollDirFromRange(range));
+        wxScrollWinEvent evt(wxEVT_SCROLLWIN_THUMBRELEASE,
+                                win->GetScrollPos(orient), orient);
+        evt.SetEventObject(win);
+        win->GTKProcessEvent(evt);
+    }
+}
+}
+
+#else // !__WXGTK4__
+
 static gboolean
 gtk_scrollbar_button_press_event(GtkRange*, GdkEventButton*, wxWindow* win)
 {
@@ -3271,6 +3339,8 @@ gtk_scrollbar_button_release_event(GtkRange* range, GdkEventButton*, wxWindow* w
     return false;
 }
 
+#endif // __WXGTK4__/!__WXGTK4__
+
 //-----------------------------------------------------------------------------
 // "realize" from m_widget
 //-----------------------------------------------------------------------------
@@ -3286,11 +3356,19 @@ gtk_window_realized_callback(GtkWidget* WXUNUSED(widget), wxWindowGTK* win)
 //-----------------------------------------------------------------------------
 
 static void
+#ifdef __WXGTK4__
+// The clip workaround that used it is GTK3 only, see below.
+size_allocate(GtkWidget* WXUNUSED(widget), GtkAllocation* alloc, wxWindow* win)
+#else
 size_allocate(GtkWidget* WXUNUSED_IN_GTK2(widget), GtkAllocation* alloc, wxWindow* win)
+#endif
 {
     int w = alloc->width;
     int h = alloc->height;
-#if GTK_CHECK_VERSION(3,14,0)
+#if GTK_CHECK_VERSION(3,14,0) && !defined(__WXGTK4__)
+    // GTK4 removed the widget clip entirely: a widget's drawing is bounded by
+    // its own snapshot rather than by a separately declared clip rectangle, so
+    // there is nothing to widen and nothing to prevent.
     if (wx_is_at_least_gtk3(14))
     {
         // Prevent under-allocated widgets from drawing outside their allocation
@@ -3357,7 +3435,8 @@ size_allocate(GtkWidget* WXUNUSED_IN_GTK2(widget), GtkAllocation* alloc, wxWindo
 // "grab_broken_event"
 //-----------------------------------------------------------------------------
 
-#if GTK_CHECK_VERSION(2, 8, 0)
+#if GTK_CHECK_VERSION(2, 8, 0) && !defined(__WXGTK4__)
+// GTK4 has no explicit grabs, so none can be broken.
 static gboolean
 gtk_window_grab_broken( GtkWidget*,
                         GdkEventGrabBroken *event,
@@ -3423,7 +3502,9 @@ static void frame_clock_layout_after(GdkFrameClock*, wxWindowGTK* win)
 
 void wxWindowGTK::GTKHandleRealized()
 {
+#ifndef __WXGTK4__
     GdkWindow* const window = GTKGetDrawingWindow();
+#endif
 
     if (m_wxwindow)
     {
@@ -3448,13 +3529,20 @@ void wxWindowGTK::GTKHandleRealized()
     // Use composited window if background is transparent, if supported.
     if (m_backgroundStyle == wxBG_STYLE_TRANSPARENT)
     {
-#if wxGTK_HAS_COMPOSITING_SUPPORT
+#if wxGTK_HAS_COMPOSITING_SUPPORT && !defined(__WXGTK4__)
         if (IsTransparentBackgroundSupported())
         {
             wxGCC_WARNING_SUPPRESS(deprecated-declarations)
             if (window && !IsTopLevel())
                 gdk_window_set_composited(window, true);
             wxGCC_WARNING_RESTORE()
+        }
+        else
+#elif defined(__WXGTK4__)
+        // Every GTK4 surface is composited; there is no per-widget window to
+        // mark as such, and transparency is handled by the snapshot itself.
+        if (IsTransparentBackgroundSupported())
+        {
         }
         else
 #endif // wxGTK_HAS_COMPOSITING_SUPPORT
@@ -3719,6 +3807,7 @@ void wxWindowGTK::GTKCreateScrolledWindowWith(GtkWidget* view)
     // direction and notebooks for changing pages -- we decide that if we don't
     // have wxHSCROLL style we can safely sacrifice horizontal scrolling if it
     // means we can get working keyboard navigation in notebooks
+#ifndef __WXGTK4__
     if ( !HasFlag(wxHSCROLL) )
     {
         GtkBindingSet *
@@ -3729,6 +3818,12 @@ void wxWindowGTK::GTKCreateScrolledWindowWith(GtkWidget* view)
             gtk_binding_entry_remove(bindings, GDK_KEY_Page_Down, GDK_CONTROL_MASK);
         }
     }
+#else
+    // GTK4 replaced binding sets with GtkShortcut, and a class's shortcuts are
+    // not removable from outside it, so the Ctrl-PageUp/Down conflict between
+    // scrolled windows and notebooks described above cannot be resolved this
+    // way any more. Recorded in docs/gtk/gtk4-status.md.
+#endif
 
     // If wx[HV]SCROLL is not given, the corresponding scrollbar is not shown
     // at all. Otherwise it may be shown only on demand (default) or always, if
@@ -3760,6 +3855,19 @@ void wxWindowGTK::GTKCreateScrolledWindowWith(GtkWidget* view)
         // these handlers block mouse events to any window during scrolling
         // such as motion events and prevent GTK and wxWidgets from fighting
         // over where the slider should be
+#ifdef __WXGTK4__
+        {
+            GtkGesture* const click = gtk_gesture_click_new();
+            gtk_event_controller_set_propagation_phase(
+                GTK_EVENT_CONTROLLER(click), GTK_PHASE_CAPTURE);
+            g_signal_connect(click, "pressed",
+                             G_CALLBACK(wx_scrollbar_pressed), this);
+            g_signal_connect(click, "released",
+                             G_CALLBACK(wx_scrollbar_released), this);
+            gtk_widget_add_controller(GTK_WIDGET(m_scrollBar[dir]),
+                                      GTK_EVENT_CONTROLLER(click));
+        }
+#else
         g_signal_connect(m_scrollBar[dir], "button_press_event",
                      G_CALLBACK(gtk_scrollbar_button_press_event), this);
         g_signal_connect(m_scrollBar[dir], "button_release_event",
@@ -3768,6 +3876,7 @@ void wxWindowGTK::GTKCreateScrolledWindowWith(GtkWidget* view)
         gulong handler_id = g_signal_connect(m_scrollBar[dir], "event_after",
                             G_CALLBACK(gtk_scrollbar_event_after), this);
         g_signal_handler_block(m_scrollBar[dir], handler_id);
+#endif
 
         // these handlers get notified when scrollbar slider moves
         g_signal_connect_after(m_scrollBar[dir], "value_changed",
@@ -3805,7 +3914,10 @@ bool wxWindowGTK::Create( wxWindow *parent,
 
 
     m_wxwindow = wxPizza::New(m_windowStyle);
-#ifndef __WXUNIVERSAL__
+#if !defined(__WXUNIVERSAL__) && !defined(__WXGTK4__)
+    // GTK4 has no "parent-set" signal, and needs none here: the border is
+    // painted by wxPizza's own snapshot rather than by hooking the parent's
+    // draw handler, see GTKDrawBorder().
     if (HasFlag(wxPizza::BORDER_STYLES))
     {
         g_signal_connect(m_wxwindow, "parent_set",
@@ -4010,6 +4122,23 @@ void wxWindowGTK::PostCreation()
         if (m_focusWidget == nullptr)
             m_focusWidget = m_widget;
 
+#ifdef __WXGTK4__
+        // GTK4 has no focus-in/out-event; a focus controller reports both, and
+        // its signals carry no event and return nothing. The controller is
+        // remembered on the widget so that GTKDisableFocusOutEvent() below can
+        // find it again to block the handler.
+        {
+            GtkEventController* const focus = gtk_event_controller_focus_new();
+            g_signal_connect(focus, "enter",
+                             G_CALLBACK(wx_window_focus_in), this);
+            g_signal_connect(focus, "leave",
+                             G_CALLBACK(wx_window_focus_out), this);
+            gtk_widget_add_controller(m_focusWidget, focus);
+
+            g_object_set_data(G_OBJECT(m_focusWidget),
+                              "wx-focus-controller", focus);
+        }
+#else
         if (m_wxwindow)
         {
             g_signal_connect (m_focusWidget, "focus_in_event",
@@ -4024,6 +4153,7 @@ void wxWindowGTK::PostCreation()
             g_signal_connect_after (m_focusWidget, "focus_out_event",
                                 G_CALLBACK (gtk_window_focus_out_callback), this);
         }
+#endif // __WXGTK4__/!__WXGTK4__
     }
 
     if ( !AcceptsFocusFromKeyboard() )
@@ -4066,6 +4196,7 @@ void wxWindowGTK::PostCreation()
     if ( wx_is_at_least_gtk2(8) )
     {
         // Make sure we can notify the app when mouse capture is lost
+#ifndef __WXGTK4__
         if ( m_wxwindow )
         {
             g_signal_connect (m_wxwindow, "grab_broken_event",
@@ -4077,6 +4208,7 @@ void wxWindowGTK::PostCreation()
             g_signal_connect (connect_widget, "grab_broken_event",
                         G_CALLBACK (gtk_window_grab_broken), this);
         }
+#endif // !__WXGTK4__
     }
 #endif // GTK+ >= 2.8
 
@@ -4105,6 +4237,8 @@ wxWindowGTK::GTKConnectWidget(const char *signal, wxGTKCallback callback)
     return g_signal_connect(m_widget, signal, callback, this);
 }
 
+#ifndef __WXGTK4__
+
 // GSource callback functions for source used to detect new GDK events
 extern "C" {
 static gboolean source_prepare(GSource*, int*)
@@ -4125,6 +4259,8 @@ static gboolean source_dispatch(GSource*, GSourceFunc, void*)
     return true;
 }
 }
+
+#endif // !__WXGTK4__
 
 #ifdef wxGTK_HAS_GESTURES_SUPPORT
 
@@ -5052,6 +5188,10 @@ bool wxWindowGTK::EnableTouchEvents(int eventsMask)
 
 void wxWindowGTK::ConnectWidget( GtkWidget *widget )
 {
+#ifndef __WXGTK4__
+    // This source only exists to tell EventAlreadyProcessed() when a new GDK
+    // event has arrived, and that function is GTK3 only: the GTK4 input path
+    // stops events propagating by claiming the gesture instead.
     static bool isSourceAttached;
     if (!isSourceAttached)
     {
@@ -5067,6 +5207,7 @@ void wxWindowGTK::ConnectWidget( GtkWidget *widget )
         g_source_attach(source, nullptr);
         g_source_unref(source);
     }
+#endif // !__WXGTK4__
 
     // When we're called for the main widget itself (but not when connecting
     // events for some other widget, such as individual radio buttons in
@@ -5293,10 +5434,21 @@ void wxWindowGTK::DoSetSize( int x, int y, int width, int height, int sizeFlags 
         m_height = height;
 
         /* the default button has a border around it */
+#ifdef __WXGTK4__
+        // gtk_widget_get_can_default() and the "default_border" style property
+        // are both gone: GTK4 draws the default-button indication from CSS on
+        // the widget itself, within its own allocation, so there is no extra
+        // border for wx to account for here.
+        if (false)
+        {
+#else
         if (gtk_widget_get_can_default(m_widget))
         {
+#endif
             GtkBorder *default_border = nullptr;
+#ifndef __WXGTK4__
             gtk_widget_style_get( m_widget, "default_border", &default_border, nullptr );
+#endif
             if (default_border)
             {
                 x -= default_border->left;
@@ -5425,6 +5577,12 @@ void wxWindowGTK::DoGetClientSize( int *width, int *height ) const
 
             // get scrollbar spacing the same way the GTK-private function
             // _gtk_scrolled_window_get_scrollbar_spacing() does it
+#ifdef __WXGTK4__
+            // Both the class field and the style property are gone under GTK4,
+            // where a scrolled window overlays its scrollbars rather than
+            // reserving space beside them, so there is no spacing to add.
+            const int scrollbar_spacing = 0;
+#else
             int scrollbar_spacing =
                 GTK_SCROLLED_WINDOW_GET_CLASS(m_widget)->scrollbar_spacing;
             if (scrollbar_spacing < 0)
@@ -5432,6 +5590,7 @@ void wxWindowGTK::DoGetClientSize( int *width, int *height ) const
                 gtk_widget_style_get(
                     m_widget, "scrollbar-spacing", &scrollbar_spacing, nullptr);
             }
+#endif
 
             for ( int i = 0; i < ScrollDir_Max; i++ )
             {
@@ -5535,7 +5694,11 @@ void wxWindowGTK::DoClientToScreen( int *x, int *y ) const
 {
     wxCHECK_RET( (m_widget != nullptr), wxT("invalid window") );
 
+#ifdef __WXGTK4__
+    GdkSurface* const source = GTKGetMainWindow();
+#else
     GdkWindow* const source = GTKGetMainWindow();
+#endif
 
     if ((!m_isGtkPositionValid || source == nullptr) && !IsTopLevel() && m_parent)
     {
@@ -5577,7 +5740,14 @@ void wxWindowGTK::DoClientToScreen( int *x, int *y ) const
 
     int org_x = 0;
     int org_y = 0;
+#ifdef __WXGTK4__
+    // gdk_window_get_origin() is gone and has no replacement: GTK4 does not
+    // tell a client where its window is on screen, so "screen coordinates" can
+    // only be relative to the toplevel here. See docs/gtk/gtk4-status.md.
+    wxUnusedVar(source);
+#else
     gdk_window_get_origin( source, &org_x, &org_y );
+#endif
 
     if (!m_wxwindow)
     {
@@ -5606,7 +5776,11 @@ void wxWindowGTK::DoScreenToClient( int *x, int *y ) const
 {
     wxCHECK_RET( (m_widget != nullptr), wxT("invalid window") );
 
+#ifdef __WXGTK4__
+    GdkSurface* const source = GTKGetMainWindow();
+#else
     GdkWindow* const source = GTKGetMainWindow();
+#endif
 
     if ((!m_isGtkPositionValid || source == nullptr) && !IsTopLevel() && m_parent)
     {
@@ -5648,7 +5822,14 @@ void wxWindowGTK::DoScreenToClient( int *x, int *y ) const
 
     int org_x = 0;
     int org_y = 0;
+#ifdef __WXGTK4__
+    // gdk_window_get_origin() is gone and has no replacement: GTK4 does not
+    // tell a client where its window is on screen, so "screen coordinates" can
+    // only be relative to the toplevel here. See docs/gtk/gtk4-status.md.
+    wxUnusedVar(source);
+#else
     gdk_window_get_origin( source, &org_x, &org_y );
+#endif
 
     if (!m_wxwindow)
     {
@@ -5854,6 +6035,29 @@ double wxWindowGTK::GetDPIScaleFactor() const
     return GetContentScaleFactor();
 }
 
+#ifdef __WXGTK4__
+
+// The focus controller attached in ConnectWidget(), if any.
+static gpointer wxGTKGetFocusController(GtkWidget* widget)
+{
+    return widget ? g_object_get_data(G_OBJECT(widget), "wx-focus-controller")
+                  : nullptr;
+}
+
+void wxWindowGTK::GTKDisableFocusOutEvent()
+{
+    if ( gpointer const focus = wxGTKGetFocusController(m_focusWidget) )
+        g_signal_handlers_block_by_func(focus, (gpointer) wx_window_focus_out, this);
+}
+
+void wxWindowGTK::GTKEnableFocusOutEvent()
+{
+    if ( gpointer const focus = wxGTKGetFocusController(m_focusWidget) )
+        g_signal_handlers_unblock_by_func(focus, (gpointer) wx_window_focus_out, this);
+}
+
+#else
+
 void wxWindowGTK::GTKDisableFocusOutEvent()
 {
     g_signal_handlers_block_by_func( m_focusWidget,
@@ -5865,6 +6069,8 @@ void wxWindowGTK::GTKEnableFocusOutEvent()
     g_signal_handlers_unblock_by_func( m_focusWidget,
                                 (gpointer) gtk_window_focus_out_callback, this);
 }
+
+#endif // __WXGTK4__/!__WXGTK4__
 
 bool wxWindowGTK::GTKHandleFocusIn()
 {
@@ -6067,7 +6273,7 @@ void wxWindowGTK::SetFocus()
 
     GtkWidget *widget = m_wxwindow ? m_wxwindow : m_focusWidget;
 
-    if ( GTK_IS_CONTAINER(widget) &&
+    if ( wx_gtk_widget_is_container(widget) &&
          !gtk_widget_get_can_focus(widget) )
     {
         wxLogTrace(TRACE_FOCUS,
@@ -6371,20 +6577,36 @@ void wxWindowGTK::Raise()
     if (!m_isShown)
         return;
 
+#ifdef __WXGTK4__
+    // gdk_window_raise() is gone and nothing replaces it: GTK4 has no child
+    // windows to reorder, and the stacking of toplevels is the compositor's.
+    // Presenting the toplevel is the closest thing available.
+    if ( wxTopLevelWindow* const tlw =
+            wxDynamicCast(wxGetTopLevelParent(this), wxTopLevelWindow) )
+    {
+        if ( tlw == this )
+            gtk_window_present(GTK_WINDOW(m_widget));
+    }
+#else
     if (auto const window = GTKGetMainWindow())
     {
         gdk_window_raise(window);
     }
+#endif
 }
 
 void wxWindowGTK::Lower()
 {
     wxCHECK_RET( (m_widget != nullptr), wxT("invalid window") );
 
+#ifdef __WXGTK4__
+    // See Raise(): there is no lowering at all under GTK4.
+#else
     if (auto const window = GTKGetMainWindow())
     {
         gdk_window_lower(window);
     }
+#endif
 }
 
 // ----------------------------------------------------------------------------
@@ -6543,8 +6765,10 @@ void wxWindowGTK::WXUpdateCursor()
     GTKUpdateCursor();
 }
 
-#ifdef wxHAVE_WAYLAND_PROTOCOLS
+#if defined(wxHAVE_WAYLAND_PROTOCOLS) && !defined(__WXGTK4__)
 
+// Only reachable from WarpPointer() below, which is a no-op under GTK4, and
+// built on GdkWindow besides.
 namespace wxWayland
 {
 
@@ -6575,13 +6799,13 @@ void WarpPointer(GdkWindow* window, int x, int y)
 
 } // namespace wxWayland
 
-#endif // wxHAVE_WAYLAND_PROTOCOLS
+#endif // wxHAVE_WAYLAND_PROTOCOLS && !__WXGTK4__
 
 void wxWindowGTK::WarpPointer( int x, int y )
 {
     wxCHECK_RET( (m_widget != nullptr), wxT("invalid window") );
 
-#ifdef wxHAVE_WAYLAND_PROTOCOLS
+#if defined(wxHAVE_WAYLAND_PROTOCOLS) && !defined(__WXGTK4__)
     // Implement this ourselves as gdk_device_warp() doesn't do anything when
     // using Wayland backend in GTK3 and this function has been removed in GTK4.
     GdkWindow* const window = GTKGetMainWindow();
@@ -6594,16 +6818,23 @@ void wxWindowGTK::WarpPointer( int x, int y )
         wxWayland::WarpPointer(window, org_x + x, org_y + y);
         return;
     }
-#endif // wxHAVE_WAYLAND_PROTOCOLS
+#endif // wxHAVE_WAYLAND_PROTOCOLS && !__WXGTK4__
 
+#ifdef __WXGTK4__
+    // gdk_device_warp() was removed and nothing replaces it: moving the
+    // pointer is not something a client may do under GTK4, and it already did
+    // nothing under GTK3 with the Wayland backend. wxWindow::WarpPointer() is
+    // therefore a no-op here.
+    wxUnusedVar(x);
+    wxUnusedVar(y);
+#else
     ClientToScreen(&x, &y);
     GdkDisplay* display = gtk_widget_get_display(m_widget);
     GdkScreen* screen = gtk_widget_get_screen(m_widget);
 #ifdef __WXGTK3__
     GdkDevice* const device = wx_get_gdk_device_from_display(display);
     gdk_device_warp(device, screen, x, y);
-#else
-#ifdef GDK_WINDOWING_X11
+#elif defined(GDK_WINDOWING_X11)
     XWarpPointer(GDK_DISPLAY_XDISPLAY(display),
         None,
         GDK_WINDOW_XID(gdk_screen_get_root_window(screen)),
@@ -6612,7 +6843,7 @@ void wxWindowGTK::WarpPointer( int x, int y )
     wxUnusedVar(display);
     wxUnusedVar(screen);
 #endif
-#endif
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 wxWindowGTK::ScrollDir wxWindowGTK::ScrollDirFromRange(GtkRange *range) const
@@ -6665,6 +6896,16 @@ void wxWindowGTK::Refresh(bool WXUNUSED(eraseBackground),
     {
         if (gtk_widget_get_mapped(m_wxwindow))
         {
+#ifdef __WXGTK4__
+            // GTK4 has neither a GdkWindow to invalidate nor any partial
+            // invalidation: gtk_widget_queue_draw_area() is gone too, and a
+            // widget is always redrawn whole. The rectangle is therefore
+            // ignored -- which costs nothing in practice, as wx already
+            // reported the whole window as the update region under GTK3, see
+            // docs/gtk/gtk4-phase4-paint-model-design.md.
+            wxUnusedVar(rect);
+            gtk_widget_queue_draw(m_wxwindow);
+#else
             GdkWindow* window = gtk_widget_get_window(m_wxwindow);
             if (rect)
             {
@@ -6675,16 +6916,22 @@ void wxWindowGTK::Refresh(bool WXUNUSED(eraseBackground),
             }
             else
                 gdk_window_invalidate_rect(window, nullptr, true);
+#endif
         }
     }
     else if (m_widget)
     {
         if (gtk_widget_get_mapped(m_widget))
         {
+#ifdef __WXGTK4__
+            wxUnusedVar(rect);
+            gtk_widget_queue_draw(m_widget);
+#else
             if (rect)
                 gtk_widget_queue_draw_area(m_widget, rect->x, rect->y, rect->width, rect->height);
             else
                 gtk_widget_queue_draw(m_widget);
+#endif
         }
     }
 }
@@ -6693,7 +6940,11 @@ void wxWindowGTK::Update()
 {
     if (m_widget && gtk_widget_get_mapped(m_widget) && m_width > 0 && m_height > 0)
     {
+#ifdef __WXGTK4__
+        GdkSurface* const window = GTKGetMainWindow();
+#else
         GdkWindow* const window = GTKGetMainWindow();
+#endif
 
 #ifdef GDK_WINDOWING_WAYLAND
         if (wxGTKImpl::IsWayland(window))
@@ -6711,9 +6962,16 @@ void wxWindowGTK::Update()
         // requests queued for the windowing system are flushed first.
         gdk_display_flush(display);
 
+#ifdef __WXGTK4__
+        // gdk_window_process_updates() is gone: GTK4 drives painting from the
+        // frame clock and offers no way to force a repaint synchronously, so
+        // wxWindow::Update() can only ask for one and flush.
+        gtk_widget_queue_draw(m_wxwindow ? m_wxwindow : m_widget);
+#else
         wxGCC_WARNING_SUPPRESS(deprecated-declarations)
         gdk_window_process_updates(window, true);
         wxGCC_WARNING_RESTORE(deprecated-declarations)
+#endif
 
         gdk_display_flush(display);
     }
@@ -6929,9 +7187,14 @@ void wxWindowGTK::GTKSendPaintEvents(const GdkRegion* region)
         case wxBG_STYLE_SYSTEM:
             if ( GetThemeEnabled() )
             {
+#ifdef __WXGTK4__
+                const int w = gtk_widget_get_width(m_wxwindow);
+                const int h = gtk_widget_get_height(m_wxwindow);
+#else
                 GdkWindow* gdkWindow = GTKGetDrawingWindow();
                 const int w = gdk_window_get_width(gdkWindow);
                 const int h = gdk_window_get_height(gdkWindow);
+#endif
 #ifdef __WXGTK3__
                 GtkStyleContext* sc = gtk_widget_get_style_context(m_wxwindow);
                 gtk_render_background(sc, cr, 0, 0, w, h);
@@ -7371,8 +7634,13 @@ void wxWindowGTK::GTKApplyWidgetStyle(bool forceStyle)
         wxGtkString s(g_string_free(css, false));
         if (m_styleProvider)
         {
+#ifdef __WXGTK4__
+            gtk_css_provider_load_from_data(
+                GTK_CSS_PROVIDER(m_styleProvider), s, -1);
+#else
             gtk_css_provider_load_from_data(
                 GTK_CSS_PROVIDER(m_styleProvider), s, -1, nullptr);
+#endif
             DoApplyWidgetStyle(nullptr);
         }
 #else
@@ -7714,6 +7982,20 @@ GdkWindow *wxWindowGTK::GTKGetWindow(wxArrayGdkWindows& WXUNUSED(windows)) const
 }
 #endif // !__WXGTK4__
 
+#ifdef __WXGTK4__
+
+GdkSurface* wxWindowGTK::GTKGetMainWindow() const
+{
+    return wx_gtk_widget_get_surface(m_wxwindow ? m_wxwindow : m_widget);
+}
+
+GdkSurface* wxWindowGTK::GTKGetConnectWindow() const
+{
+    return wx_gtk_widget_get_surface(GetConnectWidget());
+}
+
+#else
+
 GdkWindow* wxWindowGTK::GTKGetMainWindow() const
 {
     return gtk_widget_get_window(m_wxwindow ? m_wxwindow : m_widget);
@@ -7723,6 +8005,8 @@ GdkWindow* wxWindowGTK::GTKGetConnectWindow() const
 {
     return gtk_widget_get_window(GetConnectWidget());
 }
+
+#endif // __WXGTK4__/!__WXGTK4__
 
 #ifdef __WXGTK3__
 void wxWindowGTK::GTKSizeRevalidate()
@@ -8158,10 +8442,17 @@ void wxGetMousePosition(int* x, int* y)
 #endif
 }
 
+#ifdef __WXGTK4__
+GdkSurface* wxWindowGTK::GTKGetDrawingWindow() const
+{
+    return m_wxwindow ? wx_gtk_widget_get_surface(m_wxwindow) : nullptr;
+}
+#else
 GdkWindow* wxWindowGTK::GTKGetDrawingWindow() const
 {
     return m_wxwindow ? gtk_widget_get_window(m_wxwindow) : nullptr;
 }
+#endif
 
 // ----------------------------------------------------------------------------
 // freeze/thaw

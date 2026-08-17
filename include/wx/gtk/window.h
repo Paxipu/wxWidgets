@@ -212,7 +212,14 @@ public:
     void GTKReleaseMouseAndNotify();
     static void GTKHandleCaptureLost();
 
+#ifdef __WXGTK4__
+    // GdkWindow is gone: these return the toplevel's GdkSurface, which is as
+    // close as GTK4 gets. Note that unlike a GdkWindow it is shared by every
+    // widget under that toplevel rather than being per-widget.
+    GdkSurface* GTKGetDrawingWindow() const;
+#else
     GdkWindow* GTKGetDrawingWindow() const;
+#endif
 
     bool GTKHandleFocusIn();
     virtual bool GTKHandleFocusOut();
@@ -273,10 +280,18 @@ protected:
     //
     // Unlike GTKGetDrawingWindow(), this function always returns something
     // non-null for a mapped window.
+#ifdef __WXGTK4__
+    GdkSurface* GTKGetMainWindow() const;
+#else
     GdkWindow* GTKGetMainWindow() const;
+#endif
 
     // Return the GdkWindow associated with GetConnectWidget().
+#ifdef __WXGTK4__
+    GdkSurface* GTKGetConnectWindow() const;
+#else
     GdkWindow* GTKGetConnectWindow() const;
+#endif
 
 public:
     // Returns the default context which usually is anti-aliased

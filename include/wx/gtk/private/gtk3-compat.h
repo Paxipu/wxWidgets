@@ -382,6 +382,14 @@ typedef enum
     GTK_STATE_FOCUSED
 } GtkStateType;
 
+// GtkContainer is gone: under GTK4 any widget can have children, so the GTK3
+// question "is this a container?" becomes "does it have any children?", which
+// is what the call sites are really asking before descending into them.
+static inline bool wx_gtk_widget_is_container(GtkWidget* widget)
+{
+    return widget && gtk_widget_get_first_child(widget) != nullptr;
+}
+
 // No widget owns a GdkWindow under GTK4 -- the concept is gone -- so the
 // GTK3 question "does this widget have its own window?" is always answered
 // no. Call sites use it to decide whether coordinates need translating
@@ -397,6 +405,11 @@ wxGCC_WARNING_SUPPRESS(deprecated-declarations)
 
 // Counterpart of the GTK4 macro above.
 #define wx_gtk_widget_get_surface_or_window(w) gtk_widget_get_window(w)
+
+static inline bool wx_gtk_widget_is_container(GtkWidget* widget)
+{
+    return widget && GTK_IS_CONTAINER(widget);
+}
 
 // Counterpart of the GTK4 stub above: here the question is real, so just
 // forward to GTK.

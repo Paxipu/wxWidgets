@@ -2562,3 +2562,92 @@ under GTK4, which is how the missing-member errors first pointed at this.
 
 plus `filedlg.cpp`, `overlay.cpp` and a handful of smaller ones. `test_gui`
 still cannot link, so none of this is runtime-verified.
+
+---
+
+## Progress update 28: `evtloop.cpp`, and a capability GTK4 removes outright
+
+**447 -> 411 diagnostics, 27 -> 26 failing targets, no regressions.**
+`evtloop.cpp` went from 37 errors to zero.
+
+### The loop itself
+
+`gtk_main()`, `gtk_main_quit()`, `gtk_main_level()`, `gtk_main_iteration()` and
+`gtk_events_pending()` are all gone; they were only ever thin wrappers, and the
+replacements are the GLib primitives underneath:
+
+| GTK3 | GTK4 |
+| --- | --- |
+| `gtk_main()` | `g_main_loop_run()` on a `GMainLoop` |
+| `gtk_main_quit()` | `g_main_loop_quit()` on the innermost loop |
+| `gtk_main_level()` | a stack of running loops kept here |
+| `gtk_main_iteration()` | `g_main_context_iteration()` |
+| `gtk_events_pending()` | `g_main_context_pending()` |
+
+The stack matters. `DoRun()` deliberately quits its *enclosing* loop on the way
+out, so that an `Exit()` issued for an outer loop while an inner one is running
+gets noticed; `gtk_main_quit()` found that enclosing loop implicitly. With
+explicit `GMainLoop`s there is nothing implicit to find, hence `gs_mainLoops`.
+
+One signature change worth noting: `gtk_main_iteration()` returned whether the
+loop had been asked to quit, while `g_main_context_iteration()` returns whether
+it dispatched anything -- a different question. `Dispatch()` therefore answers
+the original question directly, from `m_shouldExit`, rather than passing the
+new return value through as if it meant the same thing.
+
+### The capability that is simply gone
+
+`DoYieldFor()` implements `wxYieldFor(category)`: process only events in the
+requested categories now and put the rest back. Under GTK3 it does that by
+calling `gdk_event_handler_set()` to take over the global event stream, sorting
+each native event into a `wxEventCategory`, dispatching the wanted ones and
+re-queuing the others.
+
+**GTK4 has no interception point at all.** This was checked rather than
+assumed, because it is a significant loss:
+
+* `gdk_event_handler_set()` -- removed.
+* `gdk_display_get_event()` -- removed.
+* `GdkSurface` has no `event` signal.
+* `GdkEvent` is opaque, so events could not be examined or copied even if they
+  could be obtained.
+
+Curiously `gdk_display_put_event()` *does* survive, so events could be put
+back -- but with no way to take them out or see them first, that is moot.
+
+So under GTK4 a yield processes **every** pending native event rather than only
+those in the requested categories. Category filtering still applies to wx
+events, which the base class handles. What is lost is deferring *native* ones:
+`wxYieldFor(wxEVT_CATEGORY_UI)` no longer keeps user input from reaching
+windows during the yield, so an application that yields inside a long operation
+to stay repainted will now also see clicks and keystrokes it previously would
+not have.
+
+This is the largest behavioural gap in the port so far that has no workaround
+available. Anything that needs input blocked during a yield has to do it at the
+wx level -- disabling windows, or a `wxWindowDisabler` -- rather than relying on
+the yield to do it.
+
+### Two things that came out with it
+
+`GTKIsSameAsLastEvent()` and the `m_lastEvent` buffer compare native events
+byte-wise, which an opaque `GdkEvent` does not permit. Its only caller,
+`EventAlreadyProcessed()` in `window.cpp`, is already GTK3-only -- the GTK4
+input path handles propagation through gesture claiming instead -- so both are
+`#ifdef`ed out rather than reinvented.
+
+`StoreGdkEventForLaterProcessing()` and `m_queuedGdkEvents` likewise: with no
+events to intercept there is nothing to store.
+
+### What is left
+
+| File | Errors |
+|---|---|
+| `dataview.cpp` | 55 |
+| `window.cpp` | 44 |
+| `dnd.cpp` | 41 |
+| `textctrl.cpp` | 21 |
+| `notebook.cpp` | 19 |
+
+plus `filedlg.cpp`, `overlay.cpp` and a handful of smaller ones. `test_gui`
+still cannot link, so none of this is runtime-verified.

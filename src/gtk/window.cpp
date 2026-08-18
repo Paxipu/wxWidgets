@@ -4100,7 +4100,19 @@ wxWindowGTK::~wxWindowGTK()
             GTKDisconnect(parent);
     }
     if (m_widget && m_widget != m_wxwindow)
+    {
         GTKDisconnect(m_widget);
+
+#ifdef __WXGTK4__
+        // A window with no wxPizza of its own has its size-allocated handler
+        // on its *parent's* pizza -- see PostCreation() -- which outlives it,
+        // so that one has to go here too. The m_wxwindow case above already
+        // does the same thing for the same reason.
+        GtkWidget* const parent = gtk_widget_get_parent(m_widget);
+        if (parent)
+            GTKDisconnect(parent);
+#endif // __WXGTK4__
+    }
 
 #if GTK_CHECK_VERSION(3,8,0)
     // Backstop for a window destroyed without being unrealized first.
@@ -7098,6 +7110,43 @@ bool wxWindowGTK::ScrollPages(int pages)
     return DoScrollByUnits(ScrollDir_Vert, ScrollUnit_Page, pages);
 }
 
+#ifdef __WXGTK4__
+
+// GTK4 caches the render node each widget last produced, and invalidating one
+// widget does not invalidate its children: they keep their cached nodes and are
+// replayed unchanged. GTK3's gdk_window_invalidate_rect() took an
+// "invalidate_children" flag which wx always passed TRUE, so wx's contract is
+// that refreshing a region repaints everything inside it. Reproduce that by
+// invalidating the children explicitly.
+//
+// Note this is *not* a workaround for GTK4 being lazy: caching the node tree
+// and replaying it on the GPU is the whole point of the new rendering model,
+// and re-running a widget's snapshot only when it is invalidated is correct.
+// It just means "invalidate" now has to be said once per widget.
+static void wxGTKRefreshChildren(wxWindowGTK* win, const wxRect* rect)
+{
+    for ( wxWindowList::compatibility_iterator node = win->GetChildren().GetFirst();
+          node;
+          node = node->GetNext() )
+    {
+        wxWindow* const child = node->GetData();
+
+        // A child toplevel is not drawn by this window at all.
+        if ( child->IsTopLevel() || !child->IsShown() )
+            continue;
+
+        if ( rect && !child->GetRect().Intersects(*rect) )
+            continue;
+
+        // No rectangle: a widget is always redrawn whole under GTK4, and this
+        // recurses into the child's own children in turn, as invalidating a
+        // GdkWindow tree used to.
+        child->Refresh();
+    }
+}
+
+#endif // __WXGTK4__
+
 void wxWindowGTK::Refresh(bool WXUNUSED(eraseBackground),
                           const wxRect *rect)
 {
@@ -7108,12 +7157,13 @@ void wxWindowGTK::Refresh(bool WXUNUSED(eraseBackground),
 #ifdef __WXGTK4__
             // GTK4 has neither a GdkWindow to invalidate nor any partial
             // invalidation: gtk_widget_queue_draw_area() is gone too, and a
-            // widget is always redrawn whole. The rectangle is therefore
-            // ignored -- which costs nothing in practice, as wx already
-            // reported the whole window as the update region under GTK3, see
-            // docs/gtk/gtk4-phase4-paint-model-design.md.
-            wxUnusedVar(rect);
+            // widget is always redrawn whole. The rectangle therefore does not
+            // narrow what is repainted -- which costs nothing in practice, as
+            // wx already reported the whole window as the update region under
+            // GTK3, see docs/gtk/gtk4-phase4-paint-model-design.md -- but it
+            // still decides which children are in it, see below.
             gtk_widget_queue_draw(m_wxwindow);
+            wxGTKRefreshChildren(this, rect);
 #else
             GdkWindow* window = gtk_widget_get_window(m_wxwindow);
             if (rect)
@@ -7133,8 +7183,8 @@ void wxWindowGTK::Refresh(bool WXUNUSED(eraseBackground),
         if (gtk_widget_get_mapped(m_widget))
         {
 #ifdef __WXGTK4__
-            wxUnusedVar(rect);
             gtk_widget_queue_draw(m_widget);
+            wxGTKRefreshChildren(this, rect);
 #else
             if (rect)
                 gtk_widget_queue_draw_area(m_widget, rect->x, rect->y, rect->width, rect->height);
@@ -7765,9 +7815,11 @@ void wxWindowGTK::GTKApplyWidgetStyle(bool forceStyle)
         }
         if (isFont)
         {
+#ifdef __WXGTK4__
             // Remembered so that the whole shorthand can be dropped again if
             // it turns out to have no size, see below.
             const gsize cssFontStart = css->len;
+#endif // __WXGTK4__
 
             g_string_append(css, "font:");
             const PangoFontDescription* pfd = m_font.GetNativeFontInfo()->description;

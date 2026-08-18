@@ -557,6 +557,23 @@ GtkWidget* wxPizza::New(long windowStyle)
     pizza->m_scroll_y = 0;
     pizza->m_windowStyle = windowStyle;
 #ifdef __WXGTK4__
+    // GtkFixed installs a GtkFixedLayout layout manager, and GTK4 dispatches
+    // both measure() and size_allocate() to a widget's layout manager *instead
+    // of* to its class vfuncs when it has one. So wxPizza's own layout code --
+    // pizza_measure() and pizza_size_allocate(), which is what positions every
+    // wx child window -- was never being called at all, and GtkFixedLayout was
+    // laying children out instead: at the origin, at their own measured size,
+    // which for a wxPizza with no natural size of its own is 0x0.
+    //
+    // Nothing about this is diagnosable from the code: the vfuncs are assigned
+    // in class_init exactly as under GTK3, and GTK simply never asks for them.
+    // See docs/gtk/probes/gtk4-layout-manager.c.
+    //
+    // wx does all of its own layout, so it wants no layout manager. put()
+    // below therefore cannot use gtk_fixed_put() either, as that reaches
+    // through the layout manager to set the child's transform.
+    gtk_widget_set_layout_manager(widget, nullptr);
+
     // Neither gtk_widget_set_has_window() nor event masks exist under
     // GTK4: no widget (other than a toplevel's implicit surface) has its
     // own window any more, and event delivery goes entirely through
@@ -666,13 +683,22 @@ void wxPizza::put(GtkWidget* widget, int x, int y, int width, int height)
     // gtk_widget_is_toplevel() doesn't exist under GTK4; GTK_IS_WINDOW()
     // is the direct equivalent for "is this a toplevel-capable widget".
     if (!GTK_IS_WINDOW(widget))
+    {
+        // Not gtk_fixed_put(): it asks the layout manager for the child's
+        // GtkFixedLayoutChild in order to set a transform, and wxPizza has no
+        // layout manager, for the reason given in New(). Parenting the child
+        // is all that is wanted here in any case -- its position and size come
+        // from size_allocate_child().
+        gtk_widget_set_parent(widget, GTK_WIDGET(this));
+        gtk_widget_set_size_request(widget, -1, -1);
+    }
 #else
     if (!gtk_widget_is_toplevel(GTK_WIDGET(widget)))
-#endif
     {
         gtk_fixed_put(GTK_FIXED(this), widget, 0, 0);
         gtk_widget_set_size_request(widget, -1, -1);
     }
+#endif
 
     wxPizzaChild* child = new wxPizzaChild;
     child->widget = widget;
@@ -711,7 +737,12 @@ void wxPizza::remove(GtkWidget* widget)
 
     // put() does not parent toplevels, so this is not redundant.
     if (gtk_widget_get_parent(widget) == GTK_WIDGET(this))
-        gtk_fixed_remove(GTK_FIXED(this), widget);
+    {
+        // The counterpart of the gtk_widget_set_parent() in put():
+        // gtk_fixed_remove() would go through the layout manager wxPizza
+        // deliberately does not have.
+        gtk_widget_unparent(widget);
+    }
 }
 #endif // __WXGTK4__
 

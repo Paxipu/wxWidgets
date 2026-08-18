@@ -82,6 +82,35 @@ static enum {
 static bool gs_decorCacheValid;
 #endif // GDK_WINDOWING_X11 && !__WXGTK4__
 
+#ifdef __WXGTK4__
+
+// gtk_window_move() was removed: under Wayland a client is not allowed to
+// position its own window, and GTK4 offers no replacement even where the
+// platform does allow it. X11 does, and it is the same call GDK3 made for
+// gtk_window_move() -- the window manager sees an ordinary ConfigureRequest --
+// so honour the request there rather than letting wxTopLevelWindow::Move() and
+// GetPosition() drift into reporting a position nothing ever applied.
+//
+// On Wayland this is a no-op, which is the most that can be done.
+static void wx_gtk_window_move(GtkWindow* window, int x, int y)
+{
+#ifdef GDK_WINDOWING_X11
+    GdkSurface* const surface = gtk_native_get_surface(GTK_NATIVE(window));
+    if ( surface && GDK_IS_X11_SURFACE(surface) )
+    {
+        XMoveWindow(GDK_SURFACE_XDISPLAY(surface), GDK_SURFACE_XID(surface),
+                    x, y);
+        return;
+    }
+#endif // GDK_WINDOWING_X11
+
+    wxUnusedVar(window);
+    wxUnusedVar(x);
+    wxUnusedVar(y);
+}
+
+#endif // __WXGTK4__
+
 #ifdef __WXGTK3__
 static bool HasClientDecor(GtkWidget* widget)
 {
@@ -921,6 +950,16 @@ void wxTopLevelWindowGTK::GTKHandleMapped()
 {
     wxLogTrace(TRACE_TLWSIZE, "Mapped for %s", wxDumpWindow(this));
 
+#ifdef __WXGTK4__
+    // wx_gtk_window_move() needs a surface, which a window only has once it
+    // has been realized, so any position asked for before that -- the usual
+    // case, since it is normally given to the constructor -- could not be
+    // applied then and has to be applied here instead. GTK3's
+    // gtk_window_move() remembered it internally and did the same.
+    if (m_x || m_y)
+        wx_gtk_window_move(GTK_WINDOW(m_widget), m_x, m_y);
+#endif // __WXGTK4__
+
     // We couldn't set the app ID before, as it only works for mapped windows.
 #if defined(GDK_WINDOWING_WAYLAND) && defined(__WXGTK4__)
     GdkSurface* const surface = wx_gtk_widget_get_surface(m_widget);
@@ -1388,10 +1427,10 @@ bool wxTopLevelWindowGTK::Create( wxWindow *parent,
     if (pos.IsFullySpecified())
     {
 #ifdef __WXGTK4__
-        // Nothing to do: GTK4 removed gtk_window_move() and offers no
-        // replacement, as a client cannot position its own window under
-        // Wayland. m_x/m_y stay as the caller asked for, so wx still reports
-        // the requested position, but the compositor decides the real one.
+        // GTK4 removed gtk_window_move(); wx_gtk_window_move() does what it
+        // did on X11 and nothing on Wayland, where a client may not position
+        // its own window at all.
+        wx_gtk_window_move(GTK_WINDOW(m_widget), m_x, m_y);
 #elif defined(__WXGTK3__)
         gtk_window_move(GTK_WINDOW(m_widget), m_x, m_y);
 #else
@@ -1916,9 +1955,9 @@ bool wxTopLevelWindowGTK::Show( bool show )
         // make sure window has a non-default position, so when it is shown
         // again, it won't be repositioned by WM as if it were a new window
         // Note that this must be done _after_ the window is hidden.
-#ifndef __WXGTK4__
-        // GTK4 has no gtk_window_move(): a client cannot choose where its
-        // window goes, so it cannot pin it down across a hide/show either.
+#ifdef __WXGTK4__
+        wx_gtk_window_move((GtkWindow*)m_widget, m_x, m_y);
+#else
         gtk_window_move((GtkWindow*)m_widget, m_x, m_y);
 #endif
     }
@@ -2010,12 +2049,15 @@ void wxTopLevelWindowGTK::DoSetSize( int x, int y, int width, int height, int si
 
     if ( m_x != old_x || m_y != old_y )
     {
-#ifndef __WXGTK4__
+#ifdef __WXGTK4__
+        wx_gtk_window_move( GTK_WINDOW(m_widget), m_x, m_y );
+#else
         gtk_window_move( GTK_WINDOW(m_widget), m_x, m_y );
 #endif
-        // Note that under GTK4 nothing actually moved: the event reports the
-        // position wx was asked for, not one GTK confirmed, because GTK4 will
-        // neither position a window nor say where it ended up.
+        // Note that under GTK4 on Wayland nothing actually moved: the event
+        // then reports the position wx was asked for, not one the compositor
+        // confirmed, because it will neither position a window nor say where
+        // it ended up.
         wxMoveEvent event(wxPoint(m_x, m_y), GetId());
         event.SetEventObject(this);
         HandleWindowEvent(event);

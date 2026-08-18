@@ -5873,6 +5873,70 @@ void wxWindowGTK::DoGetPosition( int *x, int *y ) const
     if (y) (*y) = m_y - dy;
 }
 
+#ifdef __WXGTK4__
+
+// GTK4 has one GdkSurface per toplevel: a child window no longer has an origin
+// of its own to ask for, and gdk_window_get_origin() is gone with no
+// replacement -- GTK4 declines to tell a client where its surface sits on
+// screen at all. "Screen" coordinates below are therefore relative to the
+// toplevel. That is self-consistent, which is what everything in wx that
+// round-trips through ClientToScreen()/ScreenToClient() actually needs, and it
+// is the best that can be done on Wayland in any case.
+//
+// Within the toplevel, gtk_widget_compute_point() maps a point through the
+// widget tree, doing explicitly what the per-window GdkWindow origins used to
+// do implicitly -- including every ancestor's offset, which the GTK3 code path
+// below never had to add by hand and so does not.
+static void wxGTKGetOriginInRoot(GtkWidget* widget, int* org_x, int* org_y)
+{
+    GtkRoot* const root = gtk_widget_get_root(widget);
+    if ( !root )
+        return;
+
+    const graphene_point_t in = { 0, 0 };
+    graphene_point_t out;
+    if ( gtk_widget_compute_point(widget, GTK_WIDGET(root), &in, &out) )
+    {
+        *org_x = int(out.x);
+        *org_y = int(out.y);
+    }
+
+    // The root widget does not start at the surface's origin when the window
+    // is drawn with client-side decorations: the shadow is part of the surface
+    // and lies outside the widget tree.
+    double sx = 0,
+           sy = 0;
+    gtk_native_get_surface_transform(GTK_NATIVE(root), &sx, &sy);
+    *org_x += int(sx);
+    *org_y += int(sy);
+
+#ifdef GDK_WINDOWING_X11
+    // And finally the surface's own position, which turns all of the above
+    // into real screen coordinates. GTK4 has no API for this -- gdk_window_get_origin()
+    // was not replaced, deliberately, because Wayland clients are not told
+    // where their windows are -- but under X11 the server still knows, so ask
+    // it directly rather than reporting toplevel-relative coordinates and
+    // leaving them to disagree with wxTopLevelWindow::GetPosition().
+    GdkSurface* const surface = gtk_native_get_surface(GTK_NATIVE(root));
+    if ( surface && GDK_IS_X11_SURFACE(surface) )
+    {
+        Display* const dpy = GDK_SURFACE_XDISPLAY(surface);
+        int rx = 0,
+            ry = 0;
+        Window unused;
+        if ( XTranslateCoordinates(dpy, GDK_SURFACE_XID(surface),
+                                   DefaultRootWindow(dpy),
+                                   0, 0, &rx, &ry, &unused) )
+        {
+            *org_x += rx;
+            *org_y += ry;
+        }
+    }
+#endif // GDK_WINDOWING_X11
+}
+
+#endif // __WXGTK4__
+
 void wxWindowGTK::DoClientToScreen( int *x, int *y ) const
 {
     wxCHECK_RET( (m_widget != nullptr), wxT("invalid window") );
@@ -5883,9 +5947,21 @@ void wxWindowGTK::DoClientToScreen( int *x, int *y ) const
     GdkWindow* const source = GTKGetMainWindow();
 #endif
 
-    if ((!m_isGtkPositionValid || source == nullptr) && !IsTopLevel() && m_parent)
+    bool fromParent = !m_isGtkPositionValid || source == nullptr;
+#ifdef __WXGTK4__
+    // Always, under GTK4. Layout there happens in the frame clock's layout
+    // phase rather than synchronously, so a child's GTK allocation is stale
+    // from the moment it is shown, hidden or moved until the next frame is
+    // drawn -- and asking GTK where the widget is would answer out of date,
+    // silently and only sometimes. wx knows where it put each of its children
+    // regardless of whether GTK has caught up, so walk the parent chain using
+    // that instead; only the toplevel's own client offset, which is GTK's
+    // business and is settled once the window is mapped, still comes from GTK.
+    fromParent = true;
+#endif // __WXGTK4__
+
+    if (fromParent && !IsTopLevel() && m_parent)
     {
-        m_parent->DoClientToScreen(x, y);
         int xx, yy;
         DoGetPosition(&xx, &yy);
         if (m_wxwindow)
@@ -5895,21 +5971,25 @@ void wxWindowGTK::DoClientToScreen( int *x, int *y ) const
             xx += border.left;
             yy += border.top;
         }
-        if (y) *y += yy;
+
+        // Ask the parent where its own client origin is rather than handing it
+        // our coordinate: in RTL it would mirror that using *its* width, which
+        // is not the basis this window's coordinates are expressed in.
+        int ox = 0,
+            oy = 0;
+        m_parent->DoClientToScreen(&ox, &oy);
+
+        if (y) *y += oy + yy;
         if (x)
         {
             if (GetLayoutDirection() != wxLayout_RightToLeft)
-                *x += xx;
+                *x += ox + xx;
             else
             {
-                int w;
-                // undo RTL conversion done by parent
-                static_cast<wxWindowGTK*>(m_parent)->DoGetClientSize(&w, nullptr);
-                *x = w - *x;
-
-                DoGetClientSize(&w, nullptr);
-                *x += xx;
-                *x = w - *x;
+                // In RTL the origin above is the parent client area's right
+                // edge and this window's position is measured from it, so both
+                // it and the coordinate within this window run leftwards.
+                *x = ox - xx - *x;
             }
         }
         return;
@@ -5924,13 +6004,22 @@ void wxWindowGTK::DoClientToScreen( int *x, int *y ) const
     int org_x = 0;
     int org_y = 0;
 #ifdef __WXGTK4__
-    // gdk_window_get_origin() is gone and has no replacement: GTK4 does not
-    // tell a client where its window is on screen, so "screen coordinates" can
-    // only be relative to the toplevel here. See docs/gtk/gtk4-status.md.
+    // See wxGTKGetOriginInRoot() above: this is relative to the toplevel, and
+    // it already includes every ancestor's offset, so the allocation fixup the
+    // GTK3 branch does for windowless widgets is not wanted here.
     wxUnusedVar(source);
+    wxGTKGetOriginInRoot(m_wxwindow ? m_wxwindow : m_widget, &org_x, &org_y);
+
+    if (m_wxwindow)
+    {
+        // The client area starts inside the border wxPizza draws itself.
+        GtkBorder border;
+        WX_PIZZA(m_wxwindow)->get_border(border);
+        org_x += border.left;
+        org_y += border.top;
+    }
 #else
     gdk_window_get_origin( source, &org_x, &org_y );
-#endif
 
     if (!m_wxwindow)
     {
@@ -5942,6 +6031,7 @@ void wxWindowGTK::DoClientToScreen( int *x, int *y ) const
             org_y += a.y;
         }
     }
+#endif
 
 
     if (x)
@@ -5965,9 +6055,13 @@ void wxWindowGTK::DoScreenToClient( int *x, int *y ) const
     GdkWindow* const source = GTKGetMainWindow();
 #endif
 
-    if ((!m_isGtkPositionValid || source == nullptr) && !IsTopLevel() && m_parent)
+    bool fromParent = !m_isGtkPositionValid || source == nullptr;
+#ifdef __WXGTK4__
+    fromParent = true;  // see DoClientToScreen()
+#endif // __WXGTK4__
+
+    if (fromParent && !IsTopLevel() && m_parent)
     {
-        m_parent->DoScreenToClient(x, y);
         int xx, yy;
         DoGetPosition(&xx, &yy);
         if (m_wxwindow)
@@ -5977,22 +6071,21 @@ void wxWindowGTK::DoScreenToClient( int *x, int *y ) const
             xx += border.left;
             yy += border.top;
         }
-        if (y) *y -= yy;
+
+        // The exact inverse of DoClientToScreen() above, see the comments
+        // there for why the parent is asked for its origin rather than for the
+        // translation of this coordinate.
+        int ox = 0,
+            oy = 0;
+        m_parent->DoClientToScreen(&ox, &oy);
+
+        if (y) *y -= oy + yy;
         if (x)
         {
             if (GetLayoutDirection() != wxLayout_RightToLeft)
-                *x -= xx;
+                *x -= ox + xx;
             else
-            {
-                int w;
-                // undo RTL conversion done by parent
-                static_cast<wxWindowGTK*>(m_parent)->DoGetClientSize(&w, nullptr);
-                *x = w - *x;
-
-                DoGetClientSize(&w, nullptr);
-                *x -= xx;
-                *x = w - *x;
-            }
+                *x = ox - xx - *x;
         }
         return;
     }
@@ -6006,13 +6099,22 @@ void wxWindowGTK::DoScreenToClient( int *x, int *y ) const
     int org_x = 0;
     int org_y = 0;
 #ifdef __WXGTK4__
-    // gdk_window_get_origin() is gone and has no replacement: GTK4 does not
-    // tell a client where its window is on screen, so "screen coordinates" can
-    // only be relative to the toplevel here. See docs/gtk/gtk4-status.md.
+    // See wxGTKGetOriginInRoot() above: this is relative to the toplevel, and
+    // it already includes every ancestor's offset, so the allocation fixup the
+    // GTK3 branch does for windowless widgets is not wanted here.
     wxUnusedVar(source);
+    wxGTKGetOriginInRoot(m_wxwindow ? m_wxwindow : m_widget, &org_x, &org_y);
+
+    if (m_wxwindow)
+    {
+        // The client area starts inside the border wxPizza draws itself.
+        GtkBorder border;
+        WX_PIZZA(m_wxwindow)->get_border(border);
+        org_x += border.left;
+        org_y += border.top;
+    }
 #else
     gdk_window_get_origin( source, &org_x, &org_y );
-#endif
 
     if (!m_wxwindow)
     {
@@ -6024,6 +6126,7 @@ void wxWindowGTK::DoScreenToClient( int *x, int *y ) const
             org_y += a.y;
         }
     }
+#endif
 
     if (x)
     {
@@ -7222,10 +7325,35 @@ void wxWindowGTK::Update()
         gdk_display_flush(display);
 
 #ifdef __WXGTK4__
-        // gdk_window_process_updates() is gone: GTK4 drives painting from the
-        // frame clock and offers no way to force a repaint synchronously, so
-        // wxWindow::Update() can only ask for one and flush.
+        // gdk_window_process_updates() is gone. GTK4 does its layout and its
+        // painting in the frame clock's phases rather than synchronously, so
+        // merely queueing a redraw would leave Update() a no-op: the repaint,
+        // and any re-layout still pending with it, would not happen until some
+        // later frame, which is not what wxWindow::Update() promises. Running
+        // the main loop is not enough either -- wxYield() returns long before
+        // the clock next ticks.
+        //
+        // So ask for a frame and then pump the main loop until the clock says
+        // it has produced one. The wait is bounded because a window that is
+        // not being presented -- unmapped, occluded, or on a compositor which
+        // has stopped sending frame events -- may never produce another frame,
+        // and Update() must not hang in that case.
         gtk_widget_queue_draw(m_wxwindow ? m_wxwindow : m_widget);
+
+        if ( GdkFrameClock* const clock = gtk_widget_get_frame_clock(m_widget) )
+        {
+            const gint64 frame = gdk_frame_clock_get_frame_counter(clock);
+            const gint64 deadline = g_get_monotonic_time() + 500000; // 0.5s
+
+            gdk_frame_clock_request_phase(clock, GDK_FRAME_CLOCK_PHASE_PAINT);
+
+            while ( gdk_frame_clock_get_frame_counter(clock) == frame &&
+                    g_get_monotonic_time() < deadline )
+            {
+                if ( !g_main_context_iteration(nullptr, FALSE) )
+                    g_usleep(1000);
+            }
+        }
 #else
         wxGCC_WARNING_SUPPRESS(deprecated-declarations)
         gdk_window_process_updates(window, true);

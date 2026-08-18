@@ -544,6 +544,18 @@ void wxGtkStyleContext::AddWidget(GType type)
         m_root = widget;
         g_object_ref_sink(m_root);
     }
+    else if (GTK_IS_WINDOW(m_current))
+    {
+        // The exception to the note below. A GtkWindow is a toplevel: GTK
+        // tracks it globally and validates its CSS node tree whether or not
+        // we ever show it, so this one really does get laid out. Attaching to
+        // it with gtk_widget_set_parent() leaves its layout manager unaware of
+        // the child, which GTK reports as
+        //   Unable to present ... unknown auxiliary child ... GtkWindow
+        // and then aborts on, in gtk_css_node_validate(). Since every style
+        // query starts at AddWindow(), that made any of them a latent abort.
+        gtk_window_set_child(GTK_WINDOW(m_current), widget);
+    }
     else
     {
         // gtk_widget_set_parent() is the generic low-level attach; verified to
@@ -686,7 +698,14 @@ wxGtkStyleContext::~wxGtkStyleContext()
     for (GSList* p = m_created; p; p = p->next)
     {
         GtkWidget* const widget = GTK_WIDGET(p->data);
-        if (widget != m_root)
+        if (widget == m_root)
+            continue;
+
+        // Detach the way it was attached, see AddWidget().
+        GtkWidget* const parent = gtk_widget_get_parent(widget);
+        if (parent != nullptr && GTK_IS_WINDOW(parent))
+            gtk_window_set_child(GTK_WINDOW(parent), nullptr);
+        else
             gtk_widget_unparent(widget);
     }
     g_slist_free(m_created);

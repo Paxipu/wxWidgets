@@ -25,10 +25,23 @@
 #include "wx/gtk/private/stylecontext.h"
 
 
-#if GTK_CHECK_VERSION(3,6,0)
+#if GTK_CHECK_VERSION(3,6,0) && !defined(__WXGTK4__)
     // GtkSearchEntry is available only for GTK+ >= 3.6
     #define wxHAS_GTK_SEARCH_ENTRY
-#endif // GTK >= 3.6
+#endif // GTK >= 3.6 && !GTK4
+
+// Under GTK4 GtkSearchEntry is no longer a GtkEntry: it derives straight from
+// GtkWidget and only implements GtkEditable. It therefore has none of the
+// entry API this class is built on -- the icons that carry the search menu and
+// the cancel button, gtk_entry_set_activates_default(), the length limit, the
+// clipboard signals -- and every use of them here is a failed cast at runtime.
+//
+// Rather than reimplement all of that against a widget that does not offer it,
+// use the plain GtkEntry fallback which this file has carried since GTK 3.0
+// for exactly this situation: it draws the same two icons itself and behaves
+// identically apart from the search-as-you-type delay, which wx does not
+// expose in any case. wxSearchCtrl is thus fully functional under GTK4, just
+// not built out of the native search widget.
 
 namespace // anonymous
 {

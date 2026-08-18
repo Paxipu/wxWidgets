@@ -169,9 +169,17 @@ void wxToggleButton::SetLabel(const wxString& label)
         return;
     }
 
-    const wxString labelGTK = GTKConvertMnemonics(label);
+#ifdef __WXGTK4__
+    // Under GTK4 gtk_button_set_label() replaces the button's child, so it
+    // would drop the image wxAnyButton::SetLabel() has just arranged for.
+    // See the same guard in wxButton::SetLabel().
+    if ( !GTKShowsImage() )
+#endif // __WXGTK4__
+    {
+        const wxString labelGTK = GTKConvertMnemonics(label);
 
-    gtk_button_set_label(GTK_BUTTON(m_widget), labelGTK.utf8_str());
+        gtk_button_set_label(GTK_BUTTON(m_widget), labelGTK.utf8_str());
+    }
 
     GTKApplyWidgetStyle( false );
 }

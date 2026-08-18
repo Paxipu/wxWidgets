@@ -521,7 +521,15 @@ bool wxSlider::Create(wxWindow *parent,
     g_signal_connect(m_scale, "button_release_event", G_CALLBACK(gtk_button_release_event), this);
 #endif // __WXGTK4__/!__WXGTK4__
     g_signal_connect(m_scale, "move_slider", G_CALLBACK(gtk_move_slider), this);
+#ifdef __WXGTK4__
+    // The "format-value" signal is gone; a plain callback replaces it. The
+    // callback has the same signature the signal handler had, so the same
+    // function serves for both.
+    gtk_scale_set_format_value_func(GTK_SCALE(m_scale), gtk_format_value,
+                                    nullptr, nullptr);
+#else
     g_signal_connect(m_scale, "format_value", G_CALLBACK(gtk_format_value), nullptr);
+#endif // __WXGTK4__/!__WXGTK4__
     g_signal_connect(m_scale, "value_changed", G_CALLBACK(gtk_value_changed), this);
 #ifndef __WXGTK4__
     gulong handler_id = g_signal_connect(m_scale, "event_after", G_CALLBACK(gtk_event_after), this);

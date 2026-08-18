@@ -783,7 +783,27 @@ void wxTextEntry::SetInsertionPoint(long pos)
 
 long wxTextEntry::GetInsertionPoint() const
 {
-    return gtk_editable_get_position(GetEditable());
+    GtkEditable* const editable = GetEditable();
+
+#ifdef __WXGTK4__
+    // GtkEntry does not report its caret. Its GtkEditable implementation
+    // answers out of the selection instead, and does so inconsistently:
+    // gtk_editable_get_position() returns the selection's *end* and the
+    // "cursor-position" property its *start*, whichever end the caret is
+    // really at. The GtkText delegate underneath is the only thing that
+    // knows, and it answers exactly as GTK3's GtkEntry did.
+    //
+    // This matters because SetSelection() below deliberately passes the
+    // range backwards, so that the caret lands at the start of the
+    // selection as wx (and MSW) require rather than at its end. Asking the
+    // GtkEntry undoes that: it reports the end again no matter what.
+    //
+    // See build/tools/gtk4-invariants.c, which pins both halves of this.
+    if ( GtkEditable* const delegate = gtk_editable_get_delegate(editable) )
+        return gtk_editable_get_position(delegate);
+#endif // __WXGTK4__
+
+    return gtk_editable_get_position(editable);
 }
 
 long wxTextEntry::GetLastPosition() const

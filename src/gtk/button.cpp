@@ -297,12 +297,25 @@ void wxButton::SetLabel( const wxString &lbl )
     wxGCC_WARNING_RESTORE()
 #endif
 
-    // this call is necessary if the button had been initially created without
-    // a (text) label -- then we didn't use gtk_button_new_with_mnemonic() and
-    // so "use-underline" GtkButton property remained unset
-    gtk_button_set_use_underline(GTK_BUTTON(m_widget), TRUE);
-    const wxString labelGTK = GTKConvertMnemonics(label);
-    gtk_button_set_label(GTK_BUTTON(m_widget), labelGTK.utf8_str());
+#ifdef __WXGTK4__
+    // wxAnyButton::SetLabel() above has already built the button's child --
+    // a lone image, or a box holding an image and a label -- because GTK4 has
+    // no gtk_button_set_image() to combine the two for us. Going on to call
+    // gtk_button_set_label() would undo that: under GTK4 it *replaces* the
+    // button's child with a plain GtkLabel, dropping the image on the floor,
+    // and the next GTKUpdateBitmap() then finds no image to update. Under
+    // GTK3 the two calls were independent and both were needed.
+    if ( !GTKShowsImage() )
+#endif // __WXGTK4__
+    {
+        // this call is necessary if the button had been initially created
+        // without a (text) label -- then we didn't use
+        // gtk_button_new_with_mnemonic() and so "use-underline" GtkButton
+        // property remained unset
+        gtk_button_set_use_underline(GTK_BUTTON(m_widget), TRUE);
+        const wxString labelGTK = GTKConvertMnemonics(label);
+        gtk_button_set_label(GTK_BUTTON(m_widget), labelGTK.utf8_str());
+    }
 #ifndef __WXGTK4__
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     gtk_button_set_use_stock(GTK_BUTTON(m_widget), FALSE);

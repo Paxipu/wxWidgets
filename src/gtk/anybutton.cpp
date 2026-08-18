@@ -262,9 +262,16 @@ void ButtonSetContent(GtkWidget* button, GtkWidget* image, const wxString& label
     {
         GtkWidget* const box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
         gtk_box_append(GTK_BOX(box), image);
-        gtk_box_append(GTK_BOX(box), gtk_label_new(label.utf8_str()));
+
+        // The label is ours rather than the button's, so the underline
+        // handling gtk_button_set_use_underline() would have done has to be
+        // done here instead.
+        GtkWidget* const lbl = gtk_label_new_with_mnemonic(label.utf8_str());
+        gtk_box_append(GTK_BOX(box), lbl);
+
         gtk_widget_set_halign(box, GTK_ALIGN_CENTER);
         gtk_button_set_child(GTK_BUTTON(button), box);
+        gtk_label_set_mnemonic_widget(GTK_LABEL(lbl), button);
     }
     else
     {
@@ -276,6 +283,15 @@ void ButtonSetContent(GtkWidget* button, GtkWidget* image, const wxString& label
 }
 
 } // anonymous namespace
+
+#endif // __WXGTK4__
+
+#ifdef __WXGTK4__
+
+bool wxAnyButton::GTKShowsImage() const
+{
+    return ButtonGetImage(m_widget) != nullptr;
+}
 
 #endif // __WXGTK4__
 
@@ -314,8 +330,10 @@ void wxAnyButton::SetLabel(const wxString& label)
 
 #ifdef __WXGTK4__
     // Same idea as below, but the two configurations are a lone image and a
-    // box holding an image and a label, both of which we build ourselves.
-    ButtonSetContent(m_widget, ButtonGetImage(m_widget), label);
+    // box holding an image and a label, both of which we build ourselves --
+    // including the mnemonic handling gtk_button_set_label() would have done.
+    ButtonSetContent(m_widget, ButtonGetImage(m_widget),
+                     GTKConvertMnemonics(label));
 #else
     GtkWidget* child = gtk_bin_get_child(GTK_BIN(m_widget));
     if (WX_GTK_IS_IMAGE(child))

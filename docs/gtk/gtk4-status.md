@@ -3287,12 +3287,55 @@ single run:
 - A `GtkWindow` being passed as the *child* of `gtk_widget_set_parent()` -- a
   conditional breakpoint on exactly that never fires.
 
+### The trigger, finally, is two things
+
+Narrowing kept removing conditions until almost nothing was left. The abort
+needs only:
+
+1. a `wxTopLevelWindow` that has a **wx parent** and has been **shown**, and
+2. enough elapsed time in the main loop for a frame clock pass.
+
+| | Aborts |
+|---|---|
+| One shown frame | 0 / 5 |
+| Child frame **with a wx parent**, shown | **5 / 5** |
+| Parent frame never shown | 0 / 5 |
+| Second frame with **no** wx parent, shown | 0 / 5 |
+| As above, with **no style queries at all** | **5 / 5** |
+
+Two unrelated toplevels are fine, so it is wx's handling of the *wx-parented*
+one that matters, not the window count.
+
+Everything else this hunt was built around turned out to be incidental --
+`Iconize()`, `wxPersistenceManager`, and then the system colour queries, which
+looked essential right up until removing them changed nothing. Each of those
+was a real observation about the failing test; none of them was the cause.
+
+Ruled out, each re-tested against the deterministic probe rather than one run:
+
+- Memory corruption (valgrind clean while aborting 3/3).
+- `wxPizza` tracking the toplevel in `m_children` without parenting it:
+  removing the tracking entirely changes nothing.
+- Creating and destroying a scratch `GtkWindow` per style query: sharing one
+  across queries changes nothing, and the queries are not needed anyway.
+- wx painting from inside GTK's snapshot vfunc. This one *is* real and worth
+  fixing on its own -- `wxSystemSettings::GetColour()` builds and destroys a
+  whole widget tree, rooted at a real `GtkWindow`, and a `gdb` breakpoint shows
+  it being called from inside `pizza_snapshot()` -- but suppressing the paint
+  does not stop the abort.
+- `gtk_widget_set_parent()` with a `GtkWindow` as the child: a conditional
+  breakpoint on exactly that never fires.
+
 ### Next
 
-1. The `cssnode->parent == NULL` abort. The question is now specific: what does
-   wx do differently for a toplevel that has a wx parent -- `wxPizza::put()`
-   records it in `m_children` without making it a GTK child -- that leaves
-   GTK validating a CSS node with a parent. Use the probe, not the suite.
+1. The `cssnode->parent == NULL` abort. The question is now as small as it can
+   get: **what does showing a wx-parented `wxTopLevelWindow` do that showing an
+   unparented one does not?** `wxPizza::put()` is ruled out, so the difference
+   is elsewhere in `wxTopLevelWindowGTK::Show()` / `wxWindowGTK::Show()`.
+   `docs/gtk/probes/wx-stylecontext-abort.cpp` answers in fifteen seconds.
+2. Style queries from inside the snapshot vfunc (above): wx builds and destroys
+   a `GtkWindow` per `GetColour()` call, during painting. Not this bug, but not
+   right either.
 2. A deliberate audit of every refcounted object the port hands to or takes
    from GTK4, against the GIR annotations, rather than waiting for each one to
    crash.

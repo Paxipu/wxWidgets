@@ -1,46 +1,59 @@
-// Reproducer: wxGTK4 aborts inside GTK's CSS machinery during style queries
-// when a wxTopLevelWindow with a wx parent exists.
+// Reproducer: wxGTK4 aborts inside GTK's CSS machinery when a shown
+// wxTopLevelWindow has a wx parent.
 //
 //     Gtk:ERROR:../../../gtk/gtkcssnode.c:1358:gtk_css_node_validate:
 //     assertion failed: (cssnode->parent == NULL)
 //
 // This is the abort that stops test_gui at 445 of 490 test cases, in
-// wxPersistTLW. It first looked like an Iconize() bug, because that is what
-// the failing test does; it is not. Iconize() is not needed at all.
+// wxPersistTLW.
 //
-// Unlike the test, this is deterministic -- but only if the main loop is
-// given real elapsed time. The queued CSS validation runs on a later frame
-// clock pass, so without the wxMilliSleep()/wxYield() loop below the process
-// usually exits first and the abort looks intermittent (about 13 runs in 20).
-// That is why this sleeps rather than just yielding: it is the difference
-// between a flaky reproducer and a reliable one.
+// The trigger is only two things:
+//
+//   1. a wxTopLevelWindow that has a *wx parent* and has been shown, and
+//   2. enough elapsed time in the main loop for a frame clock pass.
+//
+// That is all. Everything the failing test does around it -- Iconize(),
+// wxPersistenceManager, geometry -- is incidental, and so are the system
+// colour queries this reproducer used to need: mode 5 below removes them
+// entirely and still aborts every time.
+//
+// The second condition is what made this look intermittent. GTK queues the
+// CSS validation and runs it on a later frame clock pass, so with only
+// wxYield() the process usually exits first (about 13 aborts in 20). The
+// wxMilliSleep() below takes it to 5 in 5. Valgrind does the same thing by
+// accident, aborting 3 times in 3 purely from its slowdown -- while reporting
+// no invalid read or write at all, which is how we know this is not memory
+// corruption.
 //
 // Build and run (a display is required):
 //     g++ -g -o wx-stylecontext-abort wx-stylecontext-abort.cpp \
 //         $(../../../../wxbuild-gtk4/wx-config --cxxflags --libs)
-//     xvfb-run -a ./wx-stylecontext-abort 1
+//     xvfb-run -a ./wx-stylecontext-abort 5
 //
-// Modes, and what each one establishes:
+// Modes, and what each establishes:
 //
-//   0  one shown frame, no child           -> survives
-//   1  child frame WITH a wx parent, shown -> ABORTS, every time
-//   2  frame never shown                   -> survives
-//   3  second frame with NO parent, shown  -> survives
+//   0  one shown frame, no child                    -> survives
+//   1  child frame WITH a wx parent, shown          -> ABORTS 5/5
+//   2  parent frame never shown                     -> survives
+//   3  second frame with NO wx parent, shown        -> survives 0/5
+//   5  same as 1 but with no style queries at all   -> ABORTS 5/5
 //
-// So the trigger is a *parented*, *shown* wxTopLevelWindow existing while
-// wxGtkStyleContext builds and tears down its scratch widget tree. Two
-// unrelated toplevels are fine, so it is wx's handling of the parented one
-// that matters, not the number of windows.
+// So it is wx's handling of a *wx-parented* toplevel that matters, not the
+// number of windows on screen: two unrelated toplevels are fine.
 //
-// Ruled out so far, each re-tested against this reproducer:
-//   - Memory corruption. Valgrind reports no invalid read or write; under
-//     valgrind it aborts 3 times out of 3, purely from the slowdown.
-//   - wxGtkStyleContext::AddWidget() populating a widget before attaching it,
-//     leaving a queued root validation. Reordering changed nothing.
-//   - Tearing down the scratch toplevel. Leaking it deliberately changed
-//     nothing.
-//   - gtk_widget_set_parent() being called with a GtkWindow as the child. A
-//     conditional breakpoint on that never fires.
+// Ruled out, each re-tested against this reproducer rather than a single run:
+//   - Memory corruption (valgrind clean).
+//   - wxPizza tracking the toplevel in m_children without parenting it:
+//     removing the tracking entirely changes nothing.
+//   - Creating and destroying a scratch GtkWindow per style query: sharing one
+//     across queries changes nothing, and mode 5 shows the queries are not
+//     needed at all.
+//   - wx painting from inside GTK's snapshot vfunc: suppressing the paint
+//     changes nothing.
+//   - gtk_widget_set_parent() being called with a GtkWindow as the child: a
+//     conditional breakpoint on exactly that never fires.
+//   - Iconize(), which is what the failing test does and what this hunt was
+//     originally built around.
 
 #include "wx/wx.h"
 #include "wx/settings.h"
@@ -57,7 +70,7 @@ public:
             top->Show();
         wxYield();
 
-        if (g_mode == 1 || g_mode == 3)
+        if (g_mode == 1 || g_mode == 3 || g_mode == 5)
         {
             wxFrame* const f = new wxFrame(g_mode == 3 ? nullptr : top,
                                            wxID_ANY, "child");
@@ -65,14 +78,16 @@ public:
             wxYield();
         }
 
-        // The style queries: each builds a scratch widget tree rooted at a
-        // real GtkWindow, reads values off it, and destroys it again.
         for (int i = 0; i < 30; i++)
         {
-            (void)wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
-            (void)wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE);
-            (void)wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
+            if (g_mode != 5)
+            {
+                (void)wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
+                (void)wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE);
+                (void)wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
+            }
 
+            // Real elapsed time, not just a yield: see the note above.
             wxMilliSleep(10);
             wxYield();
         }

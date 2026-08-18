@@ -515,6 +515,11 @@ void wxGUIEventLoop::DoYieldFor(long eventsToProcess)
 
     wxGTKSettleFrames();
 
+    // The frame above is where GTK4's deferred focus move would have happened,
+    // so whatever wxWindowGTK is watching for it need not watch any longer.
+    extern void wxGTKClearFocusRestoreMark();
+    wxGTKClearFocusRestoreMark();
+
     wxEventLoopBase::DoYieldFor(eventsToProcess);
 #else
     // temporarily replace the global GDK event handler with our function, which

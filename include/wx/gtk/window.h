@@ -344,6 +344,12 @@ public:
     // Whether the GtkAllocation and GdkWindow positions are known to be correct
     bool m_isGtkPositionValid;
 
+#ifdef __WXGTK4__
+    // Creation order, used only to recognize the focus GTK4 hands to a window
+    // created after the one holding it was destroyed: see GTKHandleFocusIn().
+    unsigned m_creationSerial;
+#endif // __WXGTK4__
+
     // see the docs in src/gtk/window.cpp
     GtkWidget           *m_widget;          // mostly the widget seen by the rest of GTK
     GtkWidget           *m_wxwindow;        // mostly the client area as per wxWidgets

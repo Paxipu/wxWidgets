@@ -240,6 +240,41 @@ static wxWindowGTK *gs_lastFocus = nullptr;
 // GTKAddDeferredFocusOut() for details)
 static wxWindowGTK *gs_deferredFocusOut = nullptr;
 
+#ifdef __WXGTK4__
+// When the widget holding the focus is destroyed, GTK4 does not simply drop
+// the focus: it remembers that the window needs one and gives it to the next
+// focusable widget added, even one added before the next frame. So a wxWindow
+// created straight after another one was destroyed can find itself focused
+// without wx having asked for it -- and, for something like wxDataViewCtrl,
+// selecting a row as a result. GTK3 had no such behaviour, and there is no way
+// to decline it at GTK level: gtk_window_set_focus(nullptr) does not cancel it
+// and a widget with can-focus=FALSE is skipped by the restore but then cannot
+// be focused explicitly either.
+//
+// Recognize it instead. Every wxWindow gets a creation serial; when a focused
+// one is destroyed the serial of that moment is remembered here, and a focus
+// arriving at a window created after it, which wx did not ask for, is the
+// restore rather than anything real. The mark is one-shot and is dropped again
+// at the end of the event loop turn, so it can never suppress a focus change
+// the user actually made.
+static unsigned gs_windowSerial = 0;
+static unsigned gs_focusRestoreAfter = 0;
+
+// The window a restored focus was declined for, if any. GTK still considers it
+// focused -- taking the focus away again would only make GTK look for somewhere
+// else to put it, and it would land on the next window created, so the
+// alternative is an endless game of catch. wx simply does not report it, and
+// ignores the matching focus-out when it eventually arrives.
+static wxWindowGTK *gs_focusDeclined = nullptr;
+
+// Called from the event loop, at a point by which GTK's deferred focus move
+// has either happened or is not going to.
+void wxGTKClearFocusRestoreMark()
+{
+    gs_focusRestoreAfter = 0;
+}
+#endif // __WXGTK4__
+
 // global variables because GTK+ DnD want to have the
 // mouse event that caused it
 GdkEvent    *g_lastMouseEvent = nullptr; // use SetLastMouseEvent below
@@ -3842,6 +3877,10 @@ wxMouseState wxGetMouseState()
 
 void wxWindowGTK::Init()
 {
+#ifdef __WXGTK4__
+    m_creationSerial = ++gs_windowSerial;
+#endif // __WXGTK4__
+
     // GTK specific
     m_widget = nullptr;
     m_wxwindow = nullptr;
@@ -4076,6 +4115,18 @@ void wxWindowGTK::GTKDisconnect(void* instance)
 wxWindowGTK::~wxWindowGTK()
 {
     SendDestroyEvent();
+
+#ifdef __WXGTK4__
+    // See gs_focusRestoreAfter: this is the destruction whose focus GTK4 will
+    // try to pass on to whatever is created next.
+    // gs_focusDeclined too: GTK still considers that window focused even
+    // though wx does not, so destroying it starts the same restore again.
+    if (gs_currentFocus == this || gs_focusDeclined == this)
+        gs_focusRestoreAfter = gs_windowSerial;
+
+    if (gs_focusDeclined == this)
+        gs_focusDeclined = nullptr;
+#endif // __WXGTK4__
 
     if (gs_currentFocus == this)
         gs_currentFocus = nullptr;
@@ -6379,6 +6430,26 @@ bool wxWindowGTK::GTKHandleFocusIn()
     // handler issues a repaint
     const bool retval = m_wxwindow ? true : false;
 
+#ifdef __WXGTK4__
+    // See gs_focusRestoreAfter: a focus wx did not ask for, arriving at a
+    // window created after the focused one was destroyed, is GTK4 passing the
+    // focus on rather than anything the user or the program did. Hand it back.
+    if ( gs_focusRestoreAfter && gs_pendingFocus != this &&
+            m_creationSerial > gs_focusRestoreAfter )
+    {
+        gs_focusRestoreAfter = 0;
+        gs_focusDeclined = this;
+
+        wxLogTrace(TRACE_FOCUS,
+                   "declining focus restored by GTK to %s",
+                   wxDumpWindow(this));
+
+        return retval;
+    }
+
+    gs_focusRestoreAfter = 0;
+#endif // __WXGTK4__
+
 
     // NB: if there's still unprocessed deferred focus-out event (see
     //     GTKHandleFocusOut() for explanation), we need to process it first so
@@ -6454,6 +6525,16 @@ bool wxWindowGTK::GTKHandleFocusOut()
     // Disable default focus handling for custom windows since the default GTK+
     // handler issues a repaint
     const bool retval = m_wxwindow ? true : false;
+
+#ifdef __WXGTK4__
+    // The focus-in for this window was declined, so wx never reported it as
+    // focused and must not report it losing what it never had.
+    if ( gs_focusDeclined == this )
+    {
+        gs_focusDeclined = nullptr;
+        return retval;
+    }
+#endif // __WXGTK4__
 
     // If this window is still the pending focus one, reset that pointer as
     // we're not going to have focus any longer and DoFindFocus() must not

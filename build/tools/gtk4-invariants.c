@@ -1040,6 +1040,46 @@ static void test_layout_manager_dispatch(void)
     g_object_unref(f);
 }
 
+static void test_entry_caret_reporting(void)
+{
+    GtkWidget* entry;
+    GtkEditable* ed;
+    GtkEditable* del;
+    int cur = -1, bound = -1;
+
+    printf("Where a GtkEntry reports its caret:\n");
+
+    entry = gtk_entry_new();
+    g_object_ref_sink(entry);
+    ed = GTK_EDITABLE(entry);
+    gtk_editable_set_text(ed, "0123456789");
+
+    del = gtk_editable_get_delegate(ed);
+    check(del != NULL && GTK_IS_TEXT(del),
+          "a GtkEntry delegates its GtkEditable to a GtkText",
+          "textentry.cpp reads the caret off the delegate; without one it "
+          "falls back to the GtkEntry, which does not report it");
+
+    /* wxTextEntry::SetSelection() passes the range backwards on purpose, so
+     * that the caret ends up at the *start* of the selection as wx and MSW
+     * require rather than at its end.  GtkText honours that.  GtkEntry does
+     * not report it: it answers out of the selection instead. */
+    gtk_editable_select_region(ed, 4, 2);
+
+    check(del && gtk_editable_get_position(del) == 2,
+          "select_region(4,2) leaves the GtkText caret at 2",
+          "the trick wxTextEntry::SetSelection() relies on to put the caret "
+          "at the start of the selection no longer works at all");
+
+    g_object_get(ed, "cursor-position", &cur, "selection-bound", &bound, NULL);
+    check(gtk_editable_get_position(ed) != 2 || cur != 2 || bound != 4,
+          "and GtkEntry itself still does not simply agree with it",
+          "GtkEntry now reports the caret correctly, so the delegate detour "
+          "in wxTextEntry::GetInsertionPoint() can be dropped");
+
+    g_object_unref(entry);
+}
+
 static void test_indicator_nodes(void)
 {
     GtkWidget* checkbtn;
@@ -1128,6 +1168,8 @@ int main(void)
     test_version_check_semantics();
     printf("\n");
     test_layout_manager_dispatch();
+    printf("\n");
+    test_entry_caret_reporting();
 #ifdef HAVE_XTEST
     printf("\n");
     test_gesture_claim_semantics();

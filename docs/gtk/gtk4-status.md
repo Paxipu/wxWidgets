@@ -3540,6 +3540,26 @@ never suppress a focus change the user actually made.
   recorded earlier: a single-line entry's scroll position is not reachable
   through GTK4's API, so hit testing past the visible text is off.
 
+## Progress update 37: the samples run
+
+All **76 samples build and run** under GTK 4.14, which is what all of this was
+for. Two things had to be fixed to get there, neither of them large:
+
+* `wxTaskBarIconBase::IsAvailable()` was left undefined. The whole of
+  `src/gtk/taskbar.cpp` is compiled out under GTK4 -- `GtkStatusIcon`, which the
+  class is built on, was removed with no replacement, since the freedesktop
+  system tray protocol is not something GTK implements any more -- and the stub
+  that remains did not cover this one function. Every program that so much as
+  mentions wxTaskBarIcon failed to link. It now returns false.
+* `samples/widgets/native.cpp` handed a `GtkMenu` to a `GtkMenuButton`. Under
+  GTK4 that takes a `GMenuModel`, and wxMenu is built out of one, so it can be
+  passed directly.
+
+Spot checks with a screen capture confirm the samples render properly: the
+widgets sample's tree, static boxes, log window and menu bar; the richtext
+sample's toolbar, images, styled text and style list; the AUI demo's docked
+panes, notebooks and toolbars.
+
 ### Next
 2. Style queries from inside the snapshot vfunc (above): wx builds and destroys
    a `GtkWindow` per `GetColour()` call, during painting. Not this bug, but not
@@ -3547,4 +3567,4 @@ never suppress a focus change the user actually made.
 2. A deliberate audit of every refcounted object the port hands to or takes
    from GTK4, against the GIR annotations, rather than waiting for each one to
    crash.
-3. Running the samples, which is what all of this was for.
+3. The two remaining test failures, both described above.

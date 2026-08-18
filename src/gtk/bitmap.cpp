@@ -525,13 +525,26 @@ wxBitmap::wxBitmap(const wxCursor& cursor)
     // either texture-based or a named CSS cursor (see cursor.cpp's
     // InitFromStock(), which has no backing texture at all), so this can
     // only recover a bitmap for cursors actually built from an image
-    // (InitFromBitmap()/InitFromImage()). Not yet runtime-verified.
-    GdkTexture* texture = gdk_cursor_get_texture(cursor.GetCursor());
-    if (texture)
+    // (InitFromBitmap()/InitFromImage()).
+    //
+    // Both steps below can legitimately fail, and neither reports it by any
+    // means other than returning null: a named cursor has no texture at all,
+    // and gdk_pixbuf_get_from_texture() is documented nullable. Leaving the
+    // bitmap invalid is the right answer for both -- wxBitmap(GdkPixbuf*)
+    // does not check its argument, so passing a null through produced three
+    // GDK_IS_PIXBUF criticals and then a segfault.
+    if (GdkCursor* const gdkCursor = cursor.GetCursor())
     {
-        GdkPixbuf* pixbuf = gdk_pixbuf_get_from_texture(texture);
-        *this = wxBitmap(pixbuf);
-        g_object_unref(pixbuf);
+        if (GdkTexture* const texture = gdk_cursor_get_texture(gdkCursor))
+        {
+            // wxBitmap(GdkPixbuf*) stores the pixbuf without taking a
+            // reference of its own, i.e. it takes ownership -- which is why
+            // the GTK3 branch below does not unref either. Unreffing here
+            // left m_pixbufNoMask dangling, and ConvertToImage() then read
+            // through it.
+            if (GdkPixbuf* const pixbuf = gdk_pixbuf_get_from_texture(texture))
+                *this = wxBitmap(pixbuf);
+        }
     }
 #elif GTK_CHECK_VERSION(2,8,0)
     if (wx_is_at_least_gtk2(8))

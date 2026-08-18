@@ -6646,6 +6646,19 @@ void wxWindowGTK::SetFocus()
     if (gs_currentFocus != this)
         gs_pendingFocus = this;
 
+#ifdef __WXGTK4__
+    // GTK already gave this window the focus and wx declined it (see
+    // gs_focusDeclined). Now that wx does want it there is nothing left for
+    // GTK to do -- grabbing a focus it already holds produces no further
+    // focus-in -- so report the one that was suppressed instead.
+    if ( gs_focusDeclined == this )
+    {
+        gs_focusDeclined = nullptr;
+        GTKHandleFocusIn();
+        return;
+    }
+#endif // __WXGTK4__
+
     // Toplevel must be active for child to actually receive focus.
     // But avoid activating if tlw is not yet shown, as that will
     // cause it to be immediately shown.

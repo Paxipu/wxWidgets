@@ -6725,6 +6725,20 @@ void wxWindowGTK::RealizeTabOrder()
                 for (GList* p = chain; p; p = p->next)
                 {
                     GtkWidget* const w = GTK_WIDGET(p->data);
+
+                    // gtk_widget_insert_after() *parents* the widget, it does
+                    // not merely reorder it, so it may only be used on
+                    // widgets that already are our children. A wxTopLevelWindow
+                    // with a wx parent is in GetChildren() but must never be a
+                    // GTK-level child: parenting one here gave a GtkWindow a
+                    // CSS parent, and GTK aborts the next time it validates
+                    // that window as a root:
+                    //   gtk_css_node_validate: assertion failed:
+                    //       (cssnode->parent == NULL)
+                    // See docs/gtk/probes/wx-stylecontext-abort.cpp.
+                    if (gtk_widget_get_parent(w) != m_wxwindow)
+                        continue;
+
                     gtk_widget_insert_after(w, m_wxwindow, prev);
                     prev = w;
                 }

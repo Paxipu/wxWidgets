@@ -3190,9 +3190,41 @@ allocate pass, driven from the main loop. So the bad state is established
 earlier and only detected there, and the next step is to find which GtkWindow
 and who parented it, not to keep guessing at destruction paths.
 
+### Narrowing the abort with a reproducer
+
+Guessing at destruction paths got nowhere; a 30-line reproducer got somewhere
+immediately. Bisecting what the test does, one step at a time, isolated the
+trigger to **a `wxFrame` with a parent, shown, then `Iconize()`d** -- dropping
+any one of the three makes it survive.
+
+From there a conditional breakpoint on `gtk_widget_set_parent()`, taken when
+the parent is a `GtkWindow`, named the caller outright:
+`wxGtkStyleContext::AddWidget()`.
+
+That code builds a real widget tree to read style values off, and its comment
+argued `gtk_widget_set_parent()` was safe "because these widgets are never
+realized or size-allocated". That holds for every node except the first, which
+is always a `GtkWindow` -- and **a GtkWindow is a toplevel GTK tracks and
+validates whether or not it is ever shown**. Every style query in the port was
+therefore a latent abort. Fixed by using `gtk_window_set_child()` for that one
+case.
+
+**The reproducer now survives; the test still aborts.** So the reproducer is
+not faithful to it -- the test drives three frames through
+`wxPersistenceManager` -- and a second attach path still emits the same warning
+once. That one is not a `gtk_widget_set_parent()` call: a breakpoint on it with
+a GtkWindow parent no longer fires at all. GTK4 also attaches popovers to
+widgets as "auxiliary children" outside the layout manager, which is the
+wording the warning uses and the next thing to look at.
+
+The technique is the transferable part: **bisect into a standalone reproducer,
+then breakpoint the GTK call that must be involved.** Both steps were cheap;
+the three theories before them were not.
+
 ### Next
 
-1. The `cssnode->parent == NULL` abort in `wxPersistTLW`.
+1. The `cssnode->parent == NULL` abort in `wxPersistTLW`, and the second
+   attach path still warning once.
 2. A deliberate audit of every refcounted object the port hands to or takes
    from GTK4, against the GIR annotations, rather than waiting for each one to
    crash.

@@ -803,12 +803,13 @@ void wxDropTarget::GtkRegisterWidget( GtkWidget *widget )
         }
     }
 
+    // Note that gtk_drop_target_async_new() takes ownership of the formats
+    // (they are annotated "transfer full"), so they must not be unreffed
+    // here: doing that frees them while the drop target is still holding
+    // them, and the widget's eventual destruction then unrefs freed memory.
     GtkDropTargetAsync* const target = gtk_drop_target_async_new(
         formats, GdkDragAction(GDK_ACTION_COPY | GDK_ACTION_MOVE |
                                GDK_ACTION_LINK));
-
-    if ( formats )
-        gdk_content_formats_unref(formats);
 
     g_object_set_data(G_OBJECT(target), "wx-drop-target", this);
 

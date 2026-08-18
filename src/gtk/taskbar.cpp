@@ -368,6 +368,16 @@ bool wxTaskBarIcon::PopupMenu(wxMenu* menu)
 #else
 wxIMPLEMENT_DYNAMIC_CLASS(wxTaskBarIcon, wxEvtHandler);
 
+// GtkStatusIcon, which this class is built on, was removed in GTK4 with no
+// replacement: the freedesktop system tray protocol it spoke is not something
+// GTK implements any more, and the StatusNotifierItem D-Bus interface that
+// took its place is out of scope for a widget toolkit. So there is no tray
+// icon under GTK4, and this says so rather than pretending to install one.
+bool wxTaskBarIconBase::IsAvailable()
+{
+    return false;
+}
+
 wxTaskBarIcon::wxTaskBarIcon(wxTaskBarIconType)
 {
     m_priv = nullptr;

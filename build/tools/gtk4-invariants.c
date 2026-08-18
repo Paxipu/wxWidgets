@@ -1080,6 +1080,96 @@ static void test_entry_caret_reporting(void)
     g_object_unref(entry);
 }
 
+/* ------------------------------------------------------------------------ *
+ * Layout and painting happen on the frame clock, not synchronously.
+ * ------------------------------------------------------------------------ */
+
+/* Ask for a frame and run the main loop until the clock has produced one.
+   This is exactly what wxWindow::Update() does under GTK4. */
+static gboolean pump_one_frame(GtkWidget* w)
+{
+    GdkFrameClock* clock = gtk_widget_get_frame_clock(w);
+    gint64 frame, deadline;
+
+    if (!clock)
+        return FALSE;
+
+    frame = gdk_frame_clock_get_frame_counter(clock);
+    deadline = g_get_monotonic_time() + 2000000; /* 2s */
+
+    gdk_frame_clock_request_phase(clock, GDK_FRAME_CLOCK_PHASE_PAINT);
+
+    while (gdk_frame_clock_get_frame_counter(clock) == frame &&
+           g_get_monotonic_time() < deadline)
+    {
+        if (!g_main_context_iteration(NULL, FALSE))
+            g_usleep(1000);
+    }
+
+    return gdk_frame_clock_get_frame_counter(clock) != frame;
+}
+
+static void test_frame_clock_layout(void)
+{
+    GtkWidget* win;
+    GtkWidget* fixed;
+    GtkWidget* child;
+    int i;
+    int widthRightAfterShow;
+
+    printf("Layout is deferred to the frame clock:\n");
+
+    win = gtk_window_new();
+    fixed = gtk_fixed_new();
+    child = gtk_button_new_with_label("x");
+    gtk_widget_set_size_request(child, 100, 50);
+    gtk_fixed_put(GTK_FIXED(fixed), child, 10, 90);
+    gtk_window_set_child(GTK_WINDOW(win), fixed);
+    gtk_window_set_default_size(GTK_WINDOW(win), 300, 300);
+    gtk_widget_set_visible(win, TRUE);
+
+    /* Give the window a chance to be mapped and laid out once. */
+    for (i = 0; i < 5 && gtk_widget_get_width(child) == 0; i++)
+        pump_one_frame(win);
+
+    check(gtk_widget_get_width(child) > 0,
+          "a mapped window's children are allocated after a frame",
+          "the pump loop below cannot test anything, and wxWindow::Update() "
+          "has nothing to wait for");
+
+    /* Hiding and re-showing a child is the case that broke wx: the widget's
+     * allocation is stale from the moment it is shown until the clock next
+     * ticks, and running the main loop -- what wxYield() does -- does not
+     * bring it forward. wxWindow::Update() pumps until the frame arrives, and
+     * ClientToScreen() does not ask GTK for positions at all. */
+    gtk_widget_set_visible(child, FALSE);
+    pump_one_frame(win);
+    gtk_widget_set_visible(child, TRUE);
+
+    for (i = 0; i < 20; i++)
+        g_main_context_iteration(NULL, FALSE);
+
+    widthRightAfterShow = gtk_widget_get_width(child);
+
+    soft(widthRightAfterShow == 0,
+         "a re-shown child is NOT allocated by running the main loop alone",
+         "GTK now lays out synchronously again, or the clock happened to tick "
+         "during those iterations -- this is timing-dependent, so it is only "
+         "reported, not failed");
+
+    check(pump_one_frame(win),
+          "requesting the paint phase and pumping does produce a frame",
+          "wxWindow::Update() would spin to its deadline and then return "
+          "without the window having been laid out or painted");
+
+    check(gtk_widget_get_width(child) > 0,
+          "and the re-shown child is allocated once that frame has been drawn",
+          "waiting for a frame is no longer enough to settle the layout, and "
+          "wxWindow::Update() cannot keep its promise");
+
+    gtk_window_destroy(GTK_WINDOW(win));
+}
+
 static void test_indicator_nodes(void)
 {
     GtkWidget* checkbtn;
@@ -1170,6 +1260,8 @@ int main(void)
     test_layout_manager_dispatch();
     printf("\n");
     test_entry_caret_reporting();
+    printf("\n");
+    test_frame_clock_layout();
 #ifdef HAVE_XTEST
     printf("\n");
     test_gesture_claim_semantics();

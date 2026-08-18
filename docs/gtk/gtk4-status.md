@@ -3023,12 +3023,18 @@ The last two are pinned by new checks in `gtk4-invariants`, now at 38 checks,
 
 ## Progress update 33: the heap corruption, and a shim that was not reaching
 
-`test_gui` now runs to completion. The full suite is:
+`test_gui` gets much further. **Correction to what this section first
+claimed:** it does *not* run to completion. 490 test cases are registered and
+only 326 ran -- the run was still being cut short, by a later crash, and
+Catch2's fatal-error handler prints a totals line that looks exactly like a
+normal summary. Reading "test cases: 326" as the whole suite was wrong; it has
+to be checked against `--list-tests`. See update 34 for where it actually got
+to.
 
-| | Test cases | Assertions |
+| | Test cases (of 490) | Assertions |
 |---|---|---|
 | Before | aborted in the rich text control, 15 cases failing | 18 failing |
-| Now | 326 run, 309 passed, **17 failed** | 24907 run, **32 failed** |
+| After this batch | 326 run, 309 passed, **17 failed** | 24907 run, **32 failed** |
 
 ### The heap corruption had nothing to do with rich text
 
@@ -3099,3 +3105,72 @@ them.
    the corruption fixed here was found only because valgrind happened to be
    affordable on one test case, and ASAN is cheap enough to leave on for the
    whole suite.
+
+## Progress update 34: ASAN, and two more of the same bug
+
+An ASAN build (`../wxbuild-asan`, same configure line plus
+`-fsanitize=address`) is now the primary way to run the suite. It was worth
+turning on immediately rather than waiting for the port to be finished: the
+drop target bug in update 33 was found only because valgrind happened to be
+affordable against a single test case, and ASAN is cheap enough to leave on for
+the whole run.
+
+It paid for itself on the first run.
+
+| | Test cases (of 490) | Assertions |
+|---|---|---|
+| Update 33 | 326 | 24907 |
+| After the frame clock fix | 375 | 25576 |
+| After the pixbuf ownership fix | **445** | **39720** |
+
+Failures are 20 cases / 38 assertions at that point. The run still does not
+finish: it now aborts in `wxPersistTLW` on a GTK *internal* invariant,
+`gtk_css_node_validate: assertion failed: (cssnode->parent == NULL)`, preceded
+by `Unable to present ... unknown auxiliary child surface`. That is a widget
+being left parented when GTK expects otherwise, and is the next thing to chase.
+
+### Reading a truncated run as a finished one
+
+Catch2 prints a totals line from its fatal-error handler that is
+indistinguishable from the one it prints after a clean run. Update 33 read
+"test cases: 326" as the whole suite; it was 326 of 490, cut short by a crash.
+**Always compare against `--list-tests`.** The same mistake would have hidden
+every one of the fixes below, because each of them only shows up as the run
+getting *further*.
+
+### The frame clock outlives the window
+
+`GTKHandleRealized()` connects two `layout` handlers to the toplevel's
+GdkFrameClock with `this` as the user data, and nothing disconnects them. Under
+GTK3 the clock belonged to the toplevel's GdkWindow and died with it; under
+GTK4 it belongs to the GdkSurface and outlives the wxWindow, so the handlers
+keep firing against freed memory. ASAN named it precisely -- a wild-pointer
+read of `m_needSizeEvent`, from a clock still driving a window destroyed
+several test cases earlier.
+
+This is a general shape worth looking for elsewhere in the port: **anything
+GTK3 cleaned up by destroying the GdkWindow now needs doing explicitly**,
+because the object that used to own it is gone.
+
+### The same ownership bug, twice more
+
+`wxBitmap(GdkPixbuf*)` stores the pixbuf without taking a reference -- it takes
+ownership, which is why the GTK3 branch immediately below it does not unref.
+The GTK4 branch unreffed anyway, leaving `m_pixbufNoMask` dangling for
+`ConvertToImage()` to read through.
+
+That is the same mistake as the drop target's content formats in update 33, in
+unrelated code, written at a different time. Three instances now. The lesson
+from update 33 stands and should be applied as a sweep rather than one bug at a
+time: **ownership is invisible to the compiler and absent from the headers**,
+and the only authority is `/usr/share/gir-1.0/*.gir` -- or, for wx's own
+constructors, reading what they do with the pointer.
+
+### Next
+
+1. The `cssnode->parent == NULL` abort in `wxPersistTLW`.
+2. A deliberate audit of every refcounted object the port hands to or takes
+   from GTK4, against the GIR annotations, rather than waiting for each one to
+   crash.
+3. The 20 failing cases, still clustered in paint/refresh delivery, focus and
+   event propagation, grid cursor, and text control positioning.

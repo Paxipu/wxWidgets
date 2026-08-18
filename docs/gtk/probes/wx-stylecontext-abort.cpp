@@ -1,3 +1,10 @@
+// SOLVED -- kept as a regression reproducer. The cause was
+// wxWindow::RealizeTabOrder() calling gtk_widget_insert_after(), which under
+// GTK4 *parents* a widget rather than merely reordering it, on a child
+// wxTopLevelWindow that must never be a GTK-level child. Every mode below
+// survives as of that fix; if one starts aborting again, that is the
+// regression.
+//
 // Reproducer: wxGTK4 aborts inside GTK's CSS machinery when a shown
 // wxTopLevelWindow has a wx parent.
 //

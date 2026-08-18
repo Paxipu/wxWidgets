@@ -3326,13 +3326,53 @@ Ruled out, each re-tested against the deterministic probe rather than one run:
 - `gtk_widget_set_parent()` with a `GtkWindow` as the child: a conditional
   breakpoint on exactly that never fires.
 
-### Next
+### Found: `gtk_widget_insert_after()` parents, it does not reorder
 
-1. The `cssnode->parent == NULL` abort. The question is now as small as it can
-   get: **what does showing a wx-parented `wxTopLevelWindow` do that showing an
-   unparented one does not?** `wxPizza::put()` is ruled out, so the difference
-   is elsewhere in `wxTopLevelWindowGTK::Show()` / `wxWindowGTK::Show()`.
-   `docs/gtk/probes/wx-stylecontext-abort.cpp` answers in fifteen seconds.
+`RealizeTabOrder()` reproduces GTK3's `gtk_container_set_focus_chain()` by
+physically reordering children with `gtk_widget_insert_after()`. Under GTK4
+that call **sets the widget's parent**; it is not a reordering primitive. Run
+over every focusable entry in `GetChildren()`, it therefore parented a child
+`wxTopLevelWindow` -- which `wxPizza::put()` goes out of its way *not* to make
+a GTK child -- into the parent's pizza, from `OnInternalIdle()`. A `GtkWindow`
+with a CSS parent aborts the next time GTK validates it as a root.
+
+Dumping the parent's widget tree says the whole thing in six lines:
+
+```
+GtkWindow
+  GtkBox
+    wxPizza
+      GtkWindow      <-- a toplevel, parented inside its parent's client area
+        GtkBox
+          wxPizza
+```
+
+**`test_gui` now runs to completion: all 490 test cases, 470 passed, 20
+failed.** That is the first genuinely complete run of this port.
+
+#### What actually found it
+
+Three false leads each came from taking the failing test at face value:
+`Iconize()`, `wxPersistenceManager`, and the system colour queries were all
+things the test did near the crash, and none was involved. Four more theories
+died against the reproducer. What worked was mechanical, not clever:
+
+1. **Reduce until conditions stop mattering.** Removing `Iconize()`, then the
+   style queries, left two conditions: a shown, wx-parented toplevel, and
+   elapsed time.
+2. **Make it deterministic before judging anything.** 13-in-20 became 5-in-5
+   once the main loop got real elapsed time.
+3. **Ask the object, not the code.** A `notify::parent` handler on the child
+   window with `G_BREAKPOINT()` named `RealizeTabOrder()` in one run, after
+   breakpoints on `gtk_widget_set_parent()` and `gtk_fixed_put()` had both
+   come back empty -- they were false negatives, because the parenting went
+   through `gtk_widget_insert_after()`.
+
+The transferable warning is the GTK4 one: **`gtk_widget_insert_after()` and
+`gtk_widget_insert_before()` are parenting calls.** Anywhere this port uses
+them to express ordering, it is also asserting ownership.
+
+### Next
 2. Style queries from inside the snapshot vfunc (above): wx builds and destroys
    a `GtkWindow` per `GetColour()` call, during painting. Not this bug, but not
    right either.

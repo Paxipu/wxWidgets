@@ -3240,10 +3240,59 @@ never fires. GTK4 attaches popovers as "auxiliary children" outside the layout
 manager, which is the wording the warning uses, and no popover shows up on this
 path either. That is where it stands.
 
+### Making the flaky one deterministic
+
+The abort is now reproducible on demand, in about fifteen seconds, by
+`docs/gtk/probes/wx-stylecontext-abort.cpp`. Getting there mattered more than
+any single theory, because every "this didn't help" conclusion before it was
+a coin toss.
+
+What made it deterministic was **giving the main loop real elapsed time**. The
+CSS validation GTK queues runs on a later frame clock pass; with only
+`wxYield()` the process usually exited first, which is the whole of the
+"intermittent" behaviour (13 aborts in 20). Adding `wxMilliSleep()` between
+yields takes it to 8 in 8. Valgrind does the same thing by accident -- it
+aborts 3 times in 3 there, purely from the slowdown, while reporting **no
+invalid read or write at all**. So this is not memory corruption.
+
+### `Iconize()` was a red herring
+
+The failing test calls `Iconize()`, so that is what the reproducer was built
+around. It is not needed: with the style queries alone and no `Iconize()`
+anywhere, it still aborts 6 times out of 6.
+
+The actual trigger, narrowed one variable at a time:
+
+| | Aborts |
+|---|---|
+| One shown frame | 0 / 4 |
+| Child frame **with a wx parent**, shown | **4 / 4** |
+| Frame never shown | 0 / 4 |
+| Second frame with **no** parent, shown | 0 / 5 |
+
+So it takes a *parented*, *shown* `wxTopLevelWindow` existing while
+`wxGtkStyleContext` builds and tears down its scratch widget tree. Two
+unrelated toplevels are fine, so it is wx's handling of the parented one that
+matters, not the window count. That also explains the reach of this: any style
+query can abort an app in that state, which is why it stops the suite rather
+than one test.
+
+Ruled out, each re-tested against the deterministic reproducer rather than a
+single run:
+
+- Memory corruption (valgrind clean).
+- `AddWidget()` populating a widget before attaching it, leaving a queued root
+  validation -- reordering changed nothing.
+- Tearing down the scratch toplevel -- leaking it deliberately changed nothing.
+- A `GtkWindow` being passed as the *child* of `gtk_widget_set_parent()` -- a
+  conditional breakpoint on exactly that never fires.
+
 ### Next
 
-1. The `cssnode->parent == NULL` abort in `wxPersistTLW`, and the second
-   attach path still warning once.
+1. The `cssnode->parent == NULL` abort. The question is now specific: what does
+   wx do differently for a toplevel that has a wx parent -- `wxPizza::put()`
+   records it in `m_children` without making it a GTK child -- that leaves
+   GTK validating a CSS node with a parent. Use the probe, not the suite.
 2. A deliberate audit of every refcounted object the port hands to or takes
    from GTK4, against the GIR annotations, rather than waiting for each one to
    crash.

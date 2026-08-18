@@ -319,6 +319,12 @@ public:
     // is this window transparent for the mouse events (as wxStaticBox is)?
     virtual bool GTKIsTransparentForMouse() const { return false; }
 
+    // Undo the frame clock "layout" connections GTKHandleRealized() makes.
+    // Declared unconditionally: this header forward-declares its GTK types
+    // rather than including gtk.h, so GTK_CHECK_VERSION() is not available
+    // here to match the guard on the definition.
+    void GTKDisconnectFrameClock();
+
     // Common scroll event handling code for wxWindow and wxScrollBar
     wxEventType GTKGetScrollEventType(wxGtkScrollbar* range);
 

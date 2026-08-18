@@ -3550,6 +3550,26 @@ static void frame_clock_layout_after(GdkFrameClock*, wxWindowGTK* win)
 
 } // extern "C"
 
+#if GTK_CHECK_VERSION(3,8,0)
+// Drop the "layout" handlers GTKHandleRealized() puts on the frame clock.
+//
+// Under GTK3 not doing this was survivable: the frame clock belonged to the
+// toplevel's GdkWindow and died with it, taking the handlers along. GTK4 has
+// no GdkWindow, the clock belongs to the GdkSurface and outlives the wxWindow,
+// so a handler left behind is called back with a dangling "this" -- caught by
+// ASAN as a wild-pointer read of m_needSizeEvent in
+// GTKSendSizeEventIfNeeded(), from a frame clock still driving a window
+// destroyed several test cases earlier.
+void wxWindowGTK::GTKDisconnectFrameClock()
+{
+    if (!IsTopLevel() || m_widget == nullptr)
+        return;
+
+    if (GdkFrameClock* const clock = gtk_widget_get_frame_clock(m_widget))
+        g_signal_handlers_disconnect_by_data(clock, this);
+}
+#endif // GTK_CHECK_VERSION(3,8,0)
+
 void wxWindowGTK::GTKHandleRealized()
 {
 #ifndef __WXGTK4__
@@ -3634,6 +3654,12 @@ void wxWindowGTK::GTKHandleRealized()
 void wxWindowGTK::GTKHandleUnrealized()
 {
     m_isGtkPositionValid = false;
+
+#if GTK_CHECK_VERSION(3,8,0)
+    // The frame clock is still reachable here; it may not be by the time the
+    // window is destroyed, and it can be a different one after re-realizing.
+    GTKDisconnectFrameClock();
+#endif
 
     if (m_wxwindow)
     {
@@ -4036,6 +4062,11 @@ wxWindowGTK::~wxWindowGTK()
     }
     if (m_widget && m_widget != m_wxwindow)
         GTKDisconnect(m_widget);
+
+#if GTK_CHECK_VERSION(3,8,0)
+    // Backstop for a window destroyed without being unrealized first.
+    GTKDisconnectFrameClock();
+#endif
 
     // destroy children before destroying this window itself
     DestroyChildren();

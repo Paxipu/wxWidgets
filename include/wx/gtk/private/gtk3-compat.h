@@ -10,32 +10,15 @@
 #ifndef _WX_GTK_PRIVATE_COMPAT3_H_
 #define _WX_GTK_PRIVATE_COMPAT3_H_
 
-#ifdef __WXGTK4__
-
-// gtk_check_version() reports a version mismatch, not a version ordering: it
-// requires the major version to match exactly, so under GTK4 it says
-// "incompatible" for every GTK 3.x requirement rather than "newer than that".
-//
-// This codebase asks it about sixty times, always meaning "do we have at least
-// this GTK3 feature level", so left alone every one of those guards silently
-// inverts under GTK4 and runs a pre-3.N fallback instead of the modern path.
-// That is not a theoretical problem: it is how GTKApplyWidgetStyle() came to
+// The gtk_check_version() shim that used to live here has moved to wrapgtk.h,
+// so that it reaches every file that can call gtk_check_version() rather than
+// only those that include this header. It is how GTKApplyWidgetStyle() came to
 // emit a Pango font description as CSS, which GTK4's parser rejects, so no
-// wxWindow's font was being applied at all.
-//
-// Any GTK 3.x requirement is satisfied by GTK4, which is what the call sites
-// mean, so answer that. Requirements on GTK4 itself pass through unchanged.
-//
-// The real function has to be called before the macro below hides it.
-static inline const char*
-wx_gtk_check_version(guint required_major, guint required_minor, guint required_micro)
-{
-    if ( required_major < GTK_MAJOR_VERSION )
-        return nullptr;
+// wxWindow's font was being applied at all -- a call site gets that wrong by
+// not being adapted, which is exactly what an opt-in header cannot catch.
+#include "wx/gtk/private/wrapgtk.h"
 
-    return gtk_check_version(required_major, required_minor, required_micro);
-}
-#define gtk_check_version(ma, mi, mc) wx_gtk_check_version(ma, mi, mc)
+#ifdef __WXGTK4__
 
 inline GdkDevice* wx_get_gdk_device_from_display(GdkDisplay* display)
 {

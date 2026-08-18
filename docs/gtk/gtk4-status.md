@@ -3020,3 +3020,82 @@ The last two are pinned by new checks in `gtk4-invariants`, now at 38 checks,
    tests.
 3. A sweep of the sixty `gtk_check_version()` guards, now that they evaluate
    the way they were written to.
+
+## Progress update 33: the heap corruption, and a shim that was not reaching
+
+`test_gui` now runs to completion. The full suite is:
+
+| | Test cases | Assertions |
+|---|---|---|
+| Before | aborted in the rich text control, 15 cases failing | 18 failing |
+| Now | 326 run, 309 passed, **17 failed** | 24907 run, **32 failed** |
+
+### The heap corruption had nothing to do with rich text
+
+`gtk_drop_target_async_new()` is annotated `(transfer full)` on its
+`GdkContentFormats` argument: it takes ownership. `GtkRegisterWidget()` unreffed
+the formats afterwards anyway, dropping the last reference and freeing them
+while the drop target still held the pointer. Destroying the widget then
+unreffed freed memory.
+
+So **every wxWindow with a drop target was corrupting the heap on
+destruction.** It surfaced in `wxRichTextCtrl` only because those tests create
+and destroy a control 27 times in a row -- the heaviest widget churn in the
+suite -- so that is where the damage first crossed the threshold glibc notices.
+The abort came out of an unrelated `operator new`, in `setUp()`, pointing at a
+control that was innocent.
+
+Two things made it read as worse than it was:
+
+- **The detection point is not the corruption point.** `malloc_consolidate():
+  unaligned fastbin chunk detected` names the allocation that tripped over the
+  damage, never the write that caused it.
+- **The run hung rather than aborting.** Catch2's `SIGABRT` handler allocates
+  in order to format its message, and glibc is still holding the malloc arena
+  lock when it aborts, so the handler deadlocks. A hang at that point should be
+  read as "already aborted", not as an infinite loop.
+
+`valgrind` named it in one run, against the single test case, in under a
+minute. The other GTK4 ownership transfers the port introduced --
+`gdk_content_provider_new_union()` (takes the providers) and `gdk_drag_begin()`
+(does not take the content) -- were rechecked against the GIR annotations and
+are both right.
+
+**The general lesson: ownership annotations are not in the headers.** A
+`(transfer full)` argument compiles identically to a borrowed one, so the only
+way to check is `/usr/share/gir-1.0/*.gir`, which is authoritative and
+installed. Any GTK4 call this port introduces that takes or returns a
+refcounted object is worth grepping there.
+
+### The version shim was only reaching the files that opted in
+
+Update 32 shimmed `gtk_check_version()` in `gtk3-compat.h`. But a call site
+gets this wrong by *not* being adapted, so an opt-in header cannot catch it:
+ten files call `gtk_check_version()` without including that header, and all ten
+were still inverting. It has moved to `wrapgtk.h`, which everything gets.
+
+Six of the ten were compiled out under GTK4 anyway. The four that were live:
+
+| | What it was doing |
+|---|---|
+| `fontdlg.cpp` | Took neither branch, so `m_widget` was never assigned and `g_object_ref()` ran on it. **wxFontDialog could not work at all.** |
+| `utilsx11.cpp` | `wxGetKeyState()` returned `false` for every key, unconditionally. |
+| `control.cpp` | Emitted `style-updated`, which GTK4 removed, on every `wxControl::SetFont()` before realization. |
+| `gauge.cpp`, `spinbutt.cpp` | Never applied the CSS that gives those controls their requested size. |
+
+None of these is caught by the suite as it stands, which is worth stating
+plainly: they were found by reading, and the run neither confirms nor denies
+them.
+
+### Next
+
+1. The segfault after the summary line -- the suite completes and then dies on
+   the way out, so something in shutdown is unsound. It does not reproduce on
+   a single test case.
+2. The 17 failing cases: paint/refresh delivery (`Window::Refresh`,
+   `ClipperTestCase`, `ClippingBoxTestCase`), focus and event propagation, grid
+   cursor, and text control positioning.
+3. An ASAN build, which is being set up now. Everything above argues for it:
+   the corruption fixed here was found only because valgrind happened to be
+   affordable on one test case, and ASAN is cheap enough to leave on for the
+   whole suite.

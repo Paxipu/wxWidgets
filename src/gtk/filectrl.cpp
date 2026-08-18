@@ -180,6 +180,17 @@ void wxGtkFileChooser::SetWildcard( const wxString& wildCard )
                 }
 
                 gtk_file_chooser_add_filter( chooser, filter );
+
+#ifdef __WXGTK4__
+                // GtkFileFilter was a GInitiallyUnowned under GTK3, so the
+                // floating reference this created was sunk by the call above
+                // and the filter had a single owner. Under GTK4 it derives
+                // from GtkFilter, which is a plain GObject: the reference is
+                // real, add_filter() does not take it -- the annotation is
+                // (transfer none) -- and every filter leaked one. Nothing
+                // about the code had to change for that to start happening.
+                g_object_unref( filter );
+#endif // __WXGTK4__
             }
 
             // Reset the filter index

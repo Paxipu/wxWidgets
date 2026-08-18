@@ -359,6 +359,20 @@ jobs:
               -Wno-deprecated-declarations
           xvfb-run -a /tmp/gtk4-invariants
 
+      - name: Checking GTK4 ownership annotations
+        if: matrix.gtk_version == 4
+        run: |
+          # Whether a GTK function hands you a reference to release, or takes
+          # one from you, is not in the headers -- only in the introspection
+          # annotations. A function whose signature is unchanged can have
+          # swapped sides between GTK3 and GTK4, and the symptom is a leak or a
+          # double free much later, never a compile error. This compares the
+          # two sets of annotations for every GTK function wxGTK calls and
+          # fails on any difference that has not been reviewed.
+          # Returns 77 and passes if the .gir files are not installed.
+          python3 build/tools/gtk4-ownership-diff.py || \
+            test $? -eq 77
+
       - name: Building
         run: |
           if [ ${{ matrix.use_asan }} ]; then

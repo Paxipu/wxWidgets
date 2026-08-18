@@ -3572,11 +3572,59 @@ widgets sample's tree, static boxes, log window and menu bar; the richtext
 sample's toolbar, images, styled text and style list; the AUI demo's docked
 panes, notebooks and toolbars.
 
+## Progress update 38: the ownership audit
+
+Whether a GTK function hands you a reference to release, or takes one from you,
+is the one thing about the API the compiler cannot check and the headers do not
+say: it lives only in the GObject-introspection annotations, in
+`/usr/share/gir-1.0/*.gir`. A function whose signature is unchanged can have
+swapped sides between GTK3 and GTK4, and the symptom is a leak or a double free
+much later, never a compile error.
+
+Two of the nastiest bugs in this port were exactly that, so rather than wait for
+the next one, compare the annotations directly.
+`build/tools/gtk4-ownership-diff.py` reads the Gtk-3.0 and Gtk-4.0 `.gir` files,
+collects every G-prefixed function named anywhere in `src/gtk` and
+`include/wx/gtk`, and reports the ones where the two disagree.
+
+**Of the 1813 functions wxGTK calls, exactly four changed.** That is the useful
+part of the result: the surface that needed checking turned out to be tiny and
+is now known, rather than suspected.
+
+| function | change | outcome |
+| --- | --- | --- |
+| `gtk_file_filter_new` | was `(transfer none)`, now `(transfer full)` -- and `GtkFileFilter` stopped being a `GInitiallyUnowned` | **real leak, fixed** |
+| `gtk_file_chooser_add_filter` | `filter` was `(transfer full)`, now `(transfer none)` | the other half of the same change |
+| `gtk_calendar_get_date` | returns a `GDateTime` the caller owns, in place of out-parameters | already handled in `calctrl.cpp` |
+| `gtk_tree_drag_source_drag_data_get` | returns a `GdkContentProvider` the caller owns | not called; appears only in a comment |
+
+The file filter is worth spelling out because nothing about it is visible in the
+code. Under GTK3 `GtkFileFilter` derived from `GInitiallyUnowned`, so the
+reference `gtk_file_filter_new()` returned was floating and
+`gtk_file_chooser_add_filter()` sank it; the filter had exactly one owner and
+callers correctly did not unref. Under GTK4 it derives from `GtkFilter`, which
+is a plain `GObject`. The reference is real, `add_filter()` is now
+`(transfer none)`, and the unchanged wx code leaked one reference per filter --
+every time a wxFileCtrl's wildcard was set. No annotation on `add_filter()`
+alone would have shown this: it takes the two halves together.
+
+The checker runs in CI next to the invariants program and lists the four
+differences as reviewed, so a run that prints nothing new means nothing new has
+appeared -- after a GTK update, or when the port starts calling an unfamiliar
+part of the API. Its own negative control is that removing an entry from the
+reviewed list makes it fail.
+
+### Not GTK4's doing
+
+The scan also turned up two leaks that are identical under GTK3 --
+`gtk_entry_completion_new()` in `textentry.cpp` and `gtk_list_store_new()` in
+`bmpcbox.cpp` both create an object the widget then only takes its own reference
+to, and wx never releases its own. They are pre-existing upstream bugs rather
+than port regressions, and are left alone here so this branch does not change
+GTK3 behaviour, but they are worth reporting separately.
+
 ### Next
 2. Style queries from inside the snapshot vfunc (above): wx builds and destroys
    a `GtkWindow` per `GetColour()` call, during painting. Not this bug, but not
    right either.
-2. A deliberate audit of every refcounted object the port hands to or takes
-   from GTK4, against the GIR annotations, rather than waiting for each one to
-   crash.
 3. The two remaining test failures, both described above.

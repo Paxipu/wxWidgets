@@ -3166,6 +3166,30 @@ time: **ownership is invisible to the compiler and absent from the headers**,
 and the only authority is `/usr/share/gir-1.0/*.gir` -- or, for wx's own
 constructors, reading what they do with the pointer.
 
+### The ASAN re-run, and what it ruled out
+
+With the frame clock and pixbuf fixes in, the full suite under ASAN reports
+**zero memory errors** across all 445 test cases it reaches. The abort at that
+point is GTK asserting on its own state, not a memory error, which is a useful
+negative result: nothing is being read after free up to there.
+
+`wxPersistTLW` aborts on its own, so it is cheap to iterate on. Three attempts
+did not move it, all recorded here so they are not repeated:
+
+- Maintaining `wxPizza::m_children` (nothing did under GTK4). Real leak, real
+  stale bookkeeping, committed on its own merits -- **not** this abort.
+- Routing detach through `gtk_fixed_remove()` instead of
+  `gtk_widget_unparent()`. Correct per GTK4's rules; no effect here.
+- Removing a destroyed toplevel from its parent pizza's list. The test does
+  create a parented `wxFrame` and `delete` it, so this looked exact. No effect.
+
+What is known: the abort follows a `Gtk-WARNING` naming a **GtkWindow** where
+the layout manager expects a child, and under `G_DEBUG=fatal-warnings` the
+backtrace contains **no wx frames at all** -- it is entirely inside GTK's
+allocate pass, driven from the main loop. So the bad state is established
+earlier and only detected there, and the next step is to find which GtkWindow
+and who parented it, not to keep guessing at destruction paths.
+
 ### Next
 
 1. The `cssnode->parent == NULL` abort in `wxPersistTLW`.

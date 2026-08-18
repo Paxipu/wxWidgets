@@ -1383,7 +1383,7 @@ bool wxTopLevelWindowGTK::Create( wxWindow *parent,
 #endif
 
     gtk_window_set_title( GTK_WINDOW(m_widget), title.utf8_str() );
-    gtk_widget_set_can_focus(m_widget, false);
+    wx_gtk_widget_set_focusable(m_widget, false);
 
     g_signal_connect (m_widget,
 #ifdef __WXGTK4__
@@ -1396,7 +1396,7 @@ bool wxTopLevelWindowGTK::Create( wxWindow *parent,
     // m_mainWidget is a GtkVBox, holding the bars and client area (m_wxwindow)
     m_mainWidget = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_widget_show( m_mainWidget );
-    gtk_widget_set_can_focus(m_mainWidget, false);
+    wx_gtk_widget_set_focusable(m_mainWidget, false);
 #ifdef __WXGTK4__
     gtk_window_set_child(GTK_WINDOW(m_widget), m_mainWidget);
 #else
@@ -1410,7 +1410,7 @@ bool wxTopLevelWindowGTK::Create( wxWindow *parent,
 
     // we donm't allow the frame to get the focus as otherwise
     // the frame will grab it at arbitrary focus changes
-    gtk_widget_set_can_focus(m_wxwindow, false);
+    wx_gtk_widget_set_focusable(m_wxwindow, false);
 
     if (m_parent) m_parent->AddChild( this );
 

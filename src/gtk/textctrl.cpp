@@ -891,7 +891,7 @@ bool wxTextCtrl::Create( wxWindow *parent,
         gtk_widget_add_events( GTK_WIDGET(m_text), GDK_ENTER_NOTIFY_MASK | GDK_LEAVE_NOTIFY_MASK );
 #endif
 
-        gtk_widget_set_can_focus(m_widget, FALSE);
+        wx_gtk_widget_set_focusable(m_widget, FALSE);
     }
     else
     {
@@ -1937,10 +1937,17 @@ void wxTextCtrl::Paste()
 {
     wxCHECK_RET( m_text != nullptr, wxT("invalid text ctrl") );
 
+#ifdef __WXGTK4__
+    // Multiline or not, the paste has to be done synchronously under GTK4:
+    // see wxTextEntry::Paste(). WriteText() is virtual, so the base class
+    // version inserts the text into the GtkTextView here.
+    wxTextEntry::Paste();
+#else
     if ( IsMultiLine() )
         g_signal_emit_by_name (m_text, "paste-clipboard");
     else
         wxTextEntry::Paste();
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 // If the return values from and to are the same, there is no

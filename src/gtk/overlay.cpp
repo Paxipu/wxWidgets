@@ -144,7 +144,7 @@ void wxOverlayImpl::Init(wxDC* dc, int x, int y, int width, int height)
         // The overlay must be transparent for mouse events. This replaces the
         // 1x1 input shape hack below and, unlike it, is exact.
         gtk_widget_set_can_target(m_overlay, false);
-        gtk_widget_set_can_focus(m_overlay, false);
+        wx_gtk_widget_set_focusable(m_overlay, false);
     }
 #else // !__WXGTK4__
     GtkWidget* const tlw = gtk_widget_get_toplevel(m_target);

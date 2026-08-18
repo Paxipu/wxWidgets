@@ -793,6 +793,48 @@ static inline void wx_gtk_widget_remove_from_parent(GtkWidget* child)
 #endif
 }
 
+// GTK4 split GTK3's single "can-focus" flag in two, and kept the old name for
+// the half wx does *not* mean by it:
+//
+//  - "focusable" is whether the widget itself can take the input focus. This
+//    is what gtk_widget_grab_focus() requires and what GTK3's "can-focus"
+//    meant. It defaults to FALSE for everything except the controls that are
+//    focusable by nature.
+//
+//  - "can-focus" is now whether the focus may enter the widget *or any of its
+//    children*, and it defaults to TRUE for every widget.
+//
+// So under GTK4 every gtk_widget_set_can_focus() call wx inherited became a
+// no-op, and every gtk_widget_get_can_focus() test answered TRUE for
+// everything. Nothing warns: both functions still exist and still take and
+// return a gboolean. Use these instead wherever the question is about the
+// widget itself, which is everywhere in wx.
+#ifndef __WXGTK4__
+static inline void wx_gtk_widget_set_focusable(GtkWidget* widget, gboolean can)
+{
+    gtk_widget_set_can_focus(widget, can);
+}
+
+static inline gboolean wx_gtk_widget_get_focusable(GtkWidget* widget)
+{
+    return gtk_widget_get_can_focus(widget);
+}
+#else
+static inline void wx_gtk_widget_set_focusable(GtkWidget* widget, gboolean can)
+{
+    // Deliberately *not* gtk_widget_set_can_focus() as well: under GTK4 that
+    // would stop the focus entering the widget's children too, which GTK3's
+    // flag never did. wxTopLevelWindow marks its own widgets not focusable,
+    // and doing that must not make everything inside them unreachable.
+    gtk_widget_set_focusable(widget, can);
+}
+
+static inline gboolean wx_gtk_widget_get_focusable(GtkWidget* widget)
+{
+    return gtk_widget_get_focusable(widget);
+}
+#endif // !__WXGTK4__/__WXGTK4__
+
 #if defined(__WXGTK4__) || !defined(__WXGTK3__)
 static inline bool wx_is_at_least_gtk3(int /* minor */)
 {

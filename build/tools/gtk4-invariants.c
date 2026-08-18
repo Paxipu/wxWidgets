@@ -1170,6 +1170,70 @@ static void test_frame_clock_layout(void)
     gtk_window_destroy(GTK_WINDOW(win));
 }
 
+static void test_focus_flags(void)
+{
+    GtkWidget* win;
+    GtkWidget* box;
+    GtkWidget* a;
+    GtkWidget* b;
+
+    printf("Focusable vs. can-focus, and what happens when the focus dies:\n");
+
+    win = gtk_window_new();
+    box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_window_set_child(GTK_WINDOW(win), box);
+    gtk_widget_set_visible(win, TRUE);
+    pump_one_frame(win);
+
+    /* GTK4 split GTK3's single "can-focus" flag in two and kept the old name
+     * for the half wx does not mean by it. Every gtk_widget_set_can_focus()
+     * call wx inherited was therefore a no-op, and every
+     * gtk_widget_get_can_focus() test answered TRUE for everything -- so no
+     * wxWindow could take the focus at all. See wx_gtk_widget_set_focusable()
+     * in gtk3-compat.h. */
+    a = gtk_fixed_new();
+    gtk_box_append(GTK_BOX(box), a);
+
+    check(gtk_widget_get_can_focus(a) && !gtk_widget_get_focusable(a),
+          "a container defaults to can-focus=TRUE, focusable=FALSE",
+          "the two flags no longer differ in the way the port relies on");
+
+    gtk_widget_set_can_focus(a, TRUE);
+    gtk_widget_grab_focus(a);
+    check(!gtk_widget_is_focus(a),
+          "gtk_widget_set_can_focus() alone does NOT make grab_focus() work",
+          "can-focus is enough again, so the focusable shim is redundant");
+
+    gtk_widget_set_focusable(a, TRUE);
+    gtk_widget_grab_focus(a);
+    check(gtk_widget_is_focus(a),
+          "gtk_widget_set_focusable() is what makes grab_focus() work",
+          "wxWindow::SetFocus() cannot work at all");
+
+    /* And the behaviour that follows from it, which GTK3 did not have: when
+     * the widget holding the focus goes away, GTK4 does not simply drop the
+     * focus. It remembers that the window needs one and gives it to the next
+     * focusable widget added, even one added before the next frame -- so a
+     * newly created wxWindow can find itself focused without wx ever asking.
+     * gtk_window_set_focus(NULL) does not cancel it, and a widget with
+     * can-focus=FALSE is skipped but then cannot be focused explicitly
+     * either, so there is nothing wx can do about it. */
+    gtk_box_remove(GTK_BOX(box), a);
+
+    b = gtk_button_new_with_label("b");
+    gtk_box_append(GTK_BOX(box), b);
+
+    pump_one_frame(win);
+
+    soft(gtk_window_get_focus(GTK_WINDOW(win)) == b,
+         "GTK4 moves the focus to a widget added after the focused one died",
+         "if this stops happening, the spurious wxEVT_SET_FOCUS a freshly "
+         "created wxWindow can receive is gone and the note in "
+         "docs/gtk/gtk4-status.md can go with it");
+
+    gtk_window_destroy(GTK_WINDOW(win));
+}
+
 static void test_indicator_nodes(void)
 {
     GtkWidget* checkbtn;
@@ -1262,6 +1326,8 @@ int main(void)
     test_entry_caret_reporting();
     printf("\n");
     test_frame_clock_layout();
+    printf("\n");
+    test_focus_flags();
 #ifdef HAVE_XTEST
     printf("\n");
     test_gesture_claim_semantics();

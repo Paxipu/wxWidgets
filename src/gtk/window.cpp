@@ -4063,6 +4063,11 @@ bool wxWindowGTK::Create( wxWindow *parent,
     return true;
 }
 
+#ifdef __WXGTK4__
+// Defined with the other focus-controller helpers further down.
+static gpointer wxGTKGetFocusController(GtkWidget* widget);
+#endif
+
 void wxWindowGTK::GTKDisconnect(void* instance)
 {
     g_signal_handlers_disconnect_by_data(instance, this);
@@ -4091,6 +4096,16 @@ wxWindowGTK::~wxWindowGTK()
 
     if ( g_windowUnderMouse == this )
         g_windowUnderMouse = nullptr;
+
+#ifdef __WXGTK4__
+    // The focus handlers are connected to the GtkEventControllerFocus rather
+    // than to the widget, so GTKDisconnect() on the widget does not reach
+    // them -- and GTK keeps the focus controller alive long enough to report
+    // the focus leaving a widget that is being destroyed, which called
+    // GTKHandleFocusOut() on a freed wxWindow.
+    if ( gpointer const focus = wxGTKGetFocusController(m_focusWidget) )
+        g_signal_handlers_disconnect_by_data(focus, this);
+#endif // __WXGTK4__
 
     if (m_wxwindow)
     {
@@ -6560,7 +6575,7 @@ void wxWindowGTK::SetFocus()
     GtkWidget *widget = m_wxwindow ? m_wxwindow : m_focusWidget;
 
     if ( wx_gtk_widget_is_container(widget) &&
-         !gtk_widget_get_can_focus(widget) )
+         !wx_gtk_widget_get_focusable(widget) )
     {
         wxLogTrace(TRACE_FOCUS,
                    wxT("Setting focus to a child of %s"),
@@ -6580,11 +6595,11 @@ void wxWindowGTK::SetCanFocus(bool canFocus)
 {
     wxCHECK_RET(m_widget, "invalid window");
 
-    gtk_widget_set_can_focus(m_widget, canFocus);
+    wx_gtk_widget_set_focusable(m_widget, canFocus);
 
     if ( m_wxwindow && (m_widget != m_wxwindow) )
     {
-        gtk_widget_set_can_focus(m_wxwindow, canFocus);
+        wx_gtk_widget_set_focusable(m_wxwindow, canFocus);
     }
 }
 
@@ -6803,10 +6818,10 @@ void wxWindowGTK::RealizeTabOrder()
                         // focusable, without this using a wxStaticText before
                         // wxChoice wouldn't work at all, for example.
                         GtkWidget* w = win->m_widget;
-                        if ( !gtk_widget_get_can_focus(w) )
+                        if ( !wx_gtk_widget_get_focusable(w) )
                         {
                             GtkWidget* const cw = win->GetConnectWidget();
-                            if ( cw != w && gtk_widget_get_can_focus(cw) )
+                            if ( cw != w && wx_gtk_widget_get_focusable(cw) )
                                 w = cw;
                         }
 

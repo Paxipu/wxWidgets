@@ -1524,6 +1524,8 @@ void wxMenu::GTKRebuildModel()
     {
         wxMenuItem* const item = node->GetData();
 
+        bool isFirstInRadioGroup = false;
+
         if ( item->GetKind() != wxITEM_RADIO )
             radioAction.clear();
 
@@ -1602,6 +1604,7 @@ void wxMenu::GTKRebuildModel()
                     }
 
                     actionName = radioAction;
+                    isFirstInRadioGroup = radioIndex == 0;
                     target = wxString::Format("%d", radioIndex++);
                     break;
 
@@ -1628,8 +1631,14 @@ void wxMenu::GTKRebuildModel()
 
             GSimpleAction* const action = FindItemAction(item);
 
+            // The first item of a radio group is checked by default, as
+            // GTK3's GtkRadioMenuItem made it and as wx documents. Nothing
+            // does that for a GAction: a group is just a stateful action whose
+            // state happens to match one member's target, and it starts out
+            // matching none of them. Items are visited in order, so a member
+            // which really is checked simply overwrites this below.
             if ( item->GetKind() == wxITEM_RADIO &&
-                    item->wxMenuItemBase::IsChecked() )
+                    (isFirstInRadioGroup || item->wxMenuItemBase::IsChecked()) )
             {
                 g_simple_action_set_state(
                     action, g_variant_new_string(target.utf8_str()));

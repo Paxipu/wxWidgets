@@ -1059,7 +1059,7 @@ void wxRendererGTK::DrawTextCtrl(wxWindow*, wxDC& dc, const wxRect& rect, int fl
     if ( flags & wxCONTROL_DISABLED )
         state = GTK_STATE_INSENSITIVE;
 
-    gtk_widget_set_can_focus(entry, (flags & wxCONTROL_CURRENT) != 0);
+    wx_gtk_widget_set_focusable(entry, (flags & wxCONTROL_CURRENT) != 0);
 
     gtk_paint_shadow
     (
@@ -1091,7 +1091,7 @@ void wxRendererGTK::DrawComboBox(wxWindow* win, wxDC& dc, const wxRect& rect, in
     if ( flags & wxCONTROL_DISABLED )
        state = GTK_STATE_INSENSITIVE;
 
-    gtk_widget_set_can_focus(combo, (flags & wxCONTROL_CURRENT) != 0);
+    wx_gtk_widget_set_focusable(combo, (flags & wxCONTROL_CURRENT) != 0);
 
 #ifdef __WXGTK3__
     GtkStyleContext* sc = gtk_widget_get_style_context(combo);

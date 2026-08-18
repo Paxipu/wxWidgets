@@ -3372,6 +3372,122 @@ The transferable warning is the GTK4 one: **`gtk_widget_insert_after()` and
 `gtk_widget_insert_before()` are parenting calls.** Anywhere this port uses
 them to express ordering, it is also asserting ownership.
 
+## Progress update 35: layout, coordinates, the frame clock, and focus
+
+`test_gui` went from **470 passed / 20 failed** to **484 passed / 6 failed**
+over this batch. Five findings did nearly all of it, and each of them is a GTK4
+change that compiles cleanly and only shows up at runtime.
+
+### wxPizza's layout code was never running
+
+`gtk_widget_allocate()` dispatches `measure()` and `size_allocate()` to a
+widget's `GtkLayoutManager` *instead of* its class vfuncs when it has one, and
+`GtkFixed` -- wxPizza's base class -- installs a `GtkFixedLayout`. So
+`pizza_measure()` and `pizza_size_allocate()`, which position every wx child
+window, were dead code for the whole port, and `GtkFixedLayout` was laying
+children out instead: at the origin, at their own measured size, which for a
+wxPizza is 0x0.
+
+Nothing about this is diagnosable from the code -- the vfuncs are assigned in
+`class_init` exactly as under GTK3, and GTK simply never asks for them.
+`gtk_widget_set_layout_manager(widget, nullptr)` in `wxPizza::New()` is the fix;
+`put()` then cannot use `gtk_fixed_put()` either, since that reaches through the
+layout manager. See `docs/gtk/probes/gtk4-layout-manager.c`.
+
+This alone took the 83 repaint timeouts in the suite to zero.
+
+### Invalidation does not reach children
+
+GTK4 caches the render node each widget last produced, and invalidating one
+widget does not invalidate its children. GTK3's `gdk_window_invalidate_rect()`
+took an `invalidate_children` flag which wx always passed TRUE, so wx's contract
+is that refreshing a region repaints everything inside it. `Refresh()` now says
+it once per widget. Caching the node tree and replaying it on the GPU is the
+whole point of the new rendering model -- this is not a workaround for GTK being
+lazy.
+
+### Layout and painting happen on the frame clock
+
+This is the one with the widest blast radius. GTK4 lays out and paints in the
+frame clock's phases, not synchronously, so:
+
+* `wxWindow::Update()` was reduced to a `gtk_widget_queue_draw()`, which is not
+  what it promises. Running the main loop does not help either: `wxYield()`
+  returns long before the clock next ticks. It now asks for a frame and pumps
+  until the clock reports one, bounded by a deadline so a window that is never
+  presented cannot hang it.
+* `ClientToScreen()`/`ScreenToClient()` asked GTK where each widget was, which
+  is stale from the moment a window is shown, hidden or moved until the next
+  frame. wx knows where it put its own children regardless, so it now walks its
+  own parent chain; only the toplevel's client offset still comes from GTK.
+
+### Window positioning is available after all, on X11
+
+GTK4 removed `gdk_window_get_origin()` and `gtk_window_move()` together,
+because a Wayland client is neither told where its window is nor allowed to
+choose. X11 still permits both, and `XMoveWindow()` is exactly what GDK3 called
+underneath `gtk_window_move()`. Without it wx reported a position nothing had
+applied, so `ClientToScreen()` and `GetPosition()` disagreed. Both are still
+no-ops under Wayland, which is all that is possible there.
+
+### can-focus no longer means what wx means by it
+
+GTK4 split GTK3's single `can-focus` flag in two and kept the old name for the
+half wx does *not* mean:
+
+* **`focusable`** -- whether the widget itself can take the focus. This is what
+  `gtk_widget_grab_focus()` requires and what GTK3's `can-focus` meant. Defaults
+  to FALSE for everything except the controls that are focusable by nature.
+* **`can-focus`** -- whether the focus may enter the widget *or any of its
+  children*. Defaults to TRUE for every widget.
+
+So every `gtk_widget_set_can_focus()` call wx inherited became a no-op and every
+`gtk_widget_get_can_focus()` test answered TRUE, which is why no wxWindow could
+take the focus at all. `wx_gtk_widget_set_focusable()` in `gtk3-compat.h` now
+carries the distinction.
+
+Note it must set *only* `focusable` under GTK4: also clearing `can-focus` would
+stop the focus reaching the children of the widgets wxTopLevelWindow marks as
+unfocusable, which GTK3's single flag never did.
+
+#### The consequence that cannot be fixed
+
+Once wx windows are focusable, a GTK4 behaviour GTK3 did not have becomes
+visible: when the widget holding the focus is destroyed, GTK4 does not simply
+drop the focus. It remembers that the window needs one and hands it to the next
+focusable widget added -- including one added before the next frame. A freshly
+created wxWindow can therefore receive a `wxEVT_SET_FOCUS` wx never asked for.
+
+There is no way out at GTK level: `gtk_window_set_focus(NULL)` does not cancel
+it, and a widget with `can-focus = FALSE` is skipped by the restore but then
+cannot be focused explicitly either. `build/tools/gtk4-invariants.c` pins all of
+this, including that last point as a negative control.
+
+Two test cases (`Window::Focus`, `wxDVC::SingleSelection`) fail because of it,
+and only when run after a test that destroys a focused control -- both pass in
+isolation. That is the trade for focus working at all, which it previously did
+not.
+
+### Other fixes in this batch
+
+* **wxTextEntry::GetInsertionPoint()** -- `GtkEntry` does not report its caret.
+  Its `GtkEditable` implementation answers out of the selection, and
+  inconsistently: `gtk_editable_get_position()` returns the selection's *end*
+  and the `"cursor-position"` property its *start*. The `GtkText` delegate
+  underneath answers as GTK3 did, so ask that.
+* **wxSearchCtrl** -- GTK4's `GtkSearchEntry` is not a `GtkEntry` any more, so
+  none of the entry API this class is built on exists on it. It now uses the
+  plain `GtkEntry` fallback the file has carried since GTK 3.0.
+* **wxButton/wxToggleButton** -- `gtk_button_set_label()` *replaces* the
+  button's child under GTK4, so calling it after the image had been arranged
+  threw the image away.
+* **wxSlider** -- `"format-value"` became `gtk_scale_set_format_value_func()`.
+* **Paste** -- GTK4's paste is asynchronous; `wxTextCtrl::Paste()` now reads the
+  clipboard synchronously through wxClipboard, as wx's contract requires.
+* **Menu radio items** -- the first item of a radio group is checked by default,
+  which nothing does for a `GAction`: a group is a stateful action whose state
+  happens to match one member's target, and it starts matching none.
+
 ### Next
 2. Style queries from inside the snapshot vfunc (above): wx builds and destroys
    a `GtkWindow` per `GetColour()` call, during painting. Not this bug, but not
@@ -3379,5 +3495,5 @@ them to express ordering, it is also asserting ownership.
 2. A deliberate audit of every refcounted object the port hands to or takes
    from GTK4, against the GIR annotations, rather than waiting for each one to
    crash.
-3. The 20 failing cases, still clustered in paint/refresh delivery, focus and
-   event propagation, grid cursor, and text control positioning.
+3. The remaining 6 failing cases: wxPropertyGrid's toolbar, three text control
+   metrics cases, the focus-restore pair above, and `wxTopLevel::IsActive()`.

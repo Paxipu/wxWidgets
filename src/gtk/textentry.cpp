@@ -31,6 +31,11 @@
 #include "wx/textcompleter.h"
 
 #include "wx/gtk/private.h"
+#if wxUSE_CLIPBOARD
+    #include "wx/clipbrd.h"
+    #include "wx/dataobj.h"
+#endif
+
 #include "wx/gtk/private/gtk3-compat.h"
 #include "wx/gtk/private/object.h"
 #include "wx/gtk/private/string.h"
@@ -745,7 +750,42 @@ void wxTextEntry::Cut()
 
 void wxTextEntry::Paste()
 {
+#ifdef __WXGTK4__
+    // GTK4's paste is asynchronous: the "paste-clipboard" signal, the
+    // "clipboard.paste" action and gtk_text_buffer_paste_clipboard() all
+    // merely start a GdkClipboard read, and the text does not arrive until
+    // some later main loop iteration. wx's contract -- and GTK3's behaviour
+    // for a clipboard owned by this process -- is that Paste() has taken
+    // effect by the time it returns, so do the read here, through wxClipboard,
+    // which waits for it, and insert the text ourselves.
+    //
+    // Doing so also means the "paste-clipboard" signal is not emitted, so the
+    // event it would have generated has to be sent from here.
+    wxWindow* const win = GetEditableWindow();
+
+    wxClipboardTextEvent event(wxEVT_TEXT_PASTE, win->GetId());
+    event.SetEventObject(win);
+    if ( win->HandleWindowEvent(event) )
+    {
+        // As in DoHandleClipboardCallback(): a handler which dealt with the
+        // event itself replaces the default action rather than adding to it.
+        return;
+    }
+
+#if wxUSE_CLIPBOARD
+    if ( !wxTheClipboard->Open() )
+        return;
+
+    wxTextDataObject data;
+    const bool got = wxTheClipboard->GetData(data);
+    wxTheClipboard->Close();
+
+    if ( got )
+        WriteText(data.GetText());
+#endif // wxUSE_CLIPBOARD
+#else // !__WXGTK4__
     gtk_editable_paste_clipboard(GetEditable());
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 // ----------------------------------------------------------------------------

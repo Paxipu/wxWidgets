@@ -3209,17 +3209,36 @@ validates whether or not it is ever shown**. Every style query in the port was
 therefore a latent abort. Fixed by using `gtk_window_set_child()` for that one
 case.
 
-**The reproducer now survives; the test still aborts.** So the reproducer is
-not faithful to it -- the test drives three frames through
-`wxPersistenceManager` -- and a second attach path still emits the same warning
-once. That one is not a `gtk_widget_set_parent()` call: a breakpoint on it with
-a GtkWindow parent no longer fires at all. GTK4 also attaches popovers to
-widgets as "auxiliary children" outside the layout manager, which is the
-wording the warning uses and the next thing to look at.
+**Correction: that fix does not fix this abort.** The reproducer survived the
+one run taken after the change, and that was read as a fix. It is not -- the
+reproducer is *flaky*, and repeating it says so plainly:
 
-The technique is the transferable part: **bisect into a standalone reproducer,
-then breakpoint the GTK call that must be involved.** Both steps were cheap;
-the three theories before them were not.
+| | Aborted |
+|---|---|
+| Without the change | 16 / 20 |
+| With the change | 13 / 20 |
+
+At n=20 that difference is noise. The change is kept because it is the correct
+API regardless -- `gtk_widget_set_parent()` on a GtkWindow is wrong under GTK4,
+and the code's own comment justified it with an assumption ("never realized or
+size-allocated") that is false for a toplevel -- but **its effect on this abort
+is nil as far as anything measured shows.**
+
+Two lessons, the second more expensive than the first:
+
+- **Check whether a reproducer is deterministic before using it to judge a
+  fix.** A single passing run of a 65%-failure test is not evidence, and three
+  earlier "this didn't help" conclusions in this section rest on single runs
+  too -- they are weaker than they read.
+- The `gtk_widget_set_parent()` call it found was still a real defect, so the
+  bisect-and-breakpoint technique did work. It just found a different bug from
+  the one being hunted.
+
+A second attach path still emits the same warning once, and it is not a
+`gtk_widget_set_parent()` call -- a breakpoint on that with a GtkWindow parent
+never fires. GTK4 attaches popovers as "auxiliary children" outside the layout
+manager, which is the wording the warning uses, and no popover shows up on this
+path either. That is where it stands.
 
 ### Next
 

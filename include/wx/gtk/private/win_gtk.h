@@ -28,6 +28,12 @@ struct WXDLLIMPEXP_CORE wxPizza
     static GType type();
     void move(GtkWidget* widget, int x, int y, int width, int height);
     void put(GtkWidget* widget, int x, int y, int width, int height);
+#ifdef __WXGTK4__
+    // Undo put(). GTK3 got this from GtkContainer's "remove" vfunc, which
+    // GTK4 does not have, so it has to be called explicitly -- see the
+    // comment on the definition.
+    void remove(GtkWidget* widget);
+#endif
     void scroll(int dx, int dy);
     void get_border(GtkBorder& border);
     void size_allocate_child(

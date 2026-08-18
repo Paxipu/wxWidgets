@@ -319,6 +319,11 @@ public:
     // is this window transparent for the mouse events (as wxStaticBox is)?
     virtual bool GTKIsTransparentForMouse() const { return false; }
 
+#ifdef __WXGTK4__
+    // Detach m_widget from its parent using that parent's own removal call.
+    void GTKDetachFromParent();
+#endif
+
     // Undo the frame clock "layout" connections GTKHandleRealized() makes.
     // Declared unconditionally: this header forward-declares its GTK types
     // rather than including gtk.h, so GTK_CHECK_VERSION() is not available

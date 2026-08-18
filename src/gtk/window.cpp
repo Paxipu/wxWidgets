@@ -3570,6 +3570,45 @@ void wxWindowGTK::GTKDisconnectFrameClock()
 }
 #endif // GTK_CHECK_VERSION(3,8,0)
 
+#ifdef __WXGTK4__
+// Detach m_widget from whatever currently holds it.
+//
+// gtk_widget_unparent() is not that operation. GTK4 containers keep their own
+// record of their children, and unparenting behind their back leaves it
+// pointing at a widget that is going away: wxPizza kept a stale m_children
+// entry per departed child, and GtkFixed a stale layout child, which surfaced
+// as "unknown auxiliary child surface" and then as GTK aborting inside
+// gtk_css_node_validate(). Only a widget parented with
+// gtk_widget_set_parent() may be detached with gtk_widget_unparent().
+//
+// wxPizza is the parent for wx's own children, and is the case that had to be
+// fixed. Other GTK containers wx puts children into (notebooks, scrolled
+// windows) each have their own removal call and are not handled here.
+void wxWindowGTK::GTKDetachFromParent()
+{
+    if (GtkWidget* const parent = gtk_widget_get_parent(m_widget))
+    {
+        if (WX_IS_PIZZA(parent))
+            WX_PIZZA(parent)->remove(m_widget);
+        else
+            gtk_widget_unparent(m_widget);
+
+        return;
+    }
+
+    // A wxTopLevelWindow with a wx parent has no GTK parent -- wxPizza::put()
+    // deliberately does not make a toplevel a child at GTK level -- but it is
+    // still recorded in that pizza's m_children, so it has to be looked up
+    // through wx's own parent instead. Missing this left the pizza holding an
+    // entry for a destroyed GtkWindow, which later layout passes walked.
+    if (m_parent != nullptr && m_parent->m_wxwindow != nullptr &&
+            WX_IS_PIZZA(m_parent->m_wxwindow))
+    {
+        WX_PIZZA(m_parent->m_wxwindow)->remove(m_widget);
+    }
+}
+#endif // __WXGTK4__
+
 void wxWindowGTK::GTKHandleRealized()
 {
 #ifndef __WXGTK4__
@@ -4101,10 +4140,12 @@ wxWindowGTK::~wxWindowGTK()
         // same as the GTK3 path. Not yet runtime-verified against a
         // live app -- this is core lifecycle code for every wxWindow,
         // see docs/gtk/gtk4-status.md.
+        // Drop the parent's record of this widget first, while it is still
+        // valid, whether or not it was ever a GTK-level child.
+        GTKDetachFromParent();
+
         if (GTK_IS_WINDOW(m_widget))
             gtk_window_destroy(GTK_WINDOW(m_widget));
-        else if (gtk_widget_get_parent(m_widget))
-            gtk_widget_unparent(m_widget);
 #else
         // Note that gtk_widget_destroy() does not destroy the widget, it just
         // emits the "destroy" signal. The widget is not actually destroyed
@@ -6450,10 +6491,11 @@ bool wxWindowGTK::Reparent( wxWindowBase *newParentBase )
     // been removed from the notebook so test this at GTK level and not wx one.
     if ( gtk_widget_get_parent(m_widget) )
     {
-        // gtk_widget_unparent() is the generic, GTK-version-independent way
-        // to detach a widget from whatever container currently owns it
-        // (GtkContainer itself doesn't exist under GTK4 any more).
+#ifdef __WXGTK4__
+        GTKDetachFromParent();
+#else
         gtk_widget_unparent(m_widget);
+#endif
     }
 
     wxASSERT( GTK_IS_WIDGET(m_widget) );

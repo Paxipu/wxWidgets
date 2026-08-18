@@ -85,6 +85,17 @@ static void pizza_size_allocate(GtkWidget* widget, int width, int WXUNUSED(heigh
     for (const GList* p = pizza->m_children; p; p = p->next)
     {
         const wxPizzaChild* child = static_cast<wxPizzaChild*>(p->data);
+
+        // put() tracks a re-parented toplevel here without making it a child
+        // at GTK level, deliberately -- see the comment there. Allocating one
+        // anyway is what GTK3 tolerated and GTK4 does not: allocating a widget
+        // that is not your child leaves it outside the layout manager
+        // ("Unable to present ... unknown auxiliary child ... widget type
+        // GtkWindow") and corrupts the CSS node tree, which GTK then aborts
+        // on in gtk_css_node_validate().
+        if (gtk_widget_get_parent(child->widget) != widget)
+            continue;
+
         if (gtk_widget_get_visible(child->widget))
         {
             pizza->size_allocate_child(
@@ -419,6 +430,30 @@ static void pizza_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
 }
 #endif // __WXGTK4__
 
+#ifdef __WXGTK4__
+// Under GTK3 the m_children entries were freed by pizza_remove() as
+// GtkContainer tore the children down. With no such vfunc under GTK4 the list
+// has to be released here, or it leaks one wxPizzaChild per child every time a
+// wxPizza is destroyed.
+//
+// GtkFixed unparents the remaining children itself when it is disposed, so
+// this deliberately only drops wx's own bookkeeping; freeing it before
+// chaining up means nothing can walk a list of children that are on their way
+// out.
+static void pizza_dispose(GObject* object)
+{
+    wxPizza* const pizza = WX_PIZZA(object);
+
+    for (GList* p = pizza->m_children; p; p = p->next)
+        delete static_cast<wxPizzaChild*>(p->data);
+
+    g_list_free(pizza->m_children);
+    pizza->m_children = nullptr;
+
+    G_OBJECT_CLASS(parent_class)->dispose(object);
+}
+#endif // __WXGTK4__
+
 static void class_init(void* g_class, void*)
 {
     GtkWidgetClass* widget_class = (GtkWidgetClass*)g_class;
@@ -445,6 +480,7 @@ static void class_init(void* g_class, void*)
     GObjectClass *gobject_class = G_OBJECT_CLASS(g_class);
     gobject_class->set_property = pizza_set_property;
     gobject_class->get_property = pizza_get_property;
+    gobject_class->dispose = pizza_dispose;
     g_object_class_override_property(gobject_class, PROP_HADJUSTMENT, "hadjustment");
     g_object_class_override_property(gobject_class, PROP_VADJUSTMENT, "vadjustment");
     g_object_class_override_property(gobject_class, PROP_HSCROLL_POLICY, "hscroll-policy");
@@ -646,6 +682,38 @@ void wxPizza::put(GtkWidget* widget, int x, int y, int width, int height)
     child->height = height;
     m_children = g_list_append(m_children, child);
 }
+
+#ifdef __WXGTK4__
+// The counterpart to put(), which GTK3 got for free: GtkContainer's "remove"
+// vfunc (pizza_remove() above) fired whenever a child left, and kept
+// m_children in step.
+//
+// GTK4 has no GtkContainer and so no such vfunc, and nothing was maintaining
+// m_children at all: every child that went away left behind an entry pointing
+// at a freed GtkWidget, which pizza_size_allocate(), pizza_measure() and
+// pizza_snapshot() then walked. gtk_widget_unparent() also bypasses
+// gtk_fixed_remove(), so GtkFixed's own layout-child bookkeeping was left
+// stale in the same way -- the two together showed up as
+// "unknown auxiliary child surface" from the layout manager and eventually as
+// GTK aborting inside gtk_css_node_validate().
+void wxPizza::remove(GtkWidget* widget)
+{
+    for (GList* p = m_children; p; p = p->next)
+    {
+        wxPizzaChild* const child = static_cast<wxPizzaChild*>(p->data);
+        if (child->widget == widget)
+        {
+            m_children = g_list_delete_link(m_children, p);
+            delete child;
+            break;
+        }
+    }
+
+    // put() does not parent toplevels, so this is not redundant.
+    if (gtk_widget_get_parent(widget) == GTK_WIDGET(this))
+        gtk_fixed_remove(GTK_FIXED(this), widget);
+}
+#endif // __WXGTK4__
 
 #ifndef __WXGTK4__
 struct AdjustData {

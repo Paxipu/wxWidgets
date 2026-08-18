@@ -906,7 +906,10 @@ GtkToggleButton* wxToolBar::GetRadioGroup(size_t pos)
         wxToolBarTool* const neighbour = static_cast<wxToolBarTool*>(
             GTKGetToolAt(i == 0 ? pos - 1 : pos));
 
-        if ( neighbour && neighbour->GetKind() == wxITEM_RADIO &&
+        // IsButton() first: GetKind() asserts for anything else, and the
+        // neighbour of a radio tool is very often a separator or a control.
+        if ( neighbour && neighbour->IsButton() &&
+                neighbour->GetKind() == wxITEM_RADIO &&
                 neighbour->m_button &&
                     GTK_IS_TOGGLE_BUTTON(neighbour->m_button) )
         {

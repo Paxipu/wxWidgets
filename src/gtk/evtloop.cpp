@@ -28,6 +28,9 @@
     #include "wx/log.h"
 #endif // WX_PRECOMP
 
+#include "wx/window.h"
+#include "wx/toplevel.h"
+
 #include "wx/private/eventloopsourcesmanager.h"
 #include "wx/apptrait.h"
 
@@ -443,6 +446,53 @@ static void wxgtk_main_do_event(GdkEvent* event, void* data)
 
 #endif // !__WXGTK4__
 
+#ifdef __WXGTK4__
+
+// Let GTK catch up with the layout it has scheduled.
+//
+// GTK3 laid out from idle handlers, which running the main loop dispatched, so
+// a yield settled the interface: that is what wx callers have always assumed,
+// and what "wxYield(); // let GTK layout the control" comments throughout the
+// test suite are asking for. GTK4 lays out in the frame clock's phases
+// instead, which running the main loop does not advance. A window shown,
+// hidden, resized or re-filled just before a yield is therefore still stale
+// when it returns, and every query that depends on the layout --
+// wxTextCtrl::PositionToCoords(), HitTest(), the scrollbar ranges -- answers
+// out of date without anything indicating it.
+//
+// So ask each mapped toplevel's clock for a frame and pump until it has
+// produced one. The wait is bounded because a window that is not being
+// presented may never produce another frame, and a yield must not hang.
+static void wxGTKSettleFrames()
+{
+    for ( wxWindowList::const_iterator i = wxTopLevelWindows.begin();
+          i != wxTopLevelWindows.end();
+          ++i )
+    {
+        GtkWidget* const widget = (*i)->GetHandle();
+        if ( !widget || !gtk_widget_get_mapped(widget) )
+            continue;
+
+        GdkFrameClock* const clock = gtk_widget_get_frame_clock(widget);
+        if ( !clock )
+            continue;
+
+        const gint64 frame = gdk_frame_clock_get_frame_counter(clock);
+        const gint64 deadline = g_get_monotonic_time() + 100000; // 0.1s
+
+        gdk_frame_clock_request_phase(clock, GDK_FRAME_CLOCK_PHASE_LAYOUT);
+
+        while ( gdk_frame_clock_get_frame_counter(clock) == frame &&
+                g_get_monotonic_time() < deadline )
+        {
+            if ( !g_main_context_iteration(nullptr, FALSE) )
+                g_usleep(1000);
+        }
+    }
+}
+
+#endif // __WXGTK4__
+
 void wxGUIEventLoop::DoYieldFor(long eventsToProcess)
 {
 #ifdef __WXGTK4__
@@ -462,6 +512,8 @@ void wxGUIEventLoop::DoYieldFor(long eventsToProcess)
     // See docs/gtk/gtk4-status.md for this as a recorded fidelity gap.
     while ( Pending() )
         g_main_context_iteration(nullptr, FALSE);
+
+    wxGTKSettleFrames();
 
     wxEventLoopBase::DoYieldFor(eventsToProcess);
 #else

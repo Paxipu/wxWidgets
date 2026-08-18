@@ -2222,17 +2222,39 @@ bool wxTextCtrl::GetStyle(long position, wxTextAttr& style)
             }
         }
 
-        PangoFontDescription* desc = nullptr;
-        g_object_get(tag, "font-desc", &desc, nullptr);
-        if ( desc )
+        // A GtkTextTag's "font-desc" is never null: the property always
+        // returns the tag's description, which for a tag that says nothing
+        // about the font is simply the default one. Reading it unconditionally
+        // therefore let any tag -- a colour tag, say -- overwrite the font that
+        // an earlier tag, or the default style, had legitimately set, with the
+        // widget's own font. The individual "-set" flags are what say whether
+        // the tag really carries a font.
+        gboolean familySet = FALSE,
+                 sizeSet = FALSE,
+                 styleSet = FALSE,
+                 weightSet = FALSE;
+        g_object_get(tag,
+                     "family-set", &familySet,
+                     "size-set", &sizeSet,
+                     "style-set", &styleSet,
+                     "weight-set", &weightSet,
+                     nullptr);
+
+        if ( familySet || sizeSet || styleSet || weightSet )
         {
-            const wxGtkString descString(pango_font_description_to_string(desc));
+            PangoFontDescription* desc = nullptr;
+            g_object_get(tag, "font-desc", &desc, nullptr);
+            if ( desc )
+            {
+                const wxGtkString
+                    descString(pango_font_description_to_string(desc));
 
-            wxFont font;
-            if ( font.SetNativeFontInfo(wxString(descString)) )
-                style.SetFont(font);
+                wxFont font;
+                if ( font.SetNativeFontInfo(wxString(descString)) )
+                    style.SetFont(font);
 
-            pango_font_description_free(desc);
+                pango_font_description_free(desc);
+            }
         }
 
         g_object_get(tag, "underline-set", &isSet, nullptr);

@@ -950,6 +950,96 @@ static void test_version_check_semantics(void)
           "the shim must keep passing GTK4 requirements through unchanged");
 }
 
+/* ------------------------------------------------------------------------ *
+ * Layout managers take over from the class vfuncs.
+ * ------------------------------------------------------------------------ */
+
+static int g_probeMeasureCalls;
+
+typedef struct { GtkFixed parent; } WxProbeFixed;
+typedef struct { GtkFixedClass parent; } WxProbeFixedClass;
+
+static void wx_probe_measure(GtkWidget* w, GtkOrientation o, int f,
+                             int* mi, int* na, int* bl1, int* bl2)
+{
+    (void)w; (void)o; (void)f; (void)bl1; (void)bl2;
+    g_probeMeasureCalls++;
+    if (mi) *mi = 50;
+    if (na) *na = 50;
+}
+
+static void wx_probe_class_init(gpointer klass, gpointer data)
+{
+    (void)data;
+    GTK_WIDGET_CLASS(klass)->measure = wx_probe_measure;
+}
+
+static GType wx_probe_fixed_type(void)
+{
+    static GType t;
+    if (!t)
+    {
+        const GTypeInfo i = { sizeof(WxProbeFixedClass), NULL, NULL,
+                              wx_probe_class_init, NULL, NULL,
+                              sizeof(WxProbeFixed), 0, NULL, NULL };
+        t = g_type_register_static(GTK_TYPE_FIXED, "WxProbeFixed", &i,
+                                   (GTypeFlags)0);
+    }
+    return t;
+}
+
+static void test_layout_manager_dispatch(void)
+{
+    GtkWidget* f;
+    GtkLayoutManager* lm;
+    int measuredWithLayout, measuredWithout;
+    int mi = 0;
+
+    printf("Layout manager vs. class vfunc dispatch:\n");
+
+    /* This is what made wxPizza's entire layout implementation dead code for
+     * the whole port: gtk_widget_measure() and gtk_widget_allocate() call a
+     * widget's GtkLayoutManager *instead of* GTK_WIDGET_GET_CLASS()->measure /
+     * ->size_allocate when one is installed, and GtkFixed -- wxPizza's base
+     * class -- installs GtkFixedLayout.  Every wx child window was allocated
+     * 0x0 by GtkFixedLayout, and nothing warned.  win_gtk.cpp therefore calls
+     * gtk_widget_set_layout_manager(widget, NULL) in wxPizza::New().
+     * See docs/gtk/probes/gtk4-layout-manager.c. */
+
+    f = GTK_WIDGET(g_object_new(wx_probe_fixed_type(), NULL));
+    g_object_ref_sink(f);
+
+    lm = gtk_widget_get_layout_manager(f);
+    check(lm != NULL && GTK_IS_FIXED_LAYOUT(lm),
+          "GtkFixed still installs a GtkFixedLayout on its subclasses",
+          "if GtkFixed no longer has a layout manager, clearing it in "
+          "wxPizza::New() is a no-op and the comment there is misleading");
+
+    g_probeMeasureCalls = 0;
+    gtk_widget_measure(f, GTK_ORIENTATION_HORIZONTAL, -1, &mi, NULL, NULL, NULL);
+    measuredWithLayout = g_probeMeasureCalls;
+
+    check(measuredWithLayout == 0,
+          "with a layout manager, the class measure() vfunc is NOT called",
+          "GTK now calls both; wxPizza may be measuring twice");
+
+    gtk_widget_set_layout_manager(f, NULL);
+    g_probeMeasureCalls = 0;
+    gtk_widget_measure(f, GTK_ORIENTATION_HORIZONTAL, -1, &mi, NULL, NULL, NULL);
+    measuredWithout = g_probeMeasureCalls;
+
+    check(measuredWithout > 0,
+          "clearing the layout manager restores the class measure() vfunc",
+          "wxPizza's own measure()/size_allocate() are unreachable, and every "
+          "wx child window will be laid out at 0x0");
+
+    check(mi == 50,
+          "and the value the class vfunc reports is the one GTK uses",
+          "the vfunc runs but its result is discarded");
+
+    g_object_unref(f);
+}
+
 static void test_indicator_nodes(void)
 {
     GtkWidget* checkbtn;
@@ -1036,6 +1126,8 @@ int main(void)
     test_css_parser_strictness();
     printf("\n");
     test_version_check_semantics();
+    printf("\n");
+    test_layout_manager_dispatch();
 #ifdef HAVE_XTEST
     printf("\n");
     test_gesture_claim_semantics();

@@ -3534,8 +3534,20 @@ never suppress a focus change the user actually made.
 
 * **`wxDVC::SingleSelection`** -- and only when run after other tests. A
   `GtkTreeView` selects its cursor row when it gains the focus, and the focus it
-  gains here is GTK's restore, which wx declines but cannot take back. Fixing it
-  means stopping the selection on focus, not more focus bookkeeping.
+  gains here is GTK's restore, which wx declines but cannot take back: the
+  selection is made by GTK during the grab, before wx sees the focus-in at all.
+
+  The selection-on-focus half is *not* a GTK4 regression -- a probe against the
+  GTK3 build does exactly the same thing, `SetFocus()` on a wxDataViewCtrl
+  leaving one row selected -- so there is nothing to fix in the dataview code.
+  Nor can the focus be kept away from it: the restore lands on a `GtkTreeView`
+  because that widget is focusable by its own class default, whatever wx does
+  with the `focusable` flag, and marking it `can-focus = FALSE` would exclude it
+  from the restore only by making it unfocusable outright.
+
+  So this one is a second-order effect of a GTK4 behaviour that cannot be
+  declined, sitting on top of wxGTK behaviour that is unchanged. Recorded
+  rather than fixed.
 * **`TextCtrl::HitTestSingleLine/Scrolled`** -- the horizontal scroll offset gap
   recorded earlier: a single-line entry's scroll position is not reachable
   through GTK4's API, so hit testing past the visible text is off.

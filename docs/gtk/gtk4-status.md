@@ -3488,6 +3488,58 @@ not.
   which nothing does for a `GAction`: a group is a stateful action whose state
   happens to match one member's target, and it starts matching none.
 
+## Progress update 36: a yield has to settle the frame clock
+
+`test_gui` is now at **488 passed / 2 failed of 490**, and runs in **3m20s
+rather than 25 minutes**.
+
+The runtime collapse and most of the remaining failures had one cause.
+`wxYield()` no longer settled the interface: GTK3 laid out from idle handlers,
+which running the main loop dispatched, so a yield did settle it -- that is what
+wx callers have always assumed, and what the `wxYield(); // let GTK layout the
+control` comments throughout the test suite are asking for. GTK4 lays out in the
+frame clock's phases, which running the main loop does not advance. So a window
+shown, hidden, resized or re-filled just before a yield was still stale when it
+returned, and `PositionToCoords()`, `HitTest()`, scrollbar ranges and the rest
+all answered out of date, with nothing indicating it.
+
+`wxGUIEventLoop::DoYieldFor()` now asks each mapped toplevel's clock for a frame
+and pumps until it has produced one, bounded so that a window which is never
+presented cannot hang a yield. The suite got seven times faster because the
+waits that used to time out now simply succeed.
+
+### The focus restore, resolved
+
+The GTK4 behaviour described in the previous section -- focus handed to the next
+focusable widget added after the one holding it was destroyed -- turned out to
+be recognizable, even though it cannot be declined at GTK level. Every wxWindow
+carries a creation serial; when a focused one is destroyed the serial of that
+moment is remembered, and a focus arriving at a window created after it, which
+wx did not ask for, is the restore rather than anything real.
+
+Two details make it work rather than merely move the problem:
+
+* **Do not take the focus back.** `gtk_window_set_focus(nullptr)` does not
+  cancel the pending move; it only makes GTK look for somewhere else to put the
+  focus, which is the *next* window created. wx leaves GTK's idea of the focus
+  alone and simply does not report it, ignoring the matching focus-out later.
+* **Report it if wx later asks for it.** A declined window is still GTK's focus
+  widget, so grabbing the focus for it produces no further focus-in;
+  `SetFocus()` would have looked like it did nothing.
+
+The mark is one-shot and is dropped at the end of the event loop turn, so it can
+never suppress a focus change the user actually made.
+
+### The two that are left
+
+* **`wxDVC::SingleSelection`** -- and only when run after other tests. A
+  `GtkTreeView` selects its cursor row when it gains the focus, and the focus it
+  gains here is GTK's restore, which wx declines but cannot take back. Fixing it
+  means stopping the selection on focus, not more focus bookkeeping.
+* **`TextCtrl::HitTestSingleLine/Scrolled`** -- the horizontal scroll offset gap
+  recorded earlier: a single-line entry's scroll position is not reachable
+  through GTK4's API, so hit testing past the visible text is off.
+
 ### Next
 2. Style queries from inside the snapshot vfunc (above): wx builds and destroys
    a `GtkWindow` per `GetColour()` call, during painting. Not this bug, but not
@@ -3495,5 +3547,4 @@ not.
 2. A deliberate audit of every refcounted object the port hands to or takes
    from GTK4, against the GIR annotations, rather than waiting for each one to
    crash.
-3. The remaining 6 failing cases: wxPropertyGrid's toolbar, three text control
-   metrics cases, the focus-restore pair above, and `wxTopLevel::IsActive()`.
+3. Running the samples, which is what all of this was for.

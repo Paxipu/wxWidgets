@@ -26,6 +26,12 @@
 //             frame: does a dialog leave anything behind that stops the frame
 //             from closing afterwards?
 //
+//   anim   -- what a wxAnimationCtrl actually shows, read back from the
+//             screen, as the inactive bitmap and the background colour are
+//             both reported as having no effect. Takes the path of an
+//             animation file as its second argument, e.g. the anim sample's
+//             throbber.gif.
+//
 //   about  -- wxAboutBox(), closed with the window manager's close button,
 //             then opened again. GTK4's GtkAboutDialog is a GtkWindow rather
 //             than a GtkDialog: it has no "response" signal, and closing it
@@ -37,6 +43,8 @@
 
 #include "wx/wx.h"
 #include "wx/aboutdlg.h"
+#include "wx/animate.h"
+#include "wx/artprov.h"
 #include "wx/colordlg.h"
 #include "wx/filedlg.h"
 #include "wx/modalhook.h"
@@ -126,13 +134,16 @@ public:
     {
         setvbuf(stdout, nullptr, _IONBF, 0);
 
-        if ( argc != 2 )
+        if ( argc < 2 )
         {
-            printf("usage: %s wheel|close|about\n", (const char*)argv[0].utf8_str());
+            printf("usage: %s wheel|dialog|close|about|anim [animation-file]\n",
+                   (const char*)argv[0].utf8_str());
             return false;
         }
 
         m_mode = argv[1];
+        if ( argc > 2 )
+            m_animFile = argv[2];
         CallAfter(&ReproApp::Run);
         return true;
     }
@@ -162,6 +173,8 @@ private:
             TestWheel();
         else if ( m_mode == "dialog" )
             TestDialog();
+        else if ( m_mode == "anim" )
+            TestAnim();
         else if ( m_mode == "close" )
             TestClose();
         else if ( m_mode == "about" )
@@ -225,6 +238,84 @@ private:
             Fail("the frame is still there after the close button");
         else
             printf("PASS: the close button closes a wxFrame\n");
+    }
+
+    // What is actually on the screen at the given point of the window.
+    static wxString PixelAt(wxWindow* win, int x, int y)
+    {
+        Display* display = nullptr;
+        if ( !GetXWindow(win, &display) )
+            return "no window";
+
+        const wxPoint pt = win->ClientToScreen(wxPoint(x, y));
+
+        XImage* const image = XGetImage(display, DefaultRootWindow(display),
+                                        pt.x, pt.y, 1, 1, AllPlanes, ZPixmap);
+        if ( !image )
+            return "off screen";
+
+        const unsigned long px = XGetPixel(image, 0, 0);
+        XDestroyImage(image);
+
+        return wxString::Format("#%02lx%02lx%02lx",
+                                (px >> 16) & 0xff, (px >> 8) & 0xff, px & 0xff);
+    }
+
+    void Show(const char* what)
+    {
+        Settle(400);
+
+        const wxSize size = m_anim->GetClientSize();
+        printf("  %-42s size %dx%d  corner %s  quarter %s  centre %s\n",
+               what, size.x, size.y,
+               (const char*)PixelAt(m_anim, 1, 1).utf8_str(),
+               (const char*)PixelAt(m_anim, size.x / 4, size.y / 4).utf8_str(),
+               (const char*)PixelAt(m_anim, size.x / 2, size.y / 2).utf8_str());
+    }
+
+    void TestAnim()
+    {
+        wxFrame* const frame = new wxFrame(nullptr, wxID_ANY, "anim", wxDefaultPosition, wxSize(500, 400));
+        wxSizer* const sizer = new wxBoxSizer(wxVERTICAL);
+        m_anim = new wxAnimationCtrl(frame, wxID_ANY);
+        sizer->Add(m_anim, wxSizerFlags().Centre().Border());
+        frame->SetSizer(sizer);
+        frame->Show();
+        Settle();
+
+        wxAnimation anim(m_anim->CreateAnimation());
+        if ( !anim.LoadFile(m_animFile) )
+        {
+            Fail("cannot load " + m_animFile);
+            return;
+        }
+
+        m_anim->SetAnimation(anim);
+        m_anim->Play();
+        frame->Layout();
+        Show("playing the animation");
+
+        m_anim->SetInactiveBitmap(wxArtProvider::GetBitmap(wxART_MISSING_IMAGE));
+        Show("inactive bitmap set while playing");
+
+        m_anim->Stop();
+        Show("stopped: the inactive bitmap should show");
+
+        m_anim->SetInactiveBitmap(wxNullBitmap);
+        Show("inactive bitmap removed: first frame again");
+
+        m_anim->SetAnimation(wxNullAnimation);
+        Show("no animation: the background colour should show");
+
+        m_anim->SetBackgroundColour(*wxGREEN);
+        Show("background set to green (#00ff00)");
+
+        m_anim->SetAnimation(anim);
+        m_anim->Play();
+        frame->Layout();
+        Show("animation loaded again while green");
+
+        frame->Destroy();
     }
 
     void TestDialog()
@@ -369,6 +460,8 @@ private:
     }
 
     wxString m_mode;
+    wxString m_animFile = "throbber.gif";
+    wxAnimationCtrl* m_anim = nullptr;
     wxTimer m_timer;
     wxWindow* m_frame = nullptr;
     int m_failed = 0;

@@ -34,6 +34,53 @@ G_GNUC_BEGIN_IGNORE_DEPRECATIONS
 // implementation
 // ============================================================================
 
+// ----------------------------------------------------------------------------
+// the widget showing the frames
+// ----------------------------------------------------------------------------
+
+// GTK4's GtkImage is documented as being for icons and scales whatever it is
+// given up to the size of the widget. GTK3's drew it at its natural size,
+// centred, which is what this control needs: its background colour and the
+// wxAC_NO_AUTORESIZE style only mean anything if the part of the control the
+// frame does not cover stays visible.
+//
+// GtkPicture with GTK_CONTENT_FIT_SCALE_DOWN behaves the way GtkImage used to
+// -- natural size and centred, scaled down only when the frame is too big to
+// fit. docs/gtk/probes/gtk-image-natural-size.c measures all three.
+
+namespace
+{
+
+GtkWidget* wxGtkAnimationWidgetNew()
+{
+#ifdef __WXGTK4__
+    GtkWidget* const widget = gtk_picture_new();
+#if GTK_CHECK_VERSION(4,8,0)
+    gtk_picture_set_content_fit(GTK_PICTURE(widget), GTK_CONTENT_FIT_SCALE_DOWN);
+#endif
+    return widget;
+#else
+    return gtk_image_new();
+#endif
+}
+
+void wxGtkAnimationWidgetSet(GtkWidget* widget, GdkPixbuf* pixbuf)
+{
+#ifdef __WXGTK4__
+    if (pixbuf)
+    {
+        wxGtkObject<GdkTexture> texture(gdk_texture_new_for_pixbuf(pixbuf));
+        gtk_picture_set_paintable(GTK_PICTURE(widget), GDK_PAINTABLE(texture));
+    }
+    else
+        gtk_picture_set_paintable(GTK_PICTURE(widget), nullptr);
+#else
+    gtk_image_set_from_pixbuf(GTK_IMAGE(widget), pixbuf);
+#endif
+}
+
+} // anonymous namespace
+
 extern "C" {
 static
 void gdk_pixbuf_area_updated(GdkPixbufLoader    *loader,
@@ -225,7 +272,7 @@ bool wxAnimationCtrl::Create( wxWindow *parent, wxWindowID id,
 
     SetWindowStyle(style);
 
-    m_widget = gtk_image_new();
+    m_widget = wxGtkAnimationWidgetNew();
     g_object_ref(m_widget);
 
     m_parent->DoAddChild( this );
@@ -390,8 +437,7 @@ void wxAnimationCtrl::DisplayStaticImage()
     if (m_bmpStaticReal.IsOk())
     {
         // show inactive bitmap
-        gtk_image_set_from_pixbuf(GTK_IMAGE(m_widget),
-                                      m_bmpStaticReal.GetPixbuf());
+        wxGtkAnimationWidgetSet(m_widget, m_bmpStaticReal.GetPixbuf());
     }
     else
     {
@@ -399,8 +445,8 @@ void wxAnimationCtrl::DisplayStaticImage()
         {
             // even if not clearly documented, gdk_pixbuf_animation_get_static_image()
             // always returns the first frame of the animation
-            gtk_image_set_from_pixbuf(GTK_IMAGE(m_widget),
-                                        gdk_pixbuf_animation_get_static_image(m_anim));
+            wxGtkAnimationWidgetSet(m_widget,
+                                    gdk_pixbuf_animation_get_static_image(m_anim));
         }
         else
         {
@@ -441,7 +487,7 @@ void wxAnimationCtrl::ClearToBackgroundColour()
     guint32 col = (clr.Red() << 24) | (clr.Green() << 16) | (clr.Blue() << 8);
     gdk_pixbuf_fill(newpix, col);
 
-    gtk_image_set_from_pixbuf(GTK_IMAGE(m_widget), newpix);
+    wxGtkAnimationWidgetSet(m_widget, newpix);
     g_object_unref(newpix);
 }
 
@@ -480,8 +526,8 @@ void wxAnimationCtrl::OnTimer(wxTimerEvent& WXUNUSED(ev))
         if (n >= 0)
             m_timer.Start(n, true);
 
-        gtk_image_set_from_pixbuf(GTK_IMAGE(m_widget),
-                                  gdk_pixbuf_animation_iter_get_pixbuf(m_iter));
+        wxGtkAnimationWidgetSet(m_widget,
+                                gdk_pixbuf_animation_iter_get_pixbuf(m_iter));
     }
     else
     {

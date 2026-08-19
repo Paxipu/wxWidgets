@@ -46,6 +46,7 @@
 
 #include "wx/gtk/private.h"
 #include "wx/gtk/private/gtk3-compat.h"
+#include "wx/gtk/private/object.h"
 #include "wx/gtk/private/event.h"
 #include "wx/gtk/private/wayland.h"
 #include "wx/gtk/private/win_gtk.h"
@@ -7498,8 +7499,17 @@ void wxWindowGTK::Update()
         // and Update() must not hang in that case.
         gtk_widget_queue_draw(m_wxwindow ? m_wxwindow : m_widget);
 
-        if ( GdkFrameClock* const clock = gtk_widget_get_frame_clock(m_widget) )
+        // GDK_IS_FRAME_CLOCK() rather than a null check: a widget whose
+        // surface is going away can hand back something that is not one.
+        GdkFrameClock* const clock = gtk_widget_get_frame_clock(m_widget);
+        if ( GDK_IS_FRAME_CLOCK(clock) )
         {
+            // Held for the duration: the loop below runs the main loop, and
+            // the window may well be on its way out -- this is called from
+            // teardown paths -- in which case the clock would be destroyed
+            // under it.
+            wxGtkObject<GdkFrameClock> keepAlive(GDK_FRAME_CLOCK(g_object_ref(clock)));
+
             const gint64 frame = gdk_frame_clock_get_frame_counter(clock);
             const gint64 deadline = g_get_monotonic_time() + 500000; // 0.5s
 

@@ -35,6 +35,7 @@
 #include "wx/apptrait.h"
 
 #include "wx/gtk/private/wrapgtk.h"
+#include "wx/gtk/private/object.h"
 
 #ifndef __WXGTK4__
 GdkWindow* wxGetTopLevelGDK();
@@ -465,6 +466,14 @@ static void wxgtk_main_do_event(GdkEvent* event, void* data)
 // presented may never produce another frame, and a yield must not hang.
 static void wxGTKSettleFrames()
 {
+    // Collect the clocks before waiting on any of them. The wait below runs
+    // the main loop, which is free to destroy top level windows -- a yield is
+    // exactly where a deferred Destroy() happens -- so walking
+    // wxTopLevelWindows while pumping it walks a list being changed underneath.
+    // A reference on each clock keeps it valid for the wait even if its window
+    // goes away during an earlier one.
+    wxVector<GdkFrameClock*> clocks;
+
     for ( wxWindowList::const_iterator i = wxTopLevelWindows.begin();
           i != wxTopLevelWindows.end();
           ++i )
@@ -474,8 +483,15 @@ static void wxGTKSettleFrames()
             continue;
 
         GdkFrameClock* const clock = gtk_widget_get_frame_clock(widget);
-        if ( !clock )
+        if ( !GDK_IS_FRAME_CLOCK(clock) )
             continue;
+
+        clocks.push_back(GDK_FRAME_CLOCK(g_object_ref(clock)));
+    }
+
+    for ( size_t n = 0; n < clocks.size(); n++ )
+    {
+        GdkFrameClock* const clock = clocks[n];
 
         const gint64 frame = gdk_frame_clock_get_frame_counter(clock);
         const gint64 deadline = g_get_monotonic_time() + 100000; // 0.1s
@@ -489,6 +505,9 @@ static void wxGTKSettleFrames()
                 g_usleep(1000);
         }
     }
+
+    for ( size_t n = 0; n < clocks.size(); n++ )
+        g_object_unref(clocks[n]);
 }
 
 #endif // __WXGTK4__

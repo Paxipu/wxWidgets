@@ -3961,7 +3961,24 @@ the image does not fit.
 
 This is worth remembering beyond wxAnimationCtrl: **any GTK4 `GtkImage`
 given something larger than an icon will stretch it**, including the one
-`wxGtkImage` uses under GTK4.
+`wxGtkImage` uses under GTK4. wxStaticBitmap is the case that shows: a 32x32
+bitmap in a control sized 100x100 fills the control, corner pixel and all,
+where it should sit in the middle of the control's background. It is not
+fixed here -- it needs the same GtkPicture treatment, one level down in
+`wxGtkImage`, where the button, toolbar and menu users of that class also
+have to be checked -- and it was not reported, since nothing anyone looked
+at yet has a static bitmap bigger than its bitmap.
+
+### And the suite
+
+`test_gui` is unchanged at **488 passed / 2 failed of 490**, the two being
+the `wxDVC::SingleSelection` and `TextCtrl::HitTest` failures already
+described. (`wxTopLevel::Show` fails as well if the suite is run without
+`wxUSE_XVFB=1`: the test only skips its `IsActive()` check when that
+variable says there is no window manager.) The `grab-notify` criticals a
+text entry with completion used to print for itself are gone too: the signal
+went with GTK4's grabs, and nothing says when a GtkEntryCompletion popup is
+up any more, so wxTE_PROCESS_ENTER now stays on while it is.
 
 ### Not a bug
 

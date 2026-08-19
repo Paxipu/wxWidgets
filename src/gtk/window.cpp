@@ -3177,6 +3177,46 @@ wxGTKImpl::WindowButtonReleaseCallback(wxWindowGTK* win, GdkEvent* gdk_event,
     return win->GTKProcessEvent(event);
 }
 
+// GTK3's EventAlreadyProcessed() guard is still needed for the pointer, even
+// though it genuinely is not for the keyboard.
+//
+// A GtkEventControllerKey lives on the focus widget and fires only for it, so
+// the key handlers below rightly have no such check. A GtkGestureClick in the
+// default BUBBLE phase is different: when nobody claims the sequence -- which
+// is exactly what happens when wx does not handle the press -- the same press
+// is offered to every ancestor in turn, each with its own gesture. wx's
+// callback then re-targets the event with FindWindowForMouseEvent(), so one
+// physical click reached the same wxWindow once per ancestor.
+//
+// Two wxEVT_LEFT_DOWN for one press breaks anything that toggles state on a
+// click. It is why wxAuiManager could not start a pane drag: the second down
+// arrived while the first had already begun one.
+//
+// A reference is held on the remembered event so that the next one cannot be
+// allocated at the same address and be mistaken for it.
+namespace
+{
+
+GdkEvent* gs_lastButtonEvent = nullptr;
+
+bool ButtonEventAlreadyProcessed(GdkEvent* gdk_event)
+{
+    if ( !gdk_event )
+        return false;
+
+    if ( gdk_event == gs_lastButtonEvent )
+        return true;
+
+    if ( gs_lastButtonEvent )
+        gdk_event_unref(gs_lastButtonEvent);
+
+    gs_lastButtonEvent = gdk_event_ref(gdk_event);
+
+    return false;
+}
+
+} // anonymous namespace
+
 extern "C" {
 
 // GtkGestureClick::pressed(n_press, x, y).
@@ -3208,11 +3248,15 @@ wx_gtk_button_pressed_callback(GtkGestureClick* gesture,
 {
     GtkEventController* const c = GTK_EVENT_CONTROLLER(gesture);
 
+    GdkEvent* const gdk_event = gtk_event_controller_get_current_event(c);
+    if ( ButtonEventAlreadyProcessed(gdk_event) )
+        return;
+
     const int button = int(gtk_gesture_single_get_current_button(
                                 GTK_GESTURE_SINGLE(gesture)));
 
     if ( wxGTKImpl::WindowButtonPressCallback(
-                win, gtk_event_controller_get_current_event(c),
+                win, gdk_event,
                 button, nPress, x, y) )
     {
         gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
@@ -3226,11 +3270,15 @@ wx_gtk_button_released_callback(GtkGestureClick* gesture,
 {
     GtkEventController* const c = GTK_EVENT_CONTROLLER(gesture);
 
+    GdkEvent* const gdk_event = gtk_event_controller_get_current_event(c);
+    if ( ButtonEventAlreadyProcessed(gdk_event) )
+        return;
+
     const int button = int(gtk_gesture_single_get_current_button(
                                 GTK_GESTURE_SINGLE(gesture)));
 
     if ( wxGTKImpl::WindowButtonReleaseCallback(
-                win, gtk_event_controller_get_current_event(c),
+                win, gdk_event,
                 button, x, y) )
     {
         gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);

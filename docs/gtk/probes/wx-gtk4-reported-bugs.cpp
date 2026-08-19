@@ -240,7 +240,7 @@ private:
 
         printf("modal count before: %u\n", wxModalDialogHook::GetOpenCount());
 
-        m_timer.Start(1500, wxTIMER_ONE_SHOT);
+        m_timer.Start(1500);
         const wxColour clr = wxGetColourFromUser(frame, *wxRED, "colour");
         printf("colour dialog: returned %s, modal count %u, frame enabled %d\n",
                clr.IsOk() ? "a colour" : "nothing",
@@ -248,7 +248,7 @@ private:
 
         {
             wxFileDialog dlg(frame, "file", "", "", "*", wxFD_OPEN);
-            m_timer.Start(1500, wxTIMER_ONE_SHOT);
+            m_timer.Start(1500);
             const int rc = dlg.ShowModal();
             printf("file dialog: returned %d, modal count %u, frame enabled %d\n",
                    rc, wxModalDialogHook::GetOpenCount(), frame->IsEnabled());
@@ -287,11 +287,17 @@ private:
         for ( guint i = 0; i < n; i++ )
         {
             GtkWindow* const win = GTK_WINDOW(g_list_model_get_item(toplevels, i));
+            GdkSurface* const surface = gtk_native_get_surface(GTK_NATIVE(win));
+            printf("  toplevel %s visible=%d modal=%d surface=%p\n",
+                   G_OBJECT_TYPE_NAME(win),
+                   gtk_widget_get_visible(GTK_WIDGET(win)),
+                   gtk_window_get_modal(win), (void*)surface);
             if ( gtk_widget_get_visible(GTK_WIDGET(win)) )
             {
-                GdkSurface* const surface = gtk_native_get_surface(GTK_NATIVE(win));
                 if ( surface && GDK_SURFACE_XID(surface) != keep )
                 {
+                    printf("  -> close button to 0x%lx\n",
+                           (unsigned long)GDK_SURFACE_XID(surface));
                     SendCloseButton(GDK_SURFACE_XDISPLAY(surface),
                                     GDK_SURFACE_XID(surface));
                 }

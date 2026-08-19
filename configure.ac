@@ -7093,7 +7093,22 @@ if test "$wxUSE_WEBVIEW" = "yes"; then
     USE_WEBVIEW_WEBKIT2=0
     if test "$wxUSE_WEBVIEW_WEBKIT" = "yes"; then
         if test "$wxUSE_GTK" = 1; then
-            if test "$WXGTK3" = 1; then
+            if test "$WXGTK4" = 1; then
+                dnl WebKitGTK has a separate API version for GTK4 and the
+                dnl GTK3 ones can't be used at all here: their headers refer
+                dnl to GtkContainer, GtkAction and GdkEvent* structs which
+                dnl don't exist under GTK4, so they don't even compile.
+                PKG_CHECK_MODULES([WEBKIT],
+                                  [webkitgtk-6.0],
+                                  [
+                                    USE_WEBVIEW_WEBKIT2=1
+                                    CXXFLAGS="$CXXFLAGS $WEBKIT_CFLAGS"
+                                    EXTRALIBS_WEBVIEW="$WEBKIT_LIBS"
+                                  ],
+                                  [
+                                    AC_MSG_WARN([webkitgtk-6.0 not found, wxWebView will be disabled])
+                                  ])
+            elif test "$WXGTK3" = 1; then
                 PKG_CHECK_MODULES([WEBKIT],
                                   [webkit2gtk-4.1],
                                   [
@@ -7117,7 +7132,9 @@ if test "$wxUSE_WEBVIEW" = "yes"; then
                                       ])
                 fi
             fi
-            if test "$USE_WEBVIEW_WEBKIT2" = 0; then
+            dnl The legacy WebKit1 backend is GTK2/GTK3 only, there has never
+            dnl been a GTK4 version of it, so don't look for one.
+            if test "$USE_WEBVIEW_WEBKIT2" = 0 -a "$WXGTK4" != 1; then
                 webkitgtk=webkit-1.0
                 if test "$WXGTK3" = 1; then
                     webkitgtk="webkitgtk-${TOOLKIT_VERSION}.0"

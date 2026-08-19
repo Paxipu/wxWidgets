@@ -1221,19 +1221,34 @@ public:
 
     ~wxTextCtrlSpellCheck()
     {
+        SetMenu(nullptr);
+
+        if ( m_gesture )
+        {
+            gtk_widget_remove_controller(m_widget,
+                                         GTK_EVENT_CONTROLLER(m_gesture));
+        }
+        gtk_widget_insert_action_group(m_widget, "spelling", nullptr);
+        g_object_unref(m_actions);
+
         if ( m_buffer )
         {
             g_signal_handler_disconnect(m_buffer, m_changedHandler);
+            g_signal_handler_disconnect(m_buffer, m_cursorHandler);
 
             // Take the underlines back off: we're being turned off, not
             // destroyed, as far as the user is concerned.
             GtkTextIter start, end;
             gtk_text_buffer_get_bounds(m_buffer, &start, &end);
             gtk_text_buffer_remove_tag(m_buffer, m_tag, &start, &end);
+
+            gtk_text_buffer_delete_mark(m_buffer, m_wordStart);
+            gtk_text_buffer_delete_mark(m_buffer, m_wordEnd);
         }
         else
         {
             g_signal_handler_disconnect(m_widget, m_changedHandler);
+            g_signal_handler_disconnect(m_widget, m_cursorHandler);
             gtk_entry_set_attributes(GTK_ENTRY(m_widget), nullptr);
         }
 
@@ -1275,16 +1290,80 @@ private:
                                                PANGO_UNDERLINE_ERROR,
                                                nullptr);
 
+            // These track the word the menu was built for, so that applying a
+            // correction still hits the right range if the buffer moved under
+            // us in between.
+            GtkTextIter start;
+            gtk_text_buffer_get_start_iter(m_buffer, &start);
+            m_wordStart = gtk_text_buffer_create_mark(m_buffer, nullptr,
+                                                      &start, TRUE);
+            m_wordEnd = gtk_text_buffer_create_mark(m_buffer, nullptr,
+                                                    &start, FALSE);
+
             m_changedHandler = g_signal_connect(
                 m_buffer, "changed", G_CALLBACK(BufferChanged), this);
+            m_cursorHandler = g_signal_connect(
+                m_buffer, "notify::cursor-position",
+                G_CALLBACK(CursorMoved), this);
         }
         else
         {
             m_changedHandler = g_signal_connect(
                 m_widget, "notify::text", G_CALLBACK(EntryChanged), this);
+            m_cursorHandler = g_signal_connect(
+                m_widget, "notify::cursor-position",
+                G_CALLBACK(CursorMoved), this);
         }
 
+        // The actions the corrections menu below refers to.
+        static const GActionEntry actions[] =
+        {
+            { "correct", OnCorrect, "s",     nullptr, nullptr, { 0, 0, 0 } },
+            { "add",     OnAdd,     nullptr, nullptr, nullptr, { 0, 0, 0 } },
+            { "ignore",  OnIgnore,  nullptr, nullptr, nullptr, { 0, 0, 0 } },
+        };
+
+        m_actions = g_simple_action_group_new();
+        g_action_map_add_action_entries(G_ACTION_MAP(m_actions), actions,
+                                        G_N_ELEMENTS(actions), this);
+        gtk_widget_insert_action_group(m_widget, "spelling",
+                                       G_ACTION_GROUP(m_actions));
+
+        if ( m_buffer )
+        {
+            // Runs in the capture phase so that the menu is in place before
+            // the widget's own handler for this press builds the popover from
+            // it. Hit testing the pointer is more precise than relying on
+            // where GtkTextView puts the cursor: in particular it still works
+            // when the click lands inside an existing selection, which does
+            // not move the cursor at all.
+            m_gesture = gtk_gesture_click_new();
+            gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(m_gesture),
+                                          GDK_BUTTON_SECONDARY);
+            gtk_event_controller_set_propagation_phase(
+                GTK_EVENT_CONTROLLER(m_gesture), GTK_PHASE_CAPTURE);
+            g_signal_connect(m_gesture, "pressed",
+                             G_CALLBACK(SecondaryPressed), this);
+            gtk_widget_add_controller(m_widget,
+                                      GTK_EVENT_CONTROLLER(m_gesture));
+        }
+        //else: there is no such thing for a GtkEntry. GTK4 removed
+        // gtk_entry_get_layout(), the entry's text being laid out by an
+        // internal GtkText it delegates to, so there is no public way to map
+        // a click position to a character. We don't need one: GtkText moves
+        // the cursor to the click before showing its menu, which fires
+        // notify::cursor-position, and CursorMoved() below has the menu ready
+        // by the time the popover is built.
+
         Refresh();
+    }
+
+    // Whether this character is part of a word, "extraChars" being the ones
+    // the dictionary considers to be so beyond the letters themselves.
+    static bool IsWordChar(gunichar c, const char* extraChars)
+    {
+        return g_unichar_isalpha(c)
+                || (c < 0x80 && extraChars && strchr(extraChars, char(c)));
     }
 
     // Decide whether a token the word iterator produced is something a
@@ -1357,6 +1436,15 @@ private:
         if ( !text )
             return;
 
+        // Spell checking what the user can't even read would be pointless,
+        // and would leak the length of the words in a password to anyone
+        // watching the underlines.
+        if ( !gtk_entry_get_visibility(entry) )
+        {
+            gtk_entry_set_attributes(entry, nullptr);
+            return;
+        }
+
         // A GtkEntry has no tags, so the underlines are Pango attributes over
         // byte ranges instead.
         PangoAttrList* const attrs = pango_attr_list_new();
@@ -1375,15 +1463,8 @@ private:
             }
 
             const char* const wordStart = p;
-            while ( *p )
-            {
-                const gunichar wc = g_utf8_get_char(p);
-                if ( !g_unichar_isalpha(wc) &&
-                        !(wc < 0x80 && extraChars && strchr(extraChars, char(wc))) )
-                    break;
-
+            while ( *p && IsWordChar(g_utf8_get_char(p), extraChars) )
                 p = g_utf8_next_char(p);
-            }
 
             wxGtkString word(g_strndup(wordStart, p - wordStart));
             if ( IsMisspelled(word) )
@@ -1398,6 +1479,311 @@ private:
 
         gtk_entry_set_attributes(entry, attrs);
         pango_attr_list_unref(attrs);
+    }
+
+    // ------------------------------------------------------------------
+    // The corrections menu
+    // ------------------------------------------------------------------
+    //
+    // GTK4 removed "populate-popup" along with GtkMenu: a text widget's
+    // context menu is a GtkPopoverMenu built from the GMenuModel given to
+    // set_extra_menu(), and nothing of ours runs while it is up. So unlike
+    // gspell, which filled its menu on demand, the corrections have to be in
+    // place before the popover is built. That is done from the secondary
+    // click which is about to open it, and, for the keyboard paths (Menu,
+    // Shift+F10) which have no pointer position at all, from the cursor
+    // instead.
+
+    void SetMenu(GMenu* menu)
+    {
+        if ( m_buffer )
+        {
+            gtk_text_view_set_extra_menu(GTK_TEXT_VIEW(m_widget),
+                                         menu ? G_MENU_MODEL(menu) : nullptr);
+        }
+        else
+        {
+            // Clearing the menu of a GtkEntry by passing null, which is what
+            // its documentation says to do, makes GTK (4.23 here) complain
+            // "g_object_ref: assertion 'G_IS_OBJECT (object)' failed" every
+            // time: gtk_entry_set_extra_menu() refs the model without
+            // checking it first. An empty menu contributes no items to the
+            // popover, so use one of those to mean "nothing to offer" and
+            // stay out of the buggy path. GtkTextView's setter above gets
+            // this right, hence the asymmetry.
+            GMenu* const model = menu ? menu : g_menu_new();
+
+            gtk_entry_set_extra_menu(GTK_ENTRY(m_widget), G_MENU_MODEL(model));
+
+            if ( !menu )
+                g_object_unref(model);
+        }
+
+        if ( menu )
+            g_object_unref(menu);
+    }
+
+    // Build the menu offering corrections for the given word.
+    GMenu* BuildMenu(const char* word) const
+    {
+        GMenu* const menu = g_menu_new();
+        GMenu* const corrections = g_menu_new();
+
+        char** const list = spelling_checker_list_corrections(m_checker, word);
+        if ( list && *list )
+        {
+            for ( char** p = list; *p; ++p )
+            {
+                GMenuItem* const item = g_menu_item_new(*p, nullptr);
+                g_menu_item_set_action_and_target(item, "spelling.correct",
+                                                  "s", *p);
+                g_menu_append_item(corrections, item);
+                g_object_unref(item);
+            }
+        }
+        else
+        {
+            // An item with no action shows up insensitive, which is what we
+            // want here: it's a statement, not a choice.
+            GMenuItem* const item =
+                g_menu_item_new(_("(no suggestions)").utf8_str(), nullptr);
+            g_menu_append_item(corrections, item);
+            g_object_unref(item);
+        }
+        g_strfreev(list);
+
+        g_menu_append_section(menu, nullptr, G_MENU_MODEL(corrections));
+        g_object_unref(corrections);
+
+        GMenu* const extra = g_menu_new();
+        g_menu_append(extra, _("Add to Dictionary").utf8_str(), "spelling.add");
+        g_menu_append(extra, _("Ignore").utf8_str(), "spelling.ignore");
+        g_menu_append_section(menu, nullptr, G_MENU_MODEL(extra));
+        g_object_unref(extra);
+
+        return menu;
+    }
+
+    // Put the menu for the misspelled word at this position in place, or take
+    // it away again if there isn't one there.
+    void UpdateMenuAtIter(const GtkTextIter* where)
+    {
+        GtkTextIter start, end;
+        if ( !FindMisspelledAt(where, &start, &end) )
+        {
+            SetMenu(nullptr);
+            return;
+        }
+
+        gtk_text_buffer_move_mark(m_buffer, m_wordStart, &start);
+        gtk_text_buffer_move_mark(m_buffer, m_wordEnd, &end);
+
+        wxGtkString word(
+            gtk_text_buffer_get_text(m_buffer, &start, &end, FALSE));
+        SetMenu(BuildMenu(word));
+    }
+
+    // The underline tag already records where the misspellings are, so use it
+    // rather than splitting the text into words a second time.
+    bool FindMisspelledAt(const GtkTextIter* where,
+                          GtkTextIter* start, GtkTextIter* end) const
+    {
+        *start = *where;
+        *end = *where;
+
+        if ( !gtk_text_iter_has_tag(start, m_tag) )
+        {
+            // Right-clicking just past the last letter of a word is still
+            // aimed at that word, and there the tag has already ended.
+            if ( !gtk_text_iter_ends_tag(start, m_tag) )
+                return false;
+        }
+
+        if ( !gtk_text_iter_starts_tag(start, m_tag) )
+            gtk_text_iter_backward_to_tag_toggle(start, m_tag);
+        if ( !gtk_text_iter_ends_tag(end, m_tag) )
+            gtk_text_iter_forward_to_tag_toggle(end, m_tag);
+
+        return !gtk_text_iter_equal(start, end);
+    }
+
+    // Same thing for a GtkEntry, which has no tags to consult, so the word is
+    // found by scanning as RefreshEntry() does. Offsets are in characters,
+    // which is what GtkEditable works in.
+    bool FindMisspelledAtChar(int pos, int* startChar, int* endChar)
+    {
+        const char* const text = gtk_editable_get_text(GTK_EDITABLE(m_widget));
+        if ( !text || !gtk_entry_get_visibility(GTK_ENTRY(m_widget)) )
+            return false;
+
+        const char* const extraChars =
+            spelling_checker_get_extra_word_chars(m_checker);
+
+        // The cursor position and the text are separate properties, so
+        // during a change we can be called with one already updated and the
+        // other not. g_utf8_offset_to_pointer() would happily run off the end
+        // of the string for an offset which is too big for it, so clamp.
+        const long len = g_utf8_strlen(text, -1);
+        if ( pos < 0 || pos > len )
+            return false;
+
+        const char* const at = g_utf8_offset_to_pointer(text, pos);
+
+        // Walk back to the start of the word around this position and then
+        // forward to its end.
+        const char* start = at;
+        while ( start > text )
+        {
+            const char* const prev = g_utf8_prev_char(start);
+            if ( !IsWordChar(g_utf8_get_char(prev), extraChars) )
+                break;
+            start = prev;
+        }
+
+        const char* end = at;
+        while ( *end && IsWordChar(g_utf8_get_char(end), extraChars) )
+            end = g_utf8_next_char(end);
+
+        if ( start == end )
+            return false;
+
+        wxGtkString word(g_strndup(start, end - start));
+        if ( !IsMisspelled(word) )
+            return false;
+
+        m_entryWordStart = *startChar = g_utf8_pointer_to_offset(text, start);
+        m_entryWordEnd = *endChar = g_utf8_pointer_to_offset(text, end);
+
+        return true;
+    }
+
+    void UpdateMenuAtChar(int pos)
+    {
+        int startChar, endChar;
+        if ( !FindMisspelledAtChar(pos, &startChar, &endChar) )
+        {
+            SetMenu(nullptr);
+            return;
+        }
+
+        const char* const text = gtk_editable_get_text(GTK_EDITABLE(m_widget));
+        const char* const from = g_utf8_offset_to_pointer(text, startChar);
+        const char* const to = g_utf8_offset_to_pointer(text, endChar);
+
+        wxGtkString word(g_strndup(from, to - from));
+        SetMenu(BuildMenu(word));
+    }
+
+    // Returns the word the menu currently in place was built for.
+    wxGtkString GetMenuWord() const
+    {
+        if ( m_buffer )
+        {
+            GtkTextIter start, end;
+            gtk_text_buffer_get_iter_at_mark(m_buffer, &start, m_wordStart);
+            gtk_text_buffer_get_iter_at_mark(m_buffer, &end, m_wordEnd);
+            return wxGtkString(
+                gtk_text_buffer_get_text(m_buffer, &start, &end, FALSE));
+        }
+
+        const char* const text = gtk_editable_get_text(GTK_EDITABLE(m_widget));
+
+        // As in FindMisspelledAtChar(), the recorded range may no longer fit
+        // the text if it changed since the menu was built.
+        if ( !text || g_utf8_strlen(text, -1) < m_entryWordEnd )
+            return wxGtkString(nullptr);
+
+        const char* const from = g_utf8_offset_to_pointer(text, m_entryWordStart);
+        const char* const to = g_utf8_offset_to_pointer(text, m_entryWordEnd);
+        return wxGtkString(g_strndup(from, to - from));
+    }
+
+    void ReplaceMenuWord(const char* replacement)
+    {
+        if ( m_buffer )
+        {
+            GtkTextIter start, end;
+            gtk_text_buffer_get_iter_at_mark(m_buffer, &start, m_wordStart);
+            gtk_text_buffer_get_iter_at_mark(m_buffer, &end, m_wordEnd);
+
+            gtk_text_buffer_begin_user_action(m_buffer);
+            gtk_text_buffer_delete(m_buffer, &start, &end);
+            gtk_text_buffer_insert(m_buffer, &start, replacement, -1);
+            gtk_text_buffer_end_user_action(m_buffer);
+        }
+        else
+        {
+            GtkEditable* const editable = GTK_EDITABLE(m_widget);
+            gtk_editable_delete_text(editable, m_entryWordStart, m_entryWordEnd);
+
+            int pos = m_entryWordStart;
+            gtk_editable_insert_text(editable, replacement, -1, &pos);
+        }
+
+        // The text changed, so the underlines are refreshed by the handlers
+        // above; only the menu, which is now for a word that isn't there any
+        // more, has to be dropped explicitly.
+        SetMenu(nullptr);
+    }
+
+    // Only used for multi line controls: see the comment on m_gesture.
+    static void SecondaryPressed(GtkGestureClick*, int, double x, double y,
+                                 wxTextCtrlSpellCheck* self)
+    {
+        int bx, by;
+        gtk_text_view_window_to_buffer_coords(GTK_TEXT_VIEW(self->m_widget),
+                                              GTK_TEXT_WINDOW_WIDGET,
+                                              int(x), int(y), &bx, &by);
+
+        GtkTextIter iter;
+        gtk_text_view_get_iter_at_location(GTK_TEXT_VIEW(self->m_widget),
+                                           &iter, bx, by);
+        self->UpdateMenuAtIter(&iter);
+
+        // Deliberately not claiming the sequence: the widget still needs this
+        // press to open the menu we just put in place.
+    }
+
+    // Keeps the keyboard-triggered menu right too. Checking the tag first
+    // keeps this cheap: the corrections are only looked up when the cursor is
+    // actually on a misspelling, which is rare compared to cursor movement.
+    static void CursorMoved(GObject*, GParamSpec*, wxTextCtrlSpellCheck* self)
+    {
+        if ( self->m_buffer )
+        {
+            GtkTextIter iter;
+            gtk_text_buffer_get_iter_at_mark(
+                self->m_buffer, &iter,
+                gtk_text_buffer_get_insert(self->m_buffer));
+            self->UpdateMenuAtIter(&iter);
+        }
+        else
+        {
+            self->UpdateMenuAtChar(
+                gtk_editable_get_position(GTK_EDITABLE(self->m_widget)));
+        }
+    }
+
+    static void OnCorrect(GSimpleAction*, GVariant* param, gpointer data)
+    {
+        static_cast<wxTextCtrlSpellCheck*>(data)
+            ->ReplaceMenuWord(g_variant_get_string(param, nullptr));
+    }
+
+    static void OnAdd(GSimpleAction*, GVariant*, gpointer data)
+    {
+        auto* const self = static_cast<wxTextCtrlSpellCheck*>(data);
+        spelling_checker_add_word(self->m_checker, self->GetMenuWord());
+        self->Refresh();
+        self->SetMenu(nullptr);
+    }
+
+    static void OnIgnore(GSimpleAction*, GVariant*, gpointer data)
+    {
+        auto* const self = static_cast<wxTextCtrlSpellCheck*>(data);
+        spelling_checker_ignore_word(self->m_checker, self->GetMenuWord());
+        self->Refresh();
+        self->SetMenu(nullptr);
     }
 
     static void BufferChanged(GtkTextBuffer*, wxTextCtrlSpellCheck* self)
@@ -1431,7 +1817,17 @@ private:
 
     GtkTextTag* m_tag = nullptr;
     gulong m_changedHandler = 0;
+    gulong m_cursorHandler = 0;
     bool m_refreshing = false;
+
+    // The corrections menu and the word it was built for. The marks are used
+    // for multi line controls and the character offsets for the others.
+    GSimpleActionGroup* m_actions = nullptr;
+    GtkGesture* m_gesture = nullptr;
+    GtkTextMark* m_wordStart = nullptr;
+    GtkTextMark* m_wordEnd = nullptr;
+    int m_entryWordStart = 0;
+    int m_entryWordEnd = 0;
 
     wxDECLARE_NO_COPY_CLASS(wxTextCtrlSpellCheck);
 };

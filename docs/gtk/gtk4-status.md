@@ -3768,14 +3768,92 @@ now reports no libgtk-3 in any of the sixteen libraries.
 
 ### Not done
 
-The corrections context menu gspell provided is not reimplemented --
-`spelling_checker_list_corrections()` is there for it, but wiring it up
-means a right-click gesture to find the word under the pointer plus a
-`GMenuModel` and action group per control. Grammar checking has no
-backend here and never did under GTK3 either.
+Grammar checking has no backend here and never did under GTK3 either.
+
+The corrections context menu was left out of the first cut of this work
+and is added in update 41 below.
 
 ### Caveat on these two updates
 
 All of this was built and tested against GTK4 only. The GTK2/GTK3 paths
 are preserved behind `#ifdef` and were not rebuilt, so they are unverified
 by construction rather than by test.
+
+## Progress update 41: the corrections menu, and a GtkEntry bug
+
+Finishes the spell checking of update 40 by adding back the part gspell
+gave us for free: right-clicking a misspelling offers corrections, "Add
+to Dictionary" and "Ignore".
+
+The GTK3 way of doing this is not available. GTK4 removed
+"populate-popup" along with GtkMenu -- a text widget's context menu is a
+GtkPopoverMenu built from the GMenuModel given to `set_extra_menu()`, and
+**nothing of ours runs while it is up**, which the comment above
+`gtk_textctrl_populate_popup()` in `textctrl.cpp` already noted for a
+different reason. So the menu cannot be filled on demand: the
+corrections have to be computed and installed *before* the popover is
+built.
+
+That is done from the secondary click which is about to open it, using a
+GtkGestureClick in the **capture** phase so it runs ahead of the widget's
+own handler for the same press. For the keyboard paths (Menu, Shift+F10),
+which have no pointer position at all, the menu is instead kept up to
+date from `notify::cursor-position`. That would be far too expensive if
+it looked up corrections on every cursor movement, so it first asks the
+underline tag whether the cursor is even on a misspelling -- which is
+free, the tag already recording exactly that -- and only then goes to the
+dictionary.
+
+Applying a correction goes through a `GSimpleActionGroup` inserted on the
+widget as "spelling", the menu items carrying the replacement as their
+action target. The word being corrected is remembered as a pair of
+GtkTextMarks rather than offsets, so it survives the buffer changing
+underneath the open menu.
+
+### GtkEntry has no hit testing under GTK4
+
+The multi line case hit tests the pointer exactly, with
+`gtk_text_view_window_to_buffer_coords()` and
+`gtk_text_view_get_iter_at_location()`. There is no equivalent for a
+GtkEntry: `gtk_entry_get_layout()` and `gtk_entry_get_layout_offsets()`
+were removed in GTK4, the text being laid out by an internal GtkText the
+entry delegates to, and nothing public replaces them. So entries get no
+gesture at all and rely on the cursor path above, which works because
+GtkText moves the cursor to the click before showing its menu, firing the
+notify we are watching for while there is still time to install the menu.
+
+### A GTK bug worth knowing about
+
+`gtk_entry_set_extra_menu(entry, NULL)` -- the documented way to clear the
+menu -- makes GTK 4.23.2 print
+
+    g_object_ref: assertion 'G_IS_OBJECT (object)' failed
+
+on **every** call, because the setter refs the model without checking it
+first. Reproduced in twenty lines of plain GTK with no wx involved;
+`gtk_text_view_set_extra_menu(view, NULL)` is unaffected, so this is
+specific to GtkEntry. It is harmless, `g_object_ref()` returning null
+after complaining, but it would appear in the log of every application
+using a single line wxTextCtrl with spell checking, roughly once per
+cursor movement. Worked around by using an empty GMenu rather than null
+to mean "nothing to offer", which contributes no items to the popover and
+stays out of the buggy path. Worth reporting upstream.
+
+### Verified
+
+A test drives the menu through the cursor path for both widget kinds and
+checks what actually comes out: that no menu is offered away from a
+misspelling; that on "hlepd" the model contains `spelling.correct` items
+including "helped", plus `spelling.add` and `spelling.ignore`; that
+activating `spelling.correct` rewrites exactly that word and leaves the
+rest of the text alone ("a hlepd word" becomes "a helped word"); that
+`spelling.ignore` makes the word stop being flagged; that the capture
+phase gesture is installed on the text view and deliberately not on the
+entry; and that a wxTE_PASSWORD entry is not checked or underlined at
+all. All of it runs clean, with no GLib criticals.
+
+Two bugs of our own turned up while testing this. Reading the entry's
+text at a stale cursor offset ran `g_utf8_offset_to_pointer()` off the
+end of the string, the text and the cursor position being separate
+properties which are not updated together; both places that indexed by
+character offset now check the length first.

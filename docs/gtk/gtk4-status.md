@@ -3628,3 +3628,154 @@ GTK3 behaviour, but they are worth reporting separately.
    a `GtkWindow` per `GetColour()` call, during painting. Not this bug, but not
    right either.
 3. The two remaining test failures, both described above.
+
+## Progress update 39: the components the reduced configure line was hiding
+
+Every build recorded above used the reduced configure line from "How this
+was produced" -- `--without-opengl --disable-stc --disable-uiactionsim`,
+in a container that also had no gstreamer or WebKitGTK development
+packages installed. A plain `../configure --with-gtk=4` turns all of that
+back on, and then seven more files fail to compile. None of them is a
+regression: they are the parts of the tree the port had never actually
+built.
+
+- **`src/stc/ScintillaWX.cpp`**: `GdkKeymap` is gone. The Ctrl-shortcut
+  fallback that walks keyboard groups looking for a Latin letter now uses
+  `gdk_display_map_keycode()`, which returns every (group, level) entry
+  for a keycode in one call instead of being queried one at a time.
+
+- **`src/unix/uiactionx11.cpp`**: the file update 7 above deferred. Its
+  two `GdkWindow` uses turned out to be small: the input-focus workaround
+  takes the XID from the top level's `GdkSurface` via `GtkNative`, and
+  the pointer-position check uses
+  `gdk_device_get_surface_at_position()`, added to the
+  `wx_gdk_device_get_window_at_position` shim in `gtk2-compat.h` (which
+  had been left expanding to a nonexistent function under GTK4).
+
+- **wxWebView** was the one genuine library-version problem rather than a
+  port gap. `configure.ac` had no GTK4 branch and so selected
+  `webkit2gtk-4.1`, the GTK3 build of WebKitGTK, whose headers refer to
+  `GtkContainer`, `GtkAction` and `GdkEventKey` and therefore cannot be
+  included in a GTK4 program at all. GTK4 needs `webkitgtk-6.0`, which is
+  a separate API version, not just a rebuild.
+
+  The migration itself was mostly mechanical and was driven off a
+  mechanical diff of the two GIR files (`WebKit2-4.1.gir` versus
+  `WebKit-6.0.gir`) rather than by chasing compiler errors, which is what
+  turned up the two signal signature changes -- `context-menu` lost its
+  `GdkEvent` parameter and `script-message-received` now delivers a
+  `JSCValue` instead of a `WebKitJavascriptResult`. A callback signature
+  mismatch is not a compile error, so neither would have been caught by
+  building. The substantive changes are that website data and proxy
+  settings moved from `WebKitWebContext` to the new
+  `WebKitNetworkSession`, that `webkit_web_view_new_with_context()` and
+  `_with_related_view()` became construct-only properties, and that the
+  deprecated JavaScriptCore C API is not part of the GTK4 API, so script
+  results are read through JSC's GObject API instead.
+
+- **The wxWebView web process extension** was the one place with no
+  mechanical answer. The whole WebKitDOM binding set it was written
+  against was removed from WebKitGTK, with no replacement: the supported
+  way to inspect a page from a web process extension is now to run
+  JavaScript in it. All seven of its D-Bus methods were reimplemented
+  over `jsc_context_evaluate()` on the page's main frame. The D-Bus
+  architecture is unchanged and still worth having -- it is what makes
+  `GetPageSource()` and friends synchronous, which
+  `webkit_web_view_evaluate_javascript()` in the UI process is not.
+
+- **wxMediaCtrl's GStreamer backend** and **wxGLCanvas** hit the same
+  wall from opposite directions: both need a native window to hand to
+  something outside GTK (a `GstVideoOverlay` window handle, an EGL
+  surface), and under GTK4 only top levels have one. The GTK3 code
+  already had to solve this for Wayland, where subsurfaces made
+  per-widget windows unavailable too, so in both cases the GTK4 path is
+  the existing Wayland path generalized: take the top level's surface and
+  confine the content to the widget's area, computed with
+  `gtk_widget_compute_bounds()` plus `gtk_native_get_surface_transform()`
+  for the CSD shadow offset.
+
+  Two GTK4 signals had to be replaced along the way: `size-allocate` is
+  gone, so wxGLCanvas forwards its own `wxEVT_SIZE` to a new
+  `wxGLCanvasUnixImpl::OnSizeChanged()`, and wxMediaCtrl repositions from
+  `Move()`; and `map-event` is gone, but plain `map` is emitted late
+  enough for the top level's surface to exist.
+
+### GLX cannot be used under GTK4
+
+GLX needs the window to have been created with the visual matching the
+chosen fbconfig. GTK4 has no `GdkVisual`, no `GdkScreen` to look one up
+on, and no per-widget window to apply one to, so the `parent-set`
+emission hook in `src/gtk/glcanvas.cpp` that did this has nothing left to
+hook. `wxGLBackend::Init()` therefore returns the EGL backend
+unconditionally under GTK4 and `wxGLCanvas::PreferGLX()` has no effect
+there. This is a property of the two APIs, not something left undone.
+
+### Known limit: X11 and the top level surface
+
+On Wayland this design is correct: the canvas gets its own `wl_surface`
+as a subsurface of the top level's, positioned over the widget, and the
+compositor clips it. On X11 there is no equivalent, so the EGL surface is
+the top level's X window and a `wxGLCanvas` that does not fill its window
+will draw outside its own bounds. Confining it would mean creating a
+child X window with `XCreateWindow()` behind GTK's back -- new machinery
+rather than a port of existing code, and aimed at the backend that is on
+its way out. Deliberately not done.
+
+## Progress update 40: gspell was linking GTK3 into the GTK4 build
+
+Found while checking what the newly-built libraries actually link against,
+not by anything failing to compile. `configure.ac` gated the spell
+checking dependency on `$WXGTK3 = 1` -- the identical oversight as the
+webkit block in update 39, since `WXGTK3` is 1 for GTK4 too. The result
+was that **every one of the sixteen libraries linked both libgtk-4 and
+libgtk-3**, `src/gtk/textctrl.cpp` was compiled with
+`-I/usr/include/gtk-3.0` ahead of `-I/usr/include/gtk-4.0`, and
+`wxTextCtrl::EnableProofCheck()` handed a GTK4 `GtkTextView*` to
+`gspell_text_view_get_from_gtk_text_view()`, a GTK3 function. That
+compiles because `GtkTextView` is an opaque struct with the same name in
+both.
+
+gspell has no GTK4 version. Its successor, libspelling, is not a drop-in
+replacement: `spelling_text_buffer_adapter_new()` takes a
+`GtkSourceBuffer`, and `libspelling-1` requires `gtksourceview-5`.
+wxTextCtrl's multi-line widget is a plain `GtkTextView` over a plain
+`GtkTextBuffer`, and its single-line widget is a `GtkEntry`, for which
+libspelling has nothing at all -- there is no equivalent of `GspellEntry`.
+So the adapter cannot be used here.
+
+What libspelling does offer, and all wx now uses, is the dictionary:
+`SpellingChecker` answers "is this word spelled correctly" and "what did
+they mean", independently of any view. `wxTextCtrlSpellCheck` in
+`textctrl.cpp` does the rest:
+
+- Multi-line: word boundaries come from `GtkTextIter`, so Pango's word
+  breaking is reused rather than reimplemented, and misspellings get a
+  `GtkTextTag` with `PANGO_UNDERLINE_ERROR`.
+- Single-line: a `GtkEntry` has no tags, so the same underline is applied
+  as a `PangoAttrList` over byte ranges via `gtk_entry_set_attributes()`.
+- Tokens that aren't words are not offered to the dictionary at all, so
+  `42` and `x86` don't come back as errors.
+- A per-control `spelling_checker_new()` rather than
+  `spelling_checker_get_default()`, because setting the language on the
+  shared default would change it for every other user of the library in
+  the process.
+
+Verified at runtime rather than only by building: with the text "The
+quick brown fox hlepd zzzqqx 42 x86 over the lazy dog", exactly `hlepd`
+and `zzzqqx` come back underlined; replacing the text re-scans; disabling
+removes the marks; and the entry gets a non-null attribute list. `ldd`
+now reports no libgtk-3 in any of the sixteen libraries.
+
+### Not done
+
+The corrections context menu gspell provided is not reimplemented --
+`spelling_checker_list_corrections()` is there for it, but wiring it up
+means a right-click gesture to find the word under the pointer plus a
+`GMenuModel` and action group per control. Grammar checking has no
+backend here and never did under GTK3 either.
+
+### Caveat on these two updates
+
+All of this was built and tested against GTK4 only. The GTK2/GTK3 paths
+are preserved behind `#ifdef` and were not rebuilt, so they are unverified
+by construction rather than by test.

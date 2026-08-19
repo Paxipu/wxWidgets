@@ -3857,3 +3857,123 @@ text at a stale cursor offset ran `g_utf8_offset_to_pointer()` off the
 end of the string, the text and the cursor position being separate
 properties which are not updated together; both places that indexed by
 character offset now check the length first.
+
+## Progress update 42: the first bug reports
+
+The port having been eyeballed by a human for the first time, five bugs came
+back. Four were real and are fixed; one turned out to be the documented
+behaviour. They are collected in `docs/gtk/probes/wx-gtk4-reported-bugs.cpp`,
+one mode each, because every one of them needs real input or real window
+manager messages to reproduce -- injected with XTest and X client messages,
+the way `gtk4-gesture-semantics.c` already did.
+
+### The window that would not close
+
+> I click the "x" and the application doesn't exit. File/Exit works, though.
+
+The one that took the longest to find, and the most interesting. It only
+happened once the anim sample's animation had been **stopped**: with it
+playing, the close button worked. The application was not hung -- its menus
+opened, its update-UI handlers ran -- it simply ignored the close button.
+
+Closing a top level window is deferred. `wxTopLevelWindowBase::Destroy()`
+appends the window to `wxPendingDelete` and leaves the actual deletion to
+idle time, and it deliberately does not even hide the window if it is the
+last visible one, on the grounds that hiding it might stop idle events from
+arriving. Under GTK4 they had already stopped: wx's idle source removes
+itself when there is no idle work left and is re-armed by `WakeUpIdle()`,
+which nothing calls for an event handled entirely inside a GTK callback.
+
+GTK3 covered this with a one-shot emission hook on `GtkWidget::event`, which
+GTK4 does not have -- and the port had left `wx_add_idle_hooks()` with
+nothing at all to install. `GdkSurface::event` is the replacement: one level
+below the widgets, emitted for every event GDK delivers to a surface
+whatever widget it ends up at, and hookable. For re-arming an idle handler
+that is exactly as good, since all it needs to know is that something
+happened.
+
+The animation timer was what hid this: while it ran, idle time kept coming.
+
+### The mouse wheel
+
+Scrolling asserted in `wxRound()`, "argument out of supported range". A GTK4
+`GdkScrollEvent` carries its deltas and no position -- the pointer has not
+moved -- so `gdk_event_get_position()` returns false for one, and writes NaN
+into both out parameters rather than leaving them alone. NaN compares false
+against both bounds of the range check.
+
+The position such an event happened at is where the pointer is, so ask the
+seat. `wxGTKImpl::GetEventPosition()` now does that for any event without a
+position of its own, which is also what the leave handler's comment claimed
+it was doing while doing the opposite.
+
+### The about box
+
+It opened once and never again. `wxAboutBox()` caches the dialog and cleared
+that cache from a "response" handler; GTK4's `GtkAboutDialog` derives from
+`GtkWindow` rather than `GtkDialog` and has no such signal, so
+`g_signal_connect()` failed at runtime and carried on. Meanwhile an
+unhandled "close-request" destroys the window, so the cache pointed at freed
+memory and the second call wrote its properties into it. A "destroy" handler
+replaces the response one under GTK4.
+
+### The dialogs that would not close either
+
+Found while chasing the first bug: the colour, font, file and directory
+dialogs ignored the window manager's close button entirely, and being modal,
+so did the application for as long as they were up.
+
+GTK4 gives one of two things for "close-request", never both:
+
+| handler returns | window survives | "response" emitted |
+| --- | --- | --- |
+| GTK3 delete-event, TRUE | yes | **yes** |
+| GTK4 close-request, TRUE | yes | no |
+| GTK4 close-request, FALSE | no | yes |
+
+`wxDialog::ShowModal()` connected `gtk_true()`, wanting the first row and
+getting the second: the dialog stayed, and nothing ended the modal loop. It
+now calls `Close()` from that handler instead, which for a modal dialog
+means `EndModal(wxID_CANCEL)`. Only the dialogs that build their `m_widget`
+themselves ever reach it -- for every other one wxTopLevelWindowGTK's own
+handler runs first and stops the emission.
+
+### The animation that filled its control
+
+The background colour of a wxAnimationCtrl had no visible effect once an
+animation was loaded, because GTK4's `GtkImage` scales what it is given up
+to the size of the widget -- it is documented as being for icons. GTK3's
+drew it at its natural size, centred. The anim sample's 32x32 throbber, in a
+control the sizer had made 100x100, was being scaled up by three.
+
+`gtk-image-natural-size.c` measures all three cases by reading the corner
+pixel off the screen, over a green background:
+
+| | corner | centre |
+| --- | --- | --- |
+| GTK 3.24.41 `GtkImage` | #00ff00 background | #ff0000 image |
+| GTK 4.14.5 `GtkImage` | #ff0000 image | #ff0000 image |
+| GTK 4.14.5 `GtkPicture`, content-fit SCALE_DOWN | #00ff00 background | #ff0000 image |
+
+So the control uses a `GtkPicture` with `GTK_CONTENT_FIT_SCALE_DOWN`, which
+is GtkImage's old behaviour: natural size, centred, scaled down only when
+the image does not fit.
+
+This is worth remembering beyond wxAnimationCtrl: **any GTK4 `GtkImage`
+given something larger than an icon will stretch it**, including the one
+`wxGtkImage` uses under GTK4.
+
+### Not a bug
+
+"Set inactive bitmap" appearing to do nothing is the documented behaviour:
+the inactive bitmap is what the control shows when it is *not* playing, and
+the anim sample starts playing immediately. The probe's "anim" mode confirms
+it appears as soon as the animation is stopped.
+
+### What the test suite could not have caught
+
+The window-close bug is a good illustration of a blind spot. Every probe
+mode here except "quiet" calls `wxYield()` while waiting, and yielding runs
+idle processing by hand -- which is precisely the thing that had stopped
+happening on its own. `test_gui` yields constantly, so it passed throughout.
+Removing the hook again makes only the "quiet" mode fail.

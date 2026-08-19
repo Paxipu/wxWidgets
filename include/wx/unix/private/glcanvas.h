@@ -77,6 +77,13 @@ public:
 
     virtual void OnUnrealized() = 0;
 
+    // Called when the canvas has been moved or resized.
+    //
+    // Only used under GTK4, where the "size-allocate" signal the EGL code used
+    // to watch for this doesn't exist any more, so wxGLCanvas has to tell the
+    // implementation about it from its own size event instead.
+    virtual void OnSizeChanged() { }
+
     virtual bool HasWindow() const = 0;
 
     virtual void* GetXVisualInfo() const = 0;

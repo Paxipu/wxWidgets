@@ -17,7 +17,7 @@
 #include "wx/gtk/private/wrapgdk.h"
 #include "wx/gtk/private/backend.h"
 
-#ifdef __WXGTK3__
+#if defined(__WXGTK3__) && !defined(__WXGTK4__)
 extern "C" {
 static gboolean draw(GtkWidget* widget, cairo_t* cr, wxGLCanvas* win)
 {
@@ -36,9 +36,9 @@ static gboolean draw(GtkWidget* widget, cairo_t* cr, wxGLCanvas* win)
     return false;
 }
 }
-#endif // __WXGTK3__
+#endif // __WXGTK3__ && !__WXGTK4__
 
-#ifdef wxHAS_GLX
+#if defined(wxHAS_GLX) && !defined(__WXGTK4__)
 //-----------------------------------------------------------------------------
 // emission hook for "parent-set"
 //-----------------------------------------------------------------------------
@@ -70,7 +70,7 @@ parent_set_hook(GSignalInvocationHint*, guint, const GValue* param_values, void*
     return true;
 }
 }
-#endif // wxHAS_GLX
+#endif // wxHAS_GLX && !__WXGTK4__
 
 //---------------------------------------------------------------------------
 // wxGlCanvas
@@ -173,14 +173,21 @@ bool wxGLCanvas::Create(wxWindow *parent,
 
     m_nativeSizeEvent = true;
 #ifdef __WXGTK3__
+#ifndef __WXGTK4__
+    // Under GTK4 we let wxPizza's snapshot vfunc send the paint events, as
+    // there is no "draw" signal left to hook our own handler onto, so
+    // m_noExpose has to stay false for them to be sent at all. The
+    // GLX-specific resize workaround the handler also did is moot there
+    // because GLX can't be used under GTK4 anyhow, see wxGLBackend::Init().
     m_noExpose = true;
+#endif
     m_backgroundStyle = wxBG_STYLE_PAINT;
 #endif
 
     if ( !InitVisual(dispAttrs) )
         return false;
 
-#ifdef wxHAS_GLX
+#if defined(wxHAS_GLX) && !defined(__WXGTK4__)
     // watch for the "parent-set" signal on m_wxwindow so we can set colormap
     // before m_wxwindow is realized (which will occur before
     // wxWindow::Create() returns if parent is already visible)
@@ -189,16 +196,29 @@ bool wxGLCanvas::Create(wxWindow *parent,
         unsigned sig_id = g_signal_lookup("parent-set", GTK_TYPE_WIDGET);
         g_signal_add_emission_hook(sig_id, 0, parent_set_hook, this, nullptr);
     }
-#endif // wxHAS_GLX
+#endif // wxHAS_GLX && !__WXGTK4__
 
     wxWindow::Create( parent, id, pos, size, style, name );
+
+#ifdef __WXGTK4__
+    // "size-allocate" doesn't exist any more, and the EGL code needs to know
+    // about size changes to resize its surface and, under Wayland, to keep its
+    // subsurface positioned over us, so forward our own size events to it.
+    Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
+        CallOnSizeChanged();
+        event.Skip();
+    });
+#else
 #ifdef __WXGTK3__
     g_signal_connect(m_wxwindow, "draw", G_CALLBACK(draw), this);
 #endif
 
+    // gtk_widget_set_double_buffered() was removed in GTK4, where it had
+    // already been a no-op for the whole of GTK3.
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     gtk_widget_set_double_buffered(m_wxwindow, false);
     wxGCC_WARNING_RESTORE(deprecated-declarations)
+#endif // __WXGTK4__/!__WXGTK4__
 
     return true;
 }
@@ -211,8 +231,14 @@ bool wxGLCanvas::SetBackgroundStyle(wxBackgroundStyle /* style */)
 unsigned long wxGLCanvas::GetXWindow() const
 {
 #if defined(GDK_WINDOWING_X11)
-    GdkWindow* window = GTKGetDrawingWindow();
+    // Note that under GTK4 this is the X11 window of our top level, as widgets
+    // don't have one of their own any more.
+    auto* const window = GTKGetDrawingWindow();
+#ifdef __WXGTK4__
+    return window ? GDK_SURFACE_XID(window) : 0;
+#else
     return window ? GDK_WINDOW_XID(window) : 0;
+#endif
 #else
     return 0;
 #endif

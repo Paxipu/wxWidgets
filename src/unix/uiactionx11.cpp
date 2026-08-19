@@ -33,6 +33,7 @@
 #ifdef __WXGTK__
 #include "wx/gtk/private/wrapgtk.h"
 #include "wx/gtk/private/gtk3-compat.h"
+#include "wx/gtk/private/backend.h"
 #ifdef __WXGTK4__
 #include <gdk/x11/gdkx.h>
 #else
@@ -40,7 +41,9 @@
 #endif
 
 GtkWidget* wxGetTopLevelGTK();
-#ifndef __WXGTK4__
+#ifdef __WXGTK4__
+GdkDisplay* wxGetTopLevelGdkDisplay();
+#else
 GdkWindow* wxGetTopLevelGDK();
 #endif
 #endif // __WXGTK__
@@ -171,6 +174,17 @@ protected:
             win = wxGetTopLevelParent(win);
         }
 
+    #ifdef __WXGTK4__
+        // GdkWindow is gone: the X11 window of a top level widget is now the
+        // GdkSurface of its GtkNative. Only top levels have one, which is all
+        // we need here as we've already gone up to one above.
+        GtkWidget* const widget = win ? win->GetHandle() : wxGetTopLevelGTK();
+        GtkNative* const native = widget ? gtk_widget_get_native(widget) : nullptr;
+        GdkSurface* const surface = native ? gtk_native_get_surface(native) : nullptr;
+
+        if ( surface && wxGTKImpl::IsX11(surface) )
+            focus = GDK_SURFACE_XID(surface);
+    #else
         GdkWindow* gdkwin;
 
         if ( win )
@@ -179,6 +193,7 @@ protected:
             gdkwin = wxGetTopLevelGDK();
 
         focus = GDK_WINDOW_XID(gdkwin);
+    #endif // __WXGTK4__/!__WXGTK4__
     #elif defined(__WXX11__)
         if ( !win )
             return;
@@ -443,12 +458,19 @@ bool wxUIActionSimulatorX11Impl::MouseMove(long x, long y)
 
 #ifdef  __WXGTK__
 #ifdef  __WXGTK3__
-    GdkDisplay* const display = gdk_window_get_display(wxGetTopLevelGDK());
+    GdkDisplay* const display =
+#ifdef __WXGTK4__
+        wxGetTopLevelGdkDisplay();
+#else
+        gdk_window_get_display(wxGetTopLevelGDK());
+#endif
     GdkDevice* const device = wx_get_gdk_device_from_display(display);
 #endif
-    GdkWindow* const gdkwin1 = wx_gdk_device_get_window_at_position(device, nullptr, nullptr);
+    // Under GTK4 this returns a GdkSurface rather than a GdkWindow, but we
+    // only ever compare the two values with each other, so use auto here.
+    const auto gdkwin1 = wx_gdk_device_get_window_at_position(device, nullptr, nullptr);
     const bool ret = DoX11MouseMove(x, y);
-    GdkWindow* const gdkwin2 = wx_gdk_device_get_window_at_position(device, nullptr, nullptr);
+    const auto gdkwin2 = wx_gdk_device_get_window_at_position(device, nullptr, nullptr);
 
     if ( gdkwin1 != gdkwin2 )
     {

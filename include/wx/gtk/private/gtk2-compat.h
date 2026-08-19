@@ -690,8 +690,15 @@ inline bool wx_is_at_least_gtk2(int minor)
 
 #else // __WXGTK3__
 
+#ifdef __WXGTK4__
+// GdkWindow became GdkSurface and this getter was renamed along with it, so
+// the returned pointer has a different type here than under GTK2/GTK3.
+#define wx_gdk_device_get_window_at_position(device, win_x, win_y) \
+    gdk_device_get_surface_at_position(device, win_x, win_y)
+#else
 #define wx_gdk_device_get_window_at_position(device, win_x, win_y) \
     gdk_device_get_window_at_position(device, win_x, win_y)
+#endif
 
 // With GTK+ 3 we don't need to check for GTK+ 2 version and
 // gtk_check_version() would fail due to major version mismatch.

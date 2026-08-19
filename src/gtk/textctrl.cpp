@@ -36,7 +36,15 @@
 
 #if wxUSE_SPELLCHECK && defined(__WXGTK3__)
 extern "C" {
+#ifdef __WXGTK4__
+// gspell is a GTK3 library, see the SPELLCHECK part of configure.ac. Only
+// libspelling's SpellingChecker is used here: its SpellingTextBufferAdapter
+// works on a GtkSourceBuffer, which wxTextCtrl is not, so the marking up of
+// misspelled words and the corrections menu are done below by hand.
+#include <libspelling.h>
+#else
 #include <gspell-1/gspell/gspell.h>
+#endif
 }
 #endif // wxUSE_SPELLCHECK && __WXGTK3__
 
@@ -795,10 +803,18 @@ void wxTextCtrl::Init()
     m_showPositionDefer = nullptr;
     m_anonymousMarkList = nullptr;
     m_afterLayoutId = 0;
+#if wxUSE_SPELLCHECK && defined(__WXGTK4__)
+    m_spellCheck = nullptr;
+#endif
 }
 
 wxTextCtrl::~wxTextCtrl()
 {
+#if wxUSE_SPELLCHECK && defined(__WXGTK4__)
+    // Must happen before the widgets go away, as it disconnects from them.
+    delete m_spellCheck;
+#endif
+
     if (m_text)
         GTKDisconnect(m_text);
     if (m_buffer)
@@ -1146,7 +1162,323 @@ void wxTextCtrl::GTKSetJustification()
     }
 }
 
-#if wxUSE_SPELLCHECK && defined(__WXGTK3__)
+#if wxUSE_SPELLCHECK && defined(__WXGTK4__)
+
+// ----------------------------------------------------------------------------
+// wxTextCtrlSpellCheck: inline spell checking for GTK4
+// ----------------------------------------------------------------------------
+
+// Under GTK3 gspell does all of this: it takes the GtkTextView or GtkEntry and
+// takes care of finding the words, underlining the bad ones and offering
+// corrections. gspell is a GTK3 library, and its GTK4 successor libspelling
+// only integrates with GtkSourceBuffer, which neither of wxTextCtrl's two
+// widgets is. What libspelling does provide, and all we use, is the
+// dictionary: SpellingChecker answers "is this word spelled correctly" and
+// "what did they mean". The rest is here.
+//
+// One of these exists exactly while spell checking is enabled on a control.
+class wxTextCtrlSpellCheck
+{
+public:
+    // Returns nullptr if a checker for this language can't be created, in
+    // which case spell checking stays off. An empty language means the
+    // system default one.
+    static wxTextCtrlSpellCheck*
+    Create(GtkWidget* widget, GtkTextBuffer* buffer, const wxString& lang)
+    {
+        // Safe to call more than once and needed before anything else.
+        spelling_init();
+
+        SpellingProvider* const provider = spelling_provider_get_default();
+        if ( !provider )
+            return nullptr;
+
+        wxString langToUse = lang;
+        if ( langToUse.empty() )
+        {
+            const char* const code = spelling_provider_get_default_code(provider);
+            if ( !code )
+                return nullptr;
+
+            langToUse = wxString::FromUTF8(code);
+        }
+        else if ( !spelling_provider_supports_language(provider,
+                                                       langToUse.utf8_str()) )
+        {
+            return nullptr;
+        }
+
+        // Note that we deliberately don't use spelling_checker_get_default():
+        // it's shared, and setting the language on it would change it for
+        // every other user of the library in this process.
+        SpellingChecker* const checker =
+            spelling_checker_new(provider, langToUse.utf8_str());
+        if ( !checker )
+            return nullptr;
+
+        return new wxTextCtrlSpellCheck(widget, buffer, checker, lang, langToUse);
+    }
+
+    ~wxTextCtrlSpellCheck()
+    {
+        if ( m_buffer )
+        {
+            g_signal_handler_disconnect(m_buffer, m_changedHandler);
+
+            // Take the underlines back off: we're being turned off, not
+            // destroyed, as far as the user is concerned.
+            GtkTextIter start, end;
+            gtk_text_buffer_get_bounds(m_buffer, &start, &end);
+            gtk_text_buffer_remove_tag(m_buffer, m_tag, &start, &end);
+        }
+        else
+        {
+            g_signal_handler_disconnect(m_widget, m_changedHandler);
+            gtk_entry_set_attributes(GTK_ENTRY(m_widget), nullptr);
+        }
+
+        g_object_unref(m_checker);
+    }
+
+    // The language actually in use, which is never empty.
+    const wxString& GetLang() const { return m_lang; }
+
+    // True if this checker already satisfies a request for this language,
+    // where an empty string means "whatever the default is".
+    bool MatchesRequest(const wxString& lang) const
+    {
+        return lang.empty() ? m_langRequested.empty() : lang == m_lang;
+    }
+
+    // Re-check everything and update the underlines.
+    void Refresh()
+    {
+        if ( m_buffer )
+            RefreshTextView();
+        else
+            RefreshEntry();
+    }
+
+private:
+    wxTextCtrlSpellCheck(GtkWidget* widget,
+                         GtkTextBuffer* buffer,
+                         SpellingChecker* checker,
+                         const wxString& langRequested,
+                         const wxString& lang)
+        : m_widget(widget), m_buffer(buffer), m_checker(checker),
+          m_langRequested(langRequested), m_lang(lang)
+    {
+        if ( m_buffer )
+        {
+            m_tag = gtk_text_buffer_create_tag(m_buffer, nullptr,
+                                               "underline",
+                                               PANGO_UNDERLINE_ERROR,
+                                               nullptr);
+
+            m_changedHandler = g_signal_connect(
+                m_buffer, "changed", G_CALLBACK(BufferChanged), this);
+        }
+        else
+        {
+            m_changedHandler = g_signal_connect(
+                m_widget, "notify::text", G_CALLBACK(EntryChanged), this);
+        }
+
+        Refresh();
+    }
+
+    // Decide whether a token the word iterator produced is something a
+    // dictionary has any business judging: "don't", yes; "42" or "x86", no.
+    static bool IsCheckableWord(const char* word, const char* extraChars)
+    {
+        if ( !word || !*word )
+            return false;
+
+        bool hasLetter = false;
+        for ( const char* p = word; *p; p = g_utf8_next_char(p) )
+        {
+            const gunichar c = g_utf8_get_char(p);
+            if ( g_unichar_isalpha(c) )
+            {
+                hasLetter = true;
+                continue;
+            }
+
+            // Apostrophes and the like, as the dictionary defines them.
+            if ( extraChars && c < 0x80 && strchr(extraChars, char(c)) )
+                continue;
+
+            // Digits or punctuation: not a word.
+            return false;
+        }
+
+        return hasLetter;
+    }
+
+    bool IsMisspelled(const char* word) const
+    {
+        return IsCheckableWord(word, spelling_checker_get_extra_word_chars(m_checker))
+                && !spelling_checker_check_word(m_checker, word, -1);
+    }
+
+    void RefreshTextView()
+    {
+        GtkTextIter start, end;
+        gtk_text_buffer_get_bounds(m_buffer, &start, &end);
+        gtk_text_buffer_remove_tag(m_buffer, m_tag, &start, &end);
+
+        // GtkTextIter's word boundaries come from Pango, so they get things
+        // like non-breaking punctuation right for free.
+        GtkTextIter iter = start;
+        for ( ;; )
+        {
+            const GtkTextIter prev = iter;
+            gtk_text_iter_forward_word_end(&iter);
+
+            // Also stops us at the end of the buffer, where
+            // forward_word_end() returns false but may still have moved.
+            if ( gtk_text_iter_equal(&iter, &prev) )
+                break;
+
+            GtkTextIter wordStart = iter;
+            gtk_text_iter_backward_word_start(&wordStart);
+
+            wxGtkString word(gtk_text_buffer_get_text(m_buffer, &wordStart,
+                                                      &iter, FALSE));
+            if ( IsMisspelled(word) )
+                gtk_text_buffer_apply_tag(m_buffer, m_tag, &wordStart, &iter);
+        }
+    }
+
+    void RefreshEntry()
+    {
+        GtkEntry* const entry = GTK_ENTRY(m_widget);
+        const char* const text = gtk_editable_get_text(GTK_EDITABLE(entry));
+        if ( !text )
+            return;
+
+        // A GtkEntry has no tags, so the underlines are Pango attributes over
+        // byte ranges instead.
+        PangoAttrList* const attrs = pango_attr_list_new();
+
+        const char* const extraChars =
+            spelling_checker_get_extra_word_chars(m_checker);
+
+        const char* p = text;
+        while ( *p )
+        {
+            const gunichar c = g_utf8_get_char(p);
+            if ( !g_unichar_isalpha(c) )
+            {
+                p = g_utf8_next_char(p);
+                continue;
+            }
+
+            const char* const wordStart = p;
+            while ( *p )
+            {
+                const gunichar wc = g_utf8_get_char(p);
+                if ( !g_unichar_isalpha(wc) &&
+                        !(wc < 0x80 && extraChars && strchr(extraChars, char(wc))) )
+                    break;
+
+                p = g_utf8_next_char(p);
+            }
+
+            wxGtkString word(g_strndup(wordStart, p - wordStart));
+            if ( IsMisspelled(word) )
+            {
+                PangoAttribute* const attr =
+                    pango_attr_underline_new(PANGO_UNDERLINE_ERROR);
+                attr->start_index = wordStart - text;
+                attr->end_index = p - text;
+                pango_attr_list_insert(attrs, attr);
+            }
+        }
+
+        gtk_entry_set_attributes(entry, attrs);
+        pango_attr_list_unref(attrs);
+    }
+
+    static void BufferChanged(GtkTextBuffer*, wxTextCtrlSpellCheck* self)
+    {
+        // Applying our own tag re-enters this handler, so don't recurse.
+        if ( self->m_refreshing )
+            return;
+
+        self->m_refreshing = true;
+        self->RefreshTextView();
+        self->m_refreshing = false;
+    }
+
+    static void
+    EntryChanged(GObject*, GParamSpec*, wxTextCtrlSpellCheck* self)
+    {
+        self->RefreshEntry();
+    }
+
+    GtkWidget* const m_widget;
+
+    // Null for single line controls, which use m_widget as a GtkEntry.
+    GtkTextBuffer* const m_buffer;
+
+    // Owned by libspelling, not by us.
+    SpellingChecker* const m_checker;
+
+    // What the caller asked for, possibly empty, and what we resolved it to.
+    const wxString m_langRequested;
+    const wxString m_lang;
+
+    GtkTextTag* m_tag = nullptr;
+    gulong m_changedHandler = 0;
+    bool m_refreshing = false;
+
+    wxDECLARE_NO_COPY_CLASS(wxTextCtrlSpellCheck);
+};
+
+bool wxTextCtrl::EnableProofCheck(const wxTextProofOptions& options)
+{
+    // Grammar checking has no equivalent here, and never had one under GTK3
+    // either, so only the spell checking part of the options is honoured.
+    const bool enable = options.IsSpellCheckEnabled();
+
+    if ( m_spellCheck )
+    {
+        // Recreate it if the language changed, otherwise there's nothing to
+        // do when it's already in the requested state.
+        if ( enable && m_spellCheck->MatchesRequest(options.GetLang()) )
+            return true;
+
+        delete m_spellCheck;
+        m_spellCheck = nullptr;
+    }
+
+    if ( enable )
+    {
+        m_spellCheck = wxTextCtrlSpellCheck::Create(m_text,
+                                                    GTKGetTextBuffer(),
+                                                    options.GetLang());
+        if ( !m_spellCheck )
+            return false;
+    }
+
+    return true;
+}
+
+wxTextProofOptions wxTextCtrl::GetProofCheckOptions() const
+{
+    wxTextProofOptions opts = wxTextProofOptions::Disable();
+
+    if ( m_spellCheck )
+    {
+        opts.SpellCheck();
+        opts.Language(m_spellCheck->GetLang());
+    }
+
+    return opts;
+}
+
+#elif wxUSE_SPELLCHECK && defined(__WXGTK3__)
 
 bool wxTextCtrl::EnableProofCheck(const wxTextProofOptions& options)
 {
@@ -1210,7 +1542,7 @@ wxTextProofOptions wxTextCtrl::GetProofCheckOptions() const
     return opts;
 }
 
-#endif // wxUSE_SPELLCHECK && __WXGTK3__
+#endif // wxUSE_SPELLCHECK && __WXGTK4__/__WXGTK3__
 
 void wxTextCtrl::SetWindowStyleFlag(long style)
 {

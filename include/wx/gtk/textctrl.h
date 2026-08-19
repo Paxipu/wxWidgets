@@ -249,6 +249,13 @@ private:
     // a dummy one when frozen
     GtkTextBuffer *m_buffer;
 
+#if wxUSE_SPELLCHECK && defined(__WXGTK4__)
+    // Owned; non-null exactly while spell checking is enabled. See the
+    // comment in front of the class in textctrl.cpp for why GTK4 needs one
+    // of these where GTK3 just hands the widget over to gspell.
+    class wxTextCtrlSpellCheck* m_spellCheck;
+#endif // wxUSE_SPELLCHECK && __WXGTK4__
+
     GtkTextMark* m_showPositionDefer;
     GSList* m_anonymousMarkList;
     unsigned m_afterLayoutId;

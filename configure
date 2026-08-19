@@ -1019,6 +1019,8 @@ SDL_LIBS
 SDL_CFLAGS
 GSPELL_LIBS
 GSPELL_CFLAGS
+SPELLING_LIBS
+SPELLING_CFLAGS
 LIBSECRET_LIBS
 LIBSECRET_CFLAGS
 XKBCOMMON_LIBS
@@ -1513,6 +1515,8 @@ XKBCOMMON_CFLAGS
 XKBCOMMON_LIBS
 LIBSECRET_CFLAGS
 LIBSECRET_LIBS
+SPELLING_CFLAGS
+SPELLING_LIBS
 GSPELL_CFLAGS
 GSPELL_LIBS
 SDL_CFLAGS
@@ -2568,6 +2572,10 @@ Some influential environment variables:
               C compiler flags for LIBSECRET, overriding pkg-config
   LIBSECRET_LIBS
               linker flags for LIBSECRET, overriding pkg-config
+  SPELLING_CFLAGS
+              C compiler flags for SPELLING, overriding pkg-config
+  SPELLING_LIBS
+              linker flags for SPELLING, overriding pkg-config
   GSPELL_CFLAGS
               C compiler flags for GSPELL, overriding pkg-config
   GSPELL_LIBS linker flags for GSPELL, overriding pkg-config
@@ -38621,7 +38629,92 @@ fi
 
 if test "$wxUSE_SPELLCHECK" = "yes"; then
 
-    if test "$WXGTK3" = 1; then
+                    if test "$WXGTK4" = 1; then
+
+pkg_failed=no
+{ printf '%s\n' "$as_me:${as_lineno-$LINENO}: checking for libspelling-1" >&5
+printf %s "checking for libspelling-1... " >&6; }
+
+if test -n "$SPELLING_CFLAGS"; then
+    pkg_cv_SPELLING_CFLAGS="$SPELLING_CFLAGS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { printf '%s\n' "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libspelling-1\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "libspelling-1") 2>&5
+  ac_status=$?
+  printf '%s\n' "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_SPELLING_CFLAGS=`$PKG_CONFIG --cflags "libspelling-1" 2>/dev/null`
+              test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+if test -n "$SPELLING_LIBS"; then
+    pkg_cv_SPELLING_LIBS="$SPELLING_LIBS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { printf '%s\n' "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libspelling-1\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "libspelling-1") 2>&5
+  ac_status=$?
+  printf '%s\n' "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_SPELLING_LIBS=`$PKG_CONFIG --libs "libspelling-1" 2>/dev/null`
+              test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+
+
+
+if test $pkg_failed = yes; then
+        { printf '%s\n' "$as_me:${as_lineno-$LINENO}: result: no" >&5
+printf '%s\n' "no" >&6; }
+
+if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
+        _pkg_short_errors_supported=yes
+else
+        _pkg_short_errors_supported=no
+fi
+        if test $_pkg_short_errors_supported = yes; then
+            SPELLING_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "libspelling-1" 2>&1`
+        else
+            SPELLING_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "libspelling-1" 2>&1`
+        fi
+    # Put the nasty error message in config.log where it belongs
+    echo "$SPELLING_PKG_ERRORS" >&5
+
+
+                { printf '%s\n' "$as_me:${as_lineno-$LINENO}: WARNING: libspelling-1 not found, spell checking in wxTextCtrl won't be available" >&5
+printf '%s\n' "$as_me: WARNING: libspelling-1 not found, spell checking in wxTextCtrl won't be available" >&2;}
+                wxUSE_SPELLCHECK=no
+
+
+elif test $pkg_failed = untried; then
+        { printf '%s\n' "$as_me:${as_lineno-$LINENO}: result: no" >&5
+printf '%s\n' "no" >&6; }
+
+                { printf '%s\n' "$as_me:${as_lineno-$LINENO}: WARNING: libspelling-1 not found, spell checking in wxTextCtrl won't be available" >&5
+printf '%s\n' "$as_me: WARNING: libspelling-1 not found, spell checking in wxTextCtrl won't be available" >&2;}
+                wxUSE_SPELLCHECK=no
+
+
+else
+    SPELLING_CFLAGS=$pkg_cv_SPELLING_CFLAGS
+    SPELLING_LIBS=$pkg_cv_SPELLING_LIBS
+        { printf '%s\n' "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+printf '%s\n' "yes" >&6; }
+
+                CXXFLAGS="$SPELLING_CFLAGS $CXXFLAGS"
+                GUI_TK_LIBRARY="$GUI_TK_LIBRARY $SPELLING_LIBS"
+
+fi
+    elif test "$WXGTK3" = 1; then
 
 pkg_failed=no
 { printf '%s\n' "$as_me:${as_lineno-$LINENO}: checking for gspell-1" >&5

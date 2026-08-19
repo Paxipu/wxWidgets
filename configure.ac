@@ -5284,7 +5284,22 @@ if test "$wxUSE_SPELLCHECK" = "yes"; then
     dnl implement support for spell checking in the other ports, but for GTK 3
     dnl we need to check for the gspell library.
 
-    if test "$WXGTK3" = 1; then
+    dnl gspell-1 is a GTK3 library and linking it into a GTK4 build would pull
+    dnl libgtk-3 into the same process as libgtk-4, so GTK4 uses libspelling
+    dnl instead. Note that we only use its checker: its view integration works
+    dnl on GtkSourceBuffer, which wxTextCtrl doesn't use.
+    if test "$WXGTK4" = 1; then
+        PKG_CHECK_MODULES(SPELLING, [libspelling-1],
+            [
+                CXXFLAGS="$SPELLING_CFLAGS $CXXFLAGS"
+                GUI_TK_LIBRARY="$GUI_TK_LIBRARY $SPELLING_LIBS"
+            ],
+            [
+                AC_MSG_WARN([libspelling-1 not found, spell checking in wxTextCtrl won't be available])
+                wxUSE_SPELLCHECK=no
+            ]
+        )
+    elif test "$WXGTK3" = 1; then
         PKG_CHECK_MODULES(GSPELL, [gspell-1],
             [
                 CXXFLAGS="$GSPELL_CFLAGS $CXXFLAGS"

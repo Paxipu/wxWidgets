@@ -50,8 +50,6 @@
 //-----------------------------------------------------------------------------
 
 // One-shot signal emission hook, to install idle handler.
-// Only used by the emission hooks below, which GTK4 has nothing to install.
-#ifndef __WXGTK4__
 extern "C" {
 static gboolean
 wx_emission_hook(GSignalInvocationHint*, guint, const GValue*, gpointer data)
@@ -66,22 +64,43 @@ wx_emission_hook(GSignalInvocationHint*, guint, const GValue*, gpointer data)
     return false;
 }
 }
-#endif // !__WXGTK4__
 
 // Add signal emission hooks, to re-install idle handler when needed.
 static void wx_add_idle_hooks()
 {
 #ifdef __WXGTK4__
-    // Neither GtkWidget::event nor GtkWidget::size-allocate exists any more --
+    // Neither GtkWidget::event nor GtkWidget::size-allocate exists any more:
     // GTK4 delivers events to controllers rather than through a signal on the
-    // widget, and size allocation is a vfunc with no signal at all. There is
-    // no general "something happened to a widget" signal left to hook, so the
-    // idle handler is re-armed only by WakeUpIdle(), which is what wx's own
-    // event dispatch calls.
-    //
-    // Leaving the GTK3 code here would not merely be a no-op: g_signal_lookup()
+    // widget, and size allocation is a vfunc with no signal at all. (Leaving
+    // the GTK3 code here would not merely be a no-op: g_signal_lookup()
     // returns 0 for both names and g_signal_add_emission_hook() then asserts,
-    // twice per call, which is how this was noticed.
+    // twice per call, which is how this was noticed.)
+    //
+    // What has taken over from GtkWidget::event is GdkSurface::event, one
+    // level below the widgets: every event GDK delivers to a surface passes
+    // through it, whatever the widget it ends up at, and it can be hooked.
+    // For re-arming the idle handler that is exactly as good, because all this
+    // needs to know is that something happened.
+    //
+    // Something has to, and it cannot be left to WakeUpIdle() alone: the idle
+    // source removes itself when there is no more idle work, and native events
+    // handled entirely inside GTK callbacks -- the window manager's close
+    // button being the one that showed this up -- never go through wx's event
+    // queue. wxTopLevelWindow::Destroy() only puts the window on
+    // wxPendingDelete and waits for idle time to delete it, so without this
+    // hook a quiet application would not close its last window at all.
+    {
+        static bool hook_installed;
+        if (!hook_installed)
+        {
+            static guint sig_id;
+            if (sig_id == 0)
+                sig_id = g_signal_lookup("event", GDK_TYPE_SURFACE);
+            hook_installed = true;
+            g_signal_add_emission_hook(
+                sig_id, 0, wx_emission_hook, &hook_installed, nullptr);
+        }
+    }
 #else
     // "event" hook
     {

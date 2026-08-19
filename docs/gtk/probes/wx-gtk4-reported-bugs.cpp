@@ -21,6 +21,14 @@
 //             WM_DELETE_WINDOW client message that a real "x" click sends.
 //             The frame is expected to go away.
 //
+//   quiet  -- the close button on a frame in an application that is doing
+//             nothing else: no timer, no input, and -- unlike every other
+//             mode here -- no wxYield() to run wx's idle processing by hand.
+//             Destroying a top level window is deferred to idle time, so
+//             without something to re-arm the idle handler after a native
+//             event the window never actually goes away. Reported as the anim
+//             sample not exiting once its animation is stopped.
+//
 //   dialog -- a native modal dialog (colour, file), closed with the window
 //             manager's close button, followed by the same close button on the
 //             frame: does a dialog leave anything behind that stops the frame
@@ -164,7 +172,15 @@ public:
         }
     }
 
-    int OnExit() override { return m_failed; }
+    int OnExit() override
+    {
+        // In quiet mode success is the main loop ending on its own, when the
+        // frame is finally destroyed, so the verdict can only be given here.
+        if ( m_mode == "quiet" && !m_failed )
+            printf("PASS: a quiet application closes its window\n");
+
+        return m_failed;
+    }
 
 private:
     void Run()
@@ -175,6 +191,12 @@ private:
             TestDialog();
         else if ( m_mode == "anim" )
             TestAnim();
+        else if ( m_mode == "quiet" )
+        {
+            // This one runs on in the main loop instead of ending here.
+            TestQuietClose();
+            return;
+        }
         else if ( m_mode == "close" )
             TestClose();
         else if ( m_mode == "about" )
@@ -215,6 +237,45 @@ private:
             printf("PASS: wheel over a wxTextCtrl asserts nothing\n");
 
         frame->Destroy();
+    }
+
+    // Sends the close button, then checks the frame is gone, both from plain
+    // GLib timeouts: a wx timer would generate wx events, and wxYield() would
+    // run the idle processing this is checking happens on its own.
+    static gboolean QuietSendClose(void* data)
+    {
+        ReproApp* const self = static_cast<ReproApp*>(data);
+
+        Display* display = nullptr;
+        const Window xwindow = GetXWindow(self->m_frame, &display);
+        if ( xwindow )
+            SendCloseButton(display, xwindow);
+
+        return G_SOURCE_REMOVE;
+    }
+
+    static gboolean QuietCheck(void* data)
+    {
+        ReproApp* const self = static_cast<ReproApp*>(data);
+
+        if ( wxTopLevelWindows.GetCount() )
+        {
+            self->Fail("the frame is still there, idle time never came");
+            self->ExitMainLoop();
+        }
+        // else the main loop has ended already, this never runs
+
+        return G_SOURCE_REMOVE;
+    }
+
+    void TestQuietClose()
+    {
+        wxFrame* const frame = new wxFrame(nullptr, wxID_ANY, "quiet", wxDefaultPosition, wxSize(400, 300));
+        frame->Show();
+        m_frame = frame;
+
+        g_timeout_add(1500, QuietSendClose, this);
+        g_timeout_add(4000, QuietCheck, this);
     }
 
     void TestClose()

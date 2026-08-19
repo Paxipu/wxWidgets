@@ -268,11 +268,21 @@ wx_gtk_insert_text_callback(GtkEditable *editable,
 // know its state is to connect to the "grab-notify" signal and be notified then
 // for its state. this is the best we can do for now than any other alternative.
 // (GtkEntryCompletion grabs/ungrabs keyboard and mouse events on popups/popdowns).
+//
+// None of which is available under GTK4: explicit grabs are gone, and so is the
+// signal that told a widget it had been shadowed by one. GtkEntryCompletion
+// still pops its window up, but nothing says when, so wxTE_PROCESS_ENTER stays
+// on while the popup is shown there. Connecting anyway is not free -- there is
+// no such signal on GtkWidget any more, so g_signal_connect() produces a
+// critical every time an auto-completing entry is created.
+#ifndef __WXGTK4__
 
 static void
 wx_gtk_entry_parent_grab_notify (GtkWidget *widget,
                                  gboolean was_grabbed,
                                  wxTextAutoCompleteData *data);
+
+#endif // !__WXGTK4__
 
 } // extern "C"
 
@@ -406,9 +416,11 @@ protected:
         gtk_entry_completion_set_text_column (completion, 0);
         gtk_entry_set_completion(m_widgetEntry, completion);
 
+#ifndef __WXGTK4__
         g_signal_connect (m_widgetEntry, "grab-notify",
                           G_CALLBACK (wx_gtk_entry_parent_grab_notify),
                           this);
+#endif // !__WXGTK4__
     }
 
     // Provide access to wxTextEntry::GetEditableWindow() to the derived
@@ -591,6 +603,8 @@ private:
 extern "C"
 {
 
+#ifndef __WXGTK4__
+
 static void
 wx_gtk_entry_parent_grab_notify (GtkWidget *widget,
                                  gboolean was_grabbed,
@@ -613,6 +627,8 @@ wx_gtk_entry_parent_grab_notify (GtkWidget *widget,
 
     data->GTKOnPopupShown(shown);
 }
+
+#endif // !__WXGTK4__
 
 } // extern "C"
 

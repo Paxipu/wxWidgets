@@ -779,15 +779,43 @@ wxGCC_WARNING_RESTORE()
 
 // Remove a widget from its parent without destroying it.
 //
-// GTK4 has no generic container API any more, but for the simple multi-child
-// containers this is used with (GtkBox and wxPizza) gtk_widget_unparent() is
-// exactly what the type-specific remove function does. It must *not* be used
-// for single-child containers such as GtkScrolledWindow or GtkFrame, which
-// keep their own pointer to the child and need set_child(nullptr) instead.
+// GTK4 has no generic container API any more. For the simple multi-child
+// containers (GtkBox, wxPizza) gtk_widget_unparent() is exactly what the
+// type-specific remove function does, but for a single-child container it is
+// not: those keep their own pointer to the child, and unparenting behind their
+// back leaves it dangling. The damage shows up later, when the container is
+// given a new child and unparents the old pointer a second time -- by then the
+// widget has usually been put somewhere else, and it is torn out of there
+// instead. That is what made wxMiniFrame lose its client area, and with it
+// every wxAuiManager pane that tried to float, since a wxAuiFloatingFrame is
+// a wxMiniFrame.
+//
+// Rather than leave that to each call site to remember, ask the container to
+// let go properly when it is one of the kinds wx puts children into.
 static inline void wx_gtk_widget_remove_from_parent(GtkWidget* child)
 {
 #ifdef __WXGTK4__
-    gtk_widget_unparent(child);
+    GtkWidget* const parent = gtk_widget_get_parent(child);
+    if ( !parent )
+        return;
+
+    // Note these all drop the container's own reference, so a caller that
+    // wants to keep the widget must hold one of its own -- as it had to with
+    // gtk_container_remove() under GTK3.
+    if ( GTK_IS_WINDOW(parent) )
+        gtk_window_set_child(GTK_WINDOW(parent), nullptr);
+    else if ( GTK_IS_BUTTON(parent) )
+        gtk_button_set_child(GTK_BUTTON(parent), nullptr);
+    else if ( GTK_IS_FRAME(parent) )
+        gtk_frame_set_child(GTK_FRAME(parent), nullptr);
+    else if ( GTK_IS_SCROLLED_WINDOW(parent) )
+        gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(parent), nullptr);
+    else if ( GTK_IS_EXPANDER(parent) )
+        gtk_expander_set_child(GTK_EXPANDER(parent), nullptr);
+    else if ( GTK_IS_POPOVER(parent) )
+        gtk_popover_set_child(GTK_POPOVER(parent), nullptr);
+    else
+        gtk_widget_unparent(child);
 #else
     gtk_container_remove(GTK_CONTAINER(gtk_widget_get_parent(child)), child);
 #endif

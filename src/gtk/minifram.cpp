@@ -519,7 +519,13 @@ bool wxMiniFrame::Create( wxWindow *parent, wxWindowID id, const wxString &title
     gtk_overlay_set_child(GTK_OVERLAY(eventbox), decor);
 
     g_object_ref(m_mainWidget);
+
+    // m_mainWidget's parent here is the GtkWindow, which keeps its own pointer
+    // to its child: this has to detach it properly rather than just unparent
+    // it, or the gtk_window_set_child() at the end of this function pulls
+    // m_mainWidget straight back out of the overlay again. The helper knows.
     wx_gtk_widget_remove_from_parent(m_mainWidget);
+
     gtk_overlay_add_overlay(GTK_OVERLAY(eventbox), m_mainWidget);
     g_object_unref(m_mainWidget);
 

@@ -38,6 +38,47 @@ namespace wxGTKImpl
 
 #ifdef __WXGTK4__
 
+// Return the position, relative to the surface, at which the given event
+// happened.
+//
+// Not every GTK4 event carries one: gdk_event_get_position() returns false for
+// those that don't -- and, importantly, sets both coordinates to NaN rather
+// than leaving them alone, so its result can't just be ignored. Scroll events
+// are the case that matters, as GdkScrollEvent stores only the deltas, so this
+// covers the whole of the mouse wheel path; passing NaN on to InitMouseEvent()
+// below reaches wxRound() and asserts.
+//
+// The position such an event happened at is where the pointer is, so ask the
+// seat for it. Only if that fails as well -- the pointer having left the
+// surface, say, which is possible for a leave event -- is the origin used.
+inline bool GetEventPosition(GdkEvent* gdk_event,
+                             GtkWidget* widget,
+                             double* x,
+                             double* y)
+{
+    if ( gdk_event && gdk_event_get_position(gdk_event, x, y) )
+        return true;
+
+    if ( widget )
+    {
+        if ( GtkNative* const native = gtk_widget_get_native(widget) )
+        {
+            GdkSurface* const surface = gtk_native_get_surface(native);
+            GdkDevice* const pointer = gdk_seat_get_pointer(
+                gdk_display_get_default_seat(gtk_widget_get_display(widget)));
+
+            if ( surface && pointer &&
+                    gdk_surface_get_device_position(surface, pointer,
+                                                    x, y, nullptr) )
+                return true;
+        }
+    }
+
+    *x =
+    *y = 0;
+    return false;
+}
+
 // Init wxMouseEvent from a GdkEvent.
 //
 // Unlike GTK+ 3, where the event structs carried their own coordinates
@@ -53,7 +94,13 @@ inline void InitMouseEvent(wxWindowGTK *win,
                            double x,
                            double y)
 {
-    const GdkModifierType state = gdk_event_get_modifier_state(gdk_event);
+    // There may be no event at all: GtkEventControllerMotion::leave is emitted
+    // without one when the pointer is taken away by something other than the
+    // pointer moving, e.g. a grab. Everything read from the event keeps its
+    // default in that case rather than provoking GTK warnings.
+    const GdkModifierType state = gdk_event
+                                    ? gdk_event_get_modifier_state(gdk_event)
+                                    : GdkModifierType(0);
 
     event.m_shiftDown = (state & GDK_SHIFT_MASK) != 0;
     event.m_controlDown = (state & GDK_CONTROL_MASK) != 0;
@@ -84,7 +131,8 @@ inline void InitMouseEvent(wxWindowGTK *win,
 
     event.SetEventObject( win );
     event.SetId( win->GetId() );
-    event.SetTimestamp( gdk_event_get_time(gdk_event) );
+    if ( gdk_event )
+        event.SetTimestamp( gdk_event_get_time(gdk_event) );
 }
 
 #else // !__WXGTK4__

@@ -1925,7 +1925,7 @@ gtk_wx_cell_renderer_activate(
         if ( gdk_button_event_get_button(event) == GDK_BUTTON_PRIMARY )
         {
             double eventX = 0, eventY = 0;
-            gdk_event_get_position(event, &eventX, &eventY);
+            wxGTKImpl::GetEventPosition(event, ctrl->m_widget, &eventX, &eventY);
 
             wxMouseEvent mouse_event(wxEVT_LEFT_DOWN);
             InitMouseEvent(ctrl, mouse_event, event, eventX, eventY);

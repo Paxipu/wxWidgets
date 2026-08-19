@@ -2518,10 +2518,11 @@ wx_gtk_scroll_callback(GtkEventControllerScroll* controller,
     GtkWidget* const widget = gtk_event_controller_get_widget(c);
 
     // Unlike the pointer controllers, the scroll signal carries no
-    // coordinates, so take them from the event. They are surface-relative and
-    // InitMouseEvent() wants them widget-relative.
+    // coordinates, and neither does the event behind it, so GetEventPosition()
+    // falls back to the pointer position. It is surface-relative and
+    // InitMouseEvent() wants it widget-relative.
     double x = 0, y = 0;
-    gdk_event_get_position(gdk_event, &x, &y);
+    wxGTKImpl::GetEventPosition(gdk_event, widget, &x, &y);
     if (GtkNative* const native = gtk_widget_get_native(widget))
     {
         // Note GRAPHENE_POINT_INIT() can't be used inline here: it expands to
@@ -2969,11 +2970,11 @@ wxGTKImpl::WindowLeaveCallback(wxWindowGTK* win, GdkEvent* gdk_event)
 
     // GtkEventControllerMotion::leave carries no coordinates, unlike GTK3's
     // GdkEventCrossing. Recover them from the event where possible so the
-    // wxMouseEvent still reports where the pointer left; fall back to the
-    // origin if the event doesn't have a position either.
+    // wxMouseEvent still reports where the pointer left; GetEventPosition()
+    // falls back to the origin if the event doesn't have a position either.
     double x = 0, y = 0;
-    if ( gdk_event )
-        gdk_event_get_position(gdk_event, &x, &y);
+    GetEventPosition(gdk_event, win->m_wxwindow ? win->m_wxwindow : win->m_widget,
+                     &x, &y);
 
     wxMouseEvent event( wxEVT_LEAVE_WINDOW );
     InitMouseEvent(win, event, gdk_event, x, y);

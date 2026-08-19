@@ -93,8 +93,16 @@ bool wxGtkCalendarCtrl::Create(wxWindow *parent,
     g_object_ref(m_widget);
     SetDate(date.IsValid() ? date : wxDateTime::Today());
 
+#ifndef __WXGTK4__
     if (style & wxCAL_NO_MONTH_CHANGE)
         g_object_set (G_OBJECT (m_widget), "no-month-change", true, nullptr);
+#else
+    // GtkCalendar's "no-month-change" property is gone under GTK4 and has no
+    // replacement, so wxCAL_NO_MONTH_CHANGE cannot be honoured: the month and
+    // year arrows stay usable. Setting it by name would not have worked
+    // either -- g_object_set() on a property that does not exist is a runtime
+    // warning, not an error, and does nothing. See docs/gtk/gtk4-status.md.
+#endif // !__WXGTK4__/__WXGTK4__
     if (style & wxCAL_SHOW_WEEK_NUMBERS)
         g_object_set (G_OBJECT (m_widget), "show-week-numbers", true, nullptr);
 
@@ -222,12 +230,19 @@ wxGtkCalendarCtrl::GetDateRange(wxDateTime *lowerdate,
 
 bool wxGtkCalendarCtrl::EnableMonthChange(bool enable)
 {
+#ifdef __WXGTK4__
+    // Not supported: see the comment in Create(). Say so rather than claiming
+    // success, so that callers can fall back to the generic implementation.
+    wxUnusedVar(enable);
+    return false;
+#else
     if ( !wxCalendarCtrlBase::EnableMonthChange(enable) )
         return false;
 
     g_object_set (G_OBJECT (m_widget), "no-month-change", !enable, nullptr);
 
     return true;
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 

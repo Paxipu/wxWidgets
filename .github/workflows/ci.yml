@@ -373,6 +373,17 @@ jobs:
           python3 build/tools/gtk4-ownership-diff.py || \
             test $? -eq 77
 
+      - name: Checking GTK4 property names
+        if: matrix.gtk_version == 4
+        run: |
+          # GObject properties are addressed by string, so a renamed or removed
+          # one is not a compile error: setting it does nothing and reading it
+          # leaves the destination untouched. GtkSpinner's "active" became
+          # "spinning" and GtkCalendar lost "no-month-change" this way.
+          # Returns 77 and passes if the .gir files are not installed.
+          python3 build/tools/gtk4-property-names.py || \
+            test $? -eq 77
+
       - name: Building
         run: |
           if [ ${{ matrix.use_asan }} ]; then

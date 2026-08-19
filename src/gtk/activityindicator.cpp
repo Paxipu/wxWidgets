@@ -94,10 +94,19 @@ bool wxActivityIndicator::IsRunning() const
     if ( !m_widget )
         return false;
 
+#ifdef __WXGTK4__
+    // GtkSpinner's "active" property was renamed to "spinning" in GTK4, and
+    // there is now an accessor for it, so ask through that rather than by
+    // name. Reading a property that does not exist is not an error to the
+    // compiler and only a warning at runtime -- and it leaves the gboolean
+    // untouched, so this used to return whatever was on the stack.
+    return gtk_spinner_get_spinning(GTK_SPINNER(m_widget)) != 0;
+#else
     gboolean b;
     g_object_get(m_widget, "active", &b, nullptr);
 
     return b != 0;
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 wxSize wxActivityIndicator::DoGetBestClientSize() const

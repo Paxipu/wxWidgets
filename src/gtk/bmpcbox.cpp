@@ -160,6 +160,12 @@ void wxBitmapComboBox::GTKCreateComboBoxWidget()
     }
     g_object_ref(m_widget);
 
+    // gtk_combo_box_new_with_model() and friends are (transfer none): the
+    // combo box takes a reference of its own, so the one gtk_list_store_new()
+    // returned above is ours to drop. Without this every wxBitmapComboBox
+    // leaked its store, and everything in it.
+    g_object_unref(store);
+
     // This must be called as gtk_combo_box_entry_new_with_model adds
     // automatically adds one text column.
     gtk_cell_layout_clear( GTK_CELL_LAYOUT(m_widget) );

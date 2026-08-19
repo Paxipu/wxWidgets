@@ -416,6 +416,13 @@ protected:
         gtk_entry_completion_set_text_column (completion, 0);
         gtk_entry_set_completion(m_widgetEntry, completion);
 
+        // GtkEntryCompletion is a plain GObject, not a GInitiallyUnowned, so
+        // the reference above is ours; gtk_entry_set_completion() is
+        // (transfer none) and takes one of its own. Dropping ours here leaves
+        // the entry as the only owner, which is what the destructor's
+        // gtk_entry_set_completion(nullptr) then releases.
+        g_object_unref(completion);
+
 #ifndef __WXGTK4__
         g_signal_connect (m_widgetEntry, "grab-notify",
                           G_CALLBACK (wx_gtk_entry_parent_grab_notify),

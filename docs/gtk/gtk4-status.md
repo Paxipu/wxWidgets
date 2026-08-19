@@ -3623,6 +3623,98 @@ to, and wx never releases its own. They are pre-existing upstream bugs rather
 than port regressions, and are left alone here so this branch does not change
 GTK3 behaviour, but they are worth reporting separately.
 
+## Progress update 43: the second round of bug reports
+
+Seven more bugs came back from the human eyeballing the samples. Three had
+already been fixed between the build being tested and this one; one was the
+documented behaviour; three were real and are fixed here, and finding them
+turned up two more nobody had reported.
+
+### One press, several wxEVT_LEFT_DOWN
+
+> aui sample: seem not to be able to dock or undock panes
+
+A `GtkEventControllerKey` lives on the focus widget and fires only for it,
+which is why the key handlers dropped GTK3's `EventAlreadyProcessed()` guard
+and were right to. A `GtkGestureClick` is not like that. In the default BUBBLE
+phase a press nobody claims -- which is exactly what an unhandled press is --
+is offered to every ancestor in turn, each with its own gesture, and wx's
+callback then re-targets it with `FindWindowForMouseEvent()`. One physical
+click reached the same wxWindow once per ancestor.
+
+Measured with a wxWindow inside a wxFrame: `LEFT_DOWN` twice, `LEFT_UP` once.
+Two downs for one press breaks anything that toggles state on a click.
+
+The guard is back for the pointer, keyed on the `GdkEvent` and holding a
+reference to it so the next event cannot be allocated at the same address and
+be mistaken for it.
+
+### The frame that lost its client area
+
+Fixing the presses was not enough: floating a pane still filled the log with
+`invalid unclassed pointer in cast to 'wxPizza'` and often segfaulted in
+`wxWindow::AddChildGTK()`.
+
+`wx_gtk_widget_remove_from_parent()` unparented the child whatever its parent
+was. Its own comment said not to use it on a single-child container, which
+keeps its own pointer to the child -- and `wxMiniFrame::Create()` did exactly
+that, on the `GtkWindow`, while rearranging the frame's contents into a
+`GtkOverlay`. GtkWindow's child pointer was left dangling, and the
+`gtk_window_set_child()` a few lines later unparented it a second time. By
+then `m_mainWidget` was in the overlay, so it was torn straight back out of
+it, taking the frame's client area with it.
+
+**A wxAuiFloatingFrame is a wxMiniFrame under wxGTK**, so every pane that tried
+to float was reparented into a frame whose `m_wxwindow` pointed at a destroyed
+widget.
+
+The helper now asks the container to let go -- `GtkWindow`, `GtkButton`,
+`GtkFrame`, `GtkScrolledWindow`, `GtkExpander` and `GtkPopover` each get their
+`set_child(nullptr)` -- rather than leaving it to each call site to remember.
+wxAnyButton was unparenting a GtkButton's child the same way.
+
+### Properties addressed by string
+
+Two found while chasing the above, neither reported, both silent:
+
+* `wxActivityIndicator::IsRunning()` read GtkSpinner's `"active"`, which GTK4
+  renamed to `"spinning"`. `g_object_get()` on a property that does not exist
+  is a runtime warning that leaves the destination untouched, so the function
+  returned whatever was on the stack. It calls `gtk_spinner_get_spinning()`
+  now, which cannot be got wrong this way.
+* `wxCAL_NO_MONTH_CHANGE` did nothing: GtkCalendar's `"no-month-change"` was
+  removed outright, so the month and year arrows stay usable under GTK4.
+  `EnableMonthChange()` says so by returning false instead of claiming success.
+
+`build/tools/gtk4-property-names.py` makes the class checkable. Where the
+object is written as a `GTK_FOO()` cast it looks the property up on that exact
+type and its ancestors -- which is what catches a rename to a name some other
+class still uses -- and otherwise reports names that exist in GTK3 and nowhere
+in GTK4. Only the call's own first argument is considered: taking casts from
+nearby lines produced two false positives, a GtkLabel checked as a GtkButton
+and a cell renderer checked as a GtkCellLayout.
+
+### Already fixed, and not a bug
+
+The menu sample's scrolling assert, the anim sample's close button and its
+about box were all fixed in the previous round, between the build that was
+tested and this one; re-running each against the current tree confirms it. The
+`Gdk-CRITICAL`s on entering a panel went with the same commit that gave the
+mouse wheel a position -- verified here by driving the pointer across the
+widgets sample with XTest and finding the log clean.
+
+"Set inactive bitmap" remains what it was: the documented behaviour, since the
+sample starts playing immediately and the inactive bitmap is what shows when it
+is not.
+
+### Two leaks that were not the port's doing
+
+The ownership audit turned up `gtk_entry_completion_new()` in `textentry.cpp`
+and `gtk_list_store_new()` in `bmpcbox.cpp` both leaking a reference -- the
+widget takes one of its own, and wx never dropped the one it had. Identical
+under GTK3, so they were reported separately rather than folded into the port,
+and then fixed on request.
+
 ### Next
 2. Style queries from inside the snapshot vfunc (above): wx builds and destroys
    a `GtkWindow` per `GetColour()` call, during painting. Not this bug, but not

@@ -4239,3 +4239,178 @@ focus before `::enter` the check says so.
 ### Checks
 
 `gtk4-invariants` is at **56 checks, 0 failed**.
+
+## Progress update 45: the third round of bug reports
+
+Ten reports this time, from a pass over the collpane, comboboxes, dataview
+and debugrpt samples. Four were real port bugs, one was an upstream bug in
+generic code, four were the samples behaving as written, and one is still
+open pending a retest. Chasing them turned up two more nobody had reported.
+
+### A container hears about its children's focus
+
+> DataViewCtrl sample: warnings on stderr
+> window wxPanel ("panel") lost focus even though it didn't have it
+
+Recorded as a known gap in update 44 and fixed here, since it turns out to
+show up in ordinary use rather than only in a contrived probe. GTK3 sent
+`focus-in-event` to the widget that took the focus; GTK4 has no such event,
+and `GtkEventControllerFocus::enter` fires for the focus entering **the
+widget or any of its descendants**. So every container above the focused
+control was told the focus had arrived, none of them was told when it moved
+on to a child, and each was told it had left much later -- by which time
+`gs_currentFocus` was somebody else.
+
+The measurements in update 44 rule out filtering it where it arrives. What
+was left was to decide afterwards, and the toplevel's `notify::focus-widget`
+is exactly where GTK settles it: it is emitted immediately after the
+enter/leave burst, in the same operation, and `gtk_window_get_focus()` is
+finally set by then. Each wxWindow marks the widget it watches with a
+pointer back to itself, and the innermost marked widget at or above the real
+focus widget names the wxWindow the focus belongs to. That handles the
+`GtkEntry`/`GtkText` case, which is what ruled out the simpler tests.
+
+`::leave` still drives focus-out -- GTK keeps its focus widget when a window
+is merely deactivated, so that leave is the only notice wx gets of it -- but
+only for a window wx has recorded something about.
+
+Measured on the dataview sample: switching between all four tabs and back
+several times now produces nothing at all on stderr.
+
+### A click in a tree view arrived a hundred pixels lower
+
+> DataViewCtrl sample: checkboxes in MyListModel cannot be checked
+
+A GTK4 event's position is relative to the **surface**, while a cell area is
+relative to the tree view. Under GTK3 the two were the same thing: the event
+carried coordinates relative to the GdkWindow it had arrived on, which was
+the tree view's bin window. `gtk_wx_cell_renderer_activate()` was mixing
+them, so `ActivateCell()` tested the click against a point well below where
+it happened:
+
+```
+DVHIT checksize=18x18 pos=(15,77) hit=0
+```
+
+The check box is 18x18 and the click was 77 pixels down. Converting through
+`gtk_native_get_surface_transform()` and `gtk_widget_compute_point()` gives
+`rel=(8,8)`, inside the box.
+
+Notably **without** `gtk_tree_view_convert_widget_to_bin_window_coords()` on
+top of that: GTK4's tree view has no bin window any more and hands out cell
+areas relative to itself, so applying it subtracted the header height a
+second time. That intermediate version still missed, 24px too high, which is
+worth knowing for the next person converting coordinates around GtkTreeView.
+
+This affects every activatable custom renderer, not just the check box one.
+
+### gtk_render_arrow() draws nothing
+
+> comboboxes sample: most drop-down arrow boxes lack their drop-down-arrow
+> and don't work
+
+GTK4 still declares `gtk_render_arrow()`, among its deprecated functions, so
+`wxRendererGTK::DrawDropArrow()` went on calling it and went on compiling.
+It puts nothing on the surface any more: a GTK4 theme gives the arrow of a
+combo box a node of its own and paints it as an icon.
+
+| through a button style context | pixels painted |
+| --- | --- |
+| `gtk_render_arrow()` | 0 |
+| `pan-down-symbolic`, snapshotted | 42 |
+
+So every wxComboCtrl and wxOwnerDrawnComboBox had a blank square where its
+drop-down button should be. The "don't work" half was a consequence rather
+than a second bug: the buttons were live all along, there was just nothing
+drawn to suggest the blank square could be clicked. `DrawDropArrow()` now
+looks up `pan-down-symbolic`, snapshots it with the style context's
+foreground colour so it follows a dark theme, and draws the render node into
+the cairo target.
+
+The neighbouring deprecated calls are worth recording too, since the obvious
+conclusion from the above is the wrong one. `gtk_render_check()`,
+`gtk_render_option()` and `gtk_render_expander()` also draw nothing *through
+a bare widget context* -- but wx descends to the real `check`, `radio` or
+`expander` node first, and GTK4's themes paint those through the node's
+`background-image`, so they come out correctly. `gtk_render_background()`,
+`gtk_render_frame()` and `gtk_render_focus()` still draw. The arrow was the
+only one wx was asking the wrong way for.
+
+### A window's default widget outlives itself
+
+Not reported: found while looking at something else, and firing on every
+dialog with a default button. Closing one printed five criticals:
+
+```
+Gtk-CRITICAL gtk_widget_is_ancestor: assertion 'GTK_IS_WIDGET (widget)' failed
+Gtk-CRITICAL gtk_widget_is_ancestor: assertion 'GTK_IS_WIDGET (widget)' failed
+Gtk-CRITICAL gtk_widget_remove_css_class: assertion 'GTK_IS_WIDGET (widget)' failed
+Gtk-CRITICAL gtk_widget_queue_draw: assertion 'GTK_IS_WIDGET (widget)' failed
+GLib-GObject-CRITICAL g_object_notify: assertion 'G_IS_OBJECT (object)' failed
+```
+
+**GTK4's `GtkWindow` keeps a plain pointer to its default widget.** It takes
+no reference to it, and unparenting that widget does not clear the pointer.
+So destroying a dialog's default button leaves the window pointing at freed
+memory, and the next unparent of any sibling walks into it:
+`gtk_widget_unparent()` asks whether the default widget is inside the widget
+going away. Instrumenting `wxPizza::remove()` makes the moment unambiguous:
+
+```
+PZREM w=0x...5f0 default=0x...5f0 ok=1     <- the default widget is removed
+PZREM w=0x...150 default=0x...5f0 ok=0     <- same pointer, no longer a widget
+```
+
+`wx_gtk_widget_forget_in_root()` now tells the window before the widget
+goes, for the widget itself and for anything below it, from both places a
+child is detached. The focus widget is handled the same way -- GTK4 does
+clear that one itself, but doing it here as well costs nothing and keeps the
+two from drifting apart, which matters now that the focus resolution above
+reads `gtk_window_get_focus()`.
+
+### Not the port
+
+Four reports came down to samples doing what they say, and the GTK3 build
+was the arbiter in each case:
+
+* **collpane, collapsing does not move the control below.** Identical on GTK
+  3.24.41. The pane is added with proportion 1, so it keeps the space
+  whether collapsed or not, and `MyFrame` has no
+  `EVT_COLLAPSIBLEPANE_CHANGED` handler to re-fit the frame.
+* **collpane, "Press to align right" does nothing.** In the main window it
+  has no handler at all -- `MyFrame`'s event table has no `EVT_BUTTON` entry
+  for it. The one in the Test dialog works correctly under GTK4: the text
+  control moves to the right of its grid cell, diff bbox `(15,181)-(407,215)`.
+* **debugrpt, nine vertical lines.** `m_numLines = 10` and the paint handler
+  draws that many. It exists to be crashed by "Report for paint handler",
+  which sets it to zero.
+* **debugrpt, ListLoadedDLLs cycles.** `for(;;)` in the sample: pick a
+  library, see its details, back to the list. Cancel and the window
+  manager's close button both exit it correctly.
+
+And one was an upstream bug in generic code rather than in the port:
+`src/generic/dbgrptg.cpp` created the contents of two `wxStaticBoxSizer`s
+with the dialog as parent, which `wxStaticBoxSizer::CheckIfNonBoxChild()`
+complains about in a debug build -- on GTK3 just the same. Fixed by
+parenting them to the `wxStaticBox`.
+
+### A trap worth naming
+
+Twice in one day, a modal dialog that had come up somewhere unexpected made
+unrelated things look broken. In a window-manager-less X server a
+`wxLogMessage` box lands at 0,0, behind the main window, while still holding
+the modal grab -- so every button in the dialog underneath silently does
+nothing, and the obvious conclusion is that the buttons are broken. Both
+"the align-right button does nothing" and a stretch of this session were
+that. If a control appears inert, count the windows first.
+
+### And the suite
+
+`test_gui` is unchanged at **488 passed / 2 failed of 490**, the two being
+the `wxDVC::SingleSelection` and `TextCtrl::HitTest` failures already
+described. One pre-existing GTK critical remains in the suite, unrelated to
+any of the above and unchanged across all three runs today:
+`gtk_stack_remove: assertion 'gtk_widget_get_parent (child) == GTK_WIDGET
+(stack)' failed`, in `EventPropagationTestCase::DocView`.
+
+`gtk4-invariants` is at **58 checks, 0 failed**.

@@ -1400,6 +1400,99 @@ static void test_focus_controller_scope(void)
     gtk_window_destroy(GTK_WINDOW(win));
 }
 
+/* ------------------------------------------------------------------------ */
+
+/* Count the pixels a drawing operation actually put on a surface. */
+static int painted_pixels(cairo_surface_t* surface)
+{
+    const unsigned char* data;
+    int w, h, stride, x, y, n = 0;
+
+    cairo_surface_flush(surface);
+    data = cairo_image_surface_get_data(surface);
+    w = cairo_image_surface_get_width(surface);
+    h = cairo_image_surface_get_height(surface);
+    stride = cairo_image_surface_get_stride(surface);
+
+    for (y = 0; y < h; y++)
+        for (x = 0; x < w; x++)
+            if (data[y * stride + x * 4 + 3] != 0)
+                n++;
+
+    return n;
+}
+
+static void test_drop_arrow_drawing(void)
+{
+    GtkWidget* button;
+    GtkIconTheme* theme;
+    GtkIconPaintable* icon;
+    cairo_surface_t* surface;
+    cairo_t* cr;
+    int arrowPixels, iconPixels = 0;
+
+    printf("Drawing a drop-down arrow:\n");
+
+    /* gtk_render_arrow() is still declared -- among GTK4's deprecated
+     * functions -- so wxRendererGTK::DrawDropArrow() went on calling it and
+     * went on compiling. It draws nothing at all now, though: a GTK4 theme
+     * puts the arrow of a combo box in a node of its own and paints it as an
+     * icon, so there is nothing for a button's style context to render. Every
+     * wxComboCtrl drop-down button came up blank because of it. */
+    surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 32, 32);
+    cr = cairo_create(surface);
+    button = gtk_button_new();
+    g_object_ref_sink(button);
+    gtk_render_arrow(gtk_widget_get_style_context(button), cr, G_PI, 4, 4, 16);
+    arrowPixels = painted_pixels(surface);
+    g_object_unref(button);
+    cairo_destroy(cr);
+    cairo_surface_destroy(surface);
+
+    soft(arrowPixels == 0,
+         "gtk_render_arrow() draws nothing through a button style context",
+         "GTK4 draws arrows again, so DrawDropArrow() could go back to it");
+
+    /* What it uses instead. */
+    theme = gtk_icon_theme_get_for_display(gdk_display_get_default());
+    icon = gtk_icon_theme_lookup_icon(theme, "pan-down-symbolic", NULL, 16, 1,
+                                      GTK_TEXT_DIR_LTR,
+                                      GTK_ICON_LOOKUP_FORCE_SYMBOLIC);
+
+    check(icon != NULL,
+          "the icon theme has pan-down-symbolic",
+          "there is nothing left to draw a drop-down arrow with");
+
+    if (icon != NULL)
+    {
+        const GdkRGBA black = { 0, 0, 0, 1 };
+        GtkSnapshot* snapshot;
+        GskRenderNode* node;
+
+        surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 32, 32);
+        cr = cairo_create(surface);
+
+        snapshot = gtk_snapshot_new();
+        gtk_symbolic_paintable_snapshot_symbolic(GTK_SYMBOLIC_PAINTABLE(icon),
+                                                 snapshot, 16, 16, &black, 1);
+        node = gtk_snapshot_free_to_node(snapshot);
+        if (node != NULL)
+        {
+            gsk_render_node_draw(node, cr);
+            gsk_render_node_unref(node);
+        }
+
+        iconPixels = painted_pixels(surface);
+        cairo_destroy(cr);
+        cairo_surface_destroy(surface);
+        g_object_unref(icon);
+    }
+
+    check(iconPixels > 0,
+          "and drawing it as a symbolic icon does put pixels on the surface",
+          "the route DrawDropArrow() takes under GTK4 stopped working");
+}
+
 static void test_indicator_nodes(void)
 {
     GtkWidget* checkbtn;
@@ -1484,6 +1577,8 @@ int main(void)
     test_indicator_nodes();
     printf("\n");
     test_scrollbar_metric();
+    printf("\n");
+    test_drop_arrow_drawing();
     printf("\n");
     test_combo_box_internals();
     printf("\n");

@@ -40,6 +40,7 @@
 
 #include "wx/gtk/private.h"
 #include "wx/gtk/private/gtk3-compat.h"
+#include "wx/gtk/private/object.h"
 #include "wx/gtk/private/stylecontext.h"
 #include "wx/gtk/private/value.h"
 
@@ -582,7 +583,59 @@ wxRendererGTK::DrawDropArrow(wxWindow*,
     else
         state = GTK_STATE_NORMAL;
 
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    cairo_t* const cr = wxGetGTKDrawable(dc);
+    if (cr == nullptr)
+        return;
+
+    // GTK4 still declares gtk_render_arrow(), among its deprecated functions,
+    // but it no longer puts anything on the surface: a GTK4 theme draws the
+    // arrow of a combo box as an icon in a node of its own rather than as
+    // something a style context paints. Measured on GTK 4.14.5, rendering an
+    // arrow through a button style context leaves exactly zero non-transparent
+    // pixels behind, which is why every wxComboCtrl drop-down button came up
+    // blank. The icon route is what the themes themselves use.
+    const double scale = dc.GetContentScaleFactor();
+
+    wxGtkStyleContext sc(scale);
+    sc.AddButton();
+    gtk_style_context_set_state(sc, stateTypeToFlags[state]);
+
+    GtkIconTheme* const theme =
+        gtk_icon_theme_get_for_display(gdk_display_get_default());
+
+    wxGtkObject<GtkIconPaintable> icon(
+        gtk_icon_theme_lookup_icon(theme, "pan-down-symbolic", nullptr,
+                                   size, int(scale + 0.5),
+                                   GTK_TEXT_DIR_LTR,
+                                   GTK_ICON_LOOKUP_FORCE_SYMBOLIC));
+    if (icon == nullptr)
+        return;
+
+    // A symbolic icon has no colour of its own: it takes the one it is
+    // snapshotted with, so it follows the theme into a dark one.
+    wxColour fg;
+    sc.Fg(fg, stateTypeToFlags[state]);
+
+    const GdkRGBA rgba =
+    {
+        fg.Red() / 255.0, fg.Green() / 255.0, fg.Blue() / 255.0,
+        fg.Alpha() / 255.0
+    };
+
+    GtkSnapshot* const snapshot = gtk_snapshot_new();
+    gtk_symbolic_paintable_snapshot_symbolic(GTK_SYMBOLIC_PAINTABLE(icon.get()),
+                                             snapshot, size, size, &rgba, 1);
+
+    if (GskRenderNode* const node = gtk_snapshot_free_to_node(snapshot))
+    {
+        cairo_save(cr);
+        cairo_translate(cr, x, y);
+        gsk_render_node_draw(node, cr);
+        cairo_restore(cr);
+        gsk_render_node_unref(node);
+    }
+#elif defined(__WXGTK3__)
     cairo_t* cr = wxGetGTKDrawable(dc);
     if (cr)
     {

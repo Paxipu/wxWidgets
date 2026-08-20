@@ -2680,15 +2680,117 @@ wxgtk_window_context_menu_key(GtkEventControllerKey* controller,
 //-----------------------------------------------------------------------------
 
 #ifdef __WXGTK4__
-static void
-wx_window_focus_in( GtkEventControllerFocus*, wxWindowGTK *win )
+
+// Set on the widget each wxWindow watches the focus on, pointing back at it.
+static const char* const WX_FOCUS_OWNER = "wx-focus-owner";
+
+// Set on a GtkWindow once wx_root_focus_changed() is connected to it.
+static const char* const WX_FOCUS_WATCHED = "wx-focus-watched";
+
+// The wxWindow the given focus widget belongs to: the innermost marked widget
+// at or above it, since GTK usually focuses a widget one of wx's controls is
+// built from rather than the control itself -- the GtkText inside a GtkEntry
+// being the usual one.
+static wxWindowGTK* wxGTKFocusOwner(GtkWidget* focusWidget)
 {
-    win->GTKHandleFocusIn();
+    for ( GtkWidget* w = focusWidget; w != nullptr;
+          w = gtk_widget_get_parent(w) )
+    {
+        if ( gpointer const owner = g_object_get_data(G_OBJECT(w),
+                                                      WX_FOCUS_OWNER) )
+            return static_cast<wxWindowGTK*>(owner);
+    }
+
+    return nullptr;
+}
+
+// Send whatever wx events the difference between what GTK now says and what wx
+// last reported calls for. Doing it from one place per toplevel, rather than
+// from each widget's own controller, is what makes it possible to tell "the
+// focus is in this window" from "the focus is in a control inside it": see
+// wx_window_focus_in() below.
+static void wxGTKResolveFocus(GtkWindow* toplevel)
+{
+    wxWindowGTK* const owner =
+        wxGTKFocusOwner(gtk_window_get_focus(toplevel));
+
+    if ( owner == gs_currentFocus )
+        return;
+
+    if ( gs_currentFocus )
+        gs_currentFocus->GTKHandleFocusOut();
+
+    if ( owner )
+        owner->GTKHandleFocusIn();
 }
 
 static void
-wx_window_focus_out( GtkEventControllerFocus*, wxWindowGTK *win )
+wx_root_focus_changed( GObject* toplevel, GParamSpec*, gpointer )
 {
+    wxGTKResolveFocus(GTK_WINDOW(toplevel));
+}
+
+static void wxGTKWatchRootFocus(GtkWidget* widget)
+{
+    GtkRoot* const root = gtk_widget_get_root(widget);
+    if ( !GTK_IS_WINDOW(root) )
+        return;
+
+    if ( g_object_get_data(G_OBJECT(root), WX_FOCUS_WATCHED) )
+        return;
+
+    g_object_set_data(G_OBJECT(root), WX_FOCUS_WATCHED, GINT_TO_POINTER(1));
+    g_signal_connect(root, "notify::focus-widget",
+                     G_CALLBACK(wx_root_focus_changed), nullptr);
+}
+
+static void
+wx_window_focus_in( GtkEventControllerFocus* controller, wxWindowGTK* )
+{
+    // GTK3 sent focus-in-event to the widget that took the focus. GTK4's
+    // controller instead reports the focus entering the widget *or any of its
+    // descendants*, so this runs for every container above the control that
+    // was really focused -- and a wxPanel would report a wxEVT_SET_FOCUS of
+    // its own, which GTK3 never sent and which then left gs_currentFocus
+    // pointing at the control when the panel's own leave arrived.
+    //
+    // The notification cannot be filtered where it arrives, because none of it
+    // is settled yet: at ::enter, gtk_event_controller_focus_is_focus() is
+    // FALSE, gtk_widget_has_focus() is FALSE, GTK_STATE_FLAG_FOCUSED is unset,
+    // the gtk_widget_get_focus_child() chain is still empty and
+    // gtk_window_get_focus() is null. All of it is in place one step later,
+    // when the toplevel notifies its focus-widget property, so that is where
+    // wx decides. Connecting here is in time for the very change that led
+    // here: ::enter runs first and in the same operation.
+    GtkWidget* const widget =
+        gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(controller));
+
+    wxGTKWatchRootFocus(widget);
+
+    // With one exception. A window regaining the focus does not change which
+    // widget in it is focused, so it notifies nothing -- and there GTK does
+    // already know where the focus is, which is exactly what tells the two
+    // apart.
+    GtkRoot* const root = gtk_widget_get_root(widget);
+    if ( GTK_IS_WINDOW(root) && gtk_window_get_focus(GTK_WINDOW(root)) )
+        wxGTKResolveFocus(GTK_WINDOW(root));
+}
+
+static void
+wx_window_focus_out( GtkEventControllerFocus* controller, wxWindowGTK *win )
+{
+    wxGTKWatchRootFocus(
+        gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(controller)));
+
+    // Every container above the focused control is told the focus left, too.
+    // Only the window wx has something recorded about has anything to say
+    // about it -- and unlike the focus arriving, this does not have to wait
+    // for the toplevel to notify: GTK keeps its focus widget when a window is
+    // merely deactivated, so this is the only notice wx gets of that.
+    if ( win != gs_currentFocus &&
+            win != gs_focusDeclined && win != gs_pendingFocus )
+        return;
+
     win->GTKHandleFocusOut();
 }
 #else
@@ -4206,6 +4308,10 @@ wxWindowGTK::~wxWindowGTK()
     // GTKHandleFocusOut() on a freed wxWindow.
     if ( gpointer const focus = wxGTKGetFocusController(m_focusWidget) )
         g_signal_handlers_disconnect_by_data(focus, this);
+
+    // And wxGTKFocusOwner() must not answer with a window that is going away.
+    if ( m_focusWidget )
+        g_object_set_data(G_OBJECT(m_focusWidget), WX_FOCUS_OWNER, nullptr);
 #endif // __WXGTK4__
 
     if (m_wxwindow)
@@ -4393,6 +4499,9 @@ void wxWindowGTK::PostCreation()
 
             g_object_set_data(G_OBJECT(m_focusWidget),
                               "wx-focus-controller", focus);
+
+            // wxGTKFocusOwner() finds the window this widget belongs to here.
+            g_object_set_data(G_OBJECT(m_focusWidget), WX_FOCUS_OWNER, this);
         }
 #else
         if (m_wxwindow)

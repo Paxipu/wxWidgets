@@ -1874,6 +1874,47 @@ gtk_wx_cell_renderer_snapshot (GtkCellRenderer      *renderer,
 
 #endif // __WXGTK4__
 
+#ifdef __WXGTK4__
+
+// A GTK4 event's position is relative to the surface, while cell_area -- and
+// so everything a renderer works out from it -- is relative to the tree view.
+// Under GTK3 the two were the same thing: the event carried coordinates
+// relative to the GdkWindow it had arrived on, which was the tree view's bin
+// window. Here they have to be converted, and the difference is not small: it
+// is the tree view's own position in the toplevel, so a click on a check box
+// in a notebook page was tested against a point most of a hundred pixels
+// below it and nothing was ever hit.
+static void wxGTKGetTreeViewEventPosition(GdkEvent* event,
+                                          GtkWidget* treeview,
+                                          double* x,
+                                          double* y)
+{
+    wxGTKImpl::GetEventPosition(event, treeview, x, y);
+
+    GtkNative* const native = gtk_widget_get_native(treeview);
+    if ( !native )
+        return;
+
+    // The surface origin is not the toplevel widget's origin: they differ by
+    // whatever room the surface leaves around itself for its shadow.
+    double surfaceX = 0, surfaceY = 0;
+    gtk_native_get_surface_transform(native, &surfaceX, &surfaceY);
+
+    graphene_point_t in, out;
+    in.x = float(*x - surfaceX);
+    in.y = float(*y - surfaceY);
+
+    if ( !gtk_widget_compute_point(GTK_WIDGET(native), treeview, &in, &out) )
+        return;
+
+    // And no bin window conversion on top: GTK4's tree view has no bin window
+    // any more, and hands out cell areas relative to itself.
+    *x = out.x;
+    *y = out.y;
+}
+
+#endif // __WXGTK4__
+
 static gboolean
 gtk_wx_cell_renderer_activate(
                         GtkCellRenderer         *renderer,
@@ -1925,7 +1966,7 @@ gtk_wx_cell_renderer_activate(
         if ( gdk_button_event_get_button(event) == GDK_BUTTON_PRIMARY )
         {
             double eventX = 0, eventY = 0;
-            wxGTKImpl::GetEventPosition(event, ctrl->m_widget, &eventX, &eventY);
+            wxGTKGetTreeViewEventPosition(event, widget, &eventX, &eventY);
 
             wxMouseEvent mouse_event(wxEVT_LEFT_DOWN);
             InitMouseEvent(ctrl, mouse_event, event, eventX, eventY);

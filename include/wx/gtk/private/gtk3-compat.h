@@ -792,12 +792,49 @@ wxGCC_WARNING_RESTORE()
 //
 // Rather than leave that to each call site to remember, ask the container to
 // let go properly when it is one of the kinds wx puts children into.
+// GTK4's GtkWindow keeps a plain pointer to its default widget: it takes no
+// reference to it, and it does not clear the pointer when that widget is
+// unparented. Destroying the default button of a dialog therefore leaves the
+// window pointing at freed memory, which the *next* unparent of any sibling
+// walks straight into -- gtk_widget_unparent() asks whether the default widget
+// is inside the widget going away, and everything from there on
+// (gtk_widget_is_ancestor, gtk_widget_remove_css_class, gtk_widget_queue_draw,
+// g_object_notify) is called on a dead object. Closing any dialog with a
+// default button printed five GTK criticals because of it.
+//
+// So tell the window before the widget goes, for the widget itself and for
+// anything below it. The focus widget is treated the same way: GTK4 does clear
+// that one itself, but doing it here as well costs nothing and keeps the two
+// from drifting apart.
+static inline void wx_gtk_widget_forget_in_root(GtkWidget* widget)
+{
+#ifdef __WXGTK4__
+    GtkRoot* const root = gtk_widget_get_root(widget);
+    if ( !GTK_IS_WINDOW(root) )
+        return;
+
+    GtkWindow* const window = GTK_WINDOW(root);
+
+    GtkWidget* const def = gtk_window_get_default_widget(window);
+    if ( def && (def == widget || gtk_widget_is_ancestor(def, widget)) )
+        gtk_window_set_default_widget(window, nullptr);
+
+    GtkWidget* const focus = gtk_window_get_focus(window);
+    if ( focus && (focus == widget || gtk_widget_is_ancestor(focus, widget)) )
+        gtk_window_set_focus(window, nullptr);
+#else
+    wxUnusedVar(widget);
+#endif
+}
+
 static inline void wx_gtk_widget_remove_from_parent(GtkWidget* child)
 {
 #ifdef __WXGTK4__
     GtkWidget* const parent = gtk_widget_get_parent(child);
     if ( !parent )
         return;
+
+    wx_gtk_widget_forget_in_root(child);
 
     // Note these all drop the container's own reference, so a caller that
     // wants to keep the widget must hold one of its own -- as it had to with

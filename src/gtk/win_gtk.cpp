@@ -9,6 +9,7 @@
 #include "wx/wxprec.h"
 
 #include "wx/gtk/private.h"
+#include "wx/gtk/private/gtk3-compat.h"
 #include "wx/gtk/private/win_gtk.h"
 #include "wx/window.h"
 
@@ -738,6 +739,10 @@ void wxPizza::remove(GtkWidget* widget)
     // put() does not parent toplevels, so this is not redundant.
     if (gtk_widget_get_parent(widget) == GTK_WIDGET(this))
     {
+        // The window has to be told before the widget goes: see
+        // wx_gtk_widget_forget_in_root().
+        wx_gtk_widget_forget_in_root(widget);
+
         // The counterpart of the gtk_widget_set_parent() in put():
         // gtk_fixed_remove() would go through the layout manager wxPizza
         // deliberately does not have.

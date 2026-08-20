@@ -425,12 +425,39 @@ void wxGTKCairoDCImpl::AdjustForRTL(cairo_t* cr)
 // Under GTK4 there is nothing to draw on outside of a paint handler: a
 // GdkSurface has no cairo context of its own and GTK only hands one out from
 // its snapshot vfunc. So wxWindowDC and wxClientDC still report the right
-// size, which is what most of their users actually want, but their drawing
-// goes to a scratch context and is never seen. wxPaintDC, which is the
-// supported way to draw on a window, is unaffected.
+// size, which is what most of their users actually want, but what they draw
+// never reaches the screen. wxPaintDC, which is the supported way to draw on a
+// window, is unaffected.
 //
 // wxClientDCImpl::CanBeUsedForDrawing() below reports this, exactly as it
 // already did for Wayland under GTK3, where the same restriction applied.
+//
+// They must still have somewhere real to draw, though.
+// wxGraphicsContext::Create() hands back a 1x1 measuring context, and its clip
+// silently discards everything drawn outside that one pixel -- which is not
+// the same thing as the drawing not being shown. wxOverlay is what makes the
+// difference visible: it captures whatever was drawn on the DC as a cairo
+// group and displays that in a widget of its own, which is how wxCaret and
+// wxDragImage draw and is a supported way to draw on a window under GTK4. With
+// a 1x1 clip it captured an empty group every time, so the caret was never
+// visible.
+static void wxGTKSetSurfaceGraphicsContext(wxGTKCairoDCImpl* impl,
+                                           const wxSize& size,
+                                           double scale)
+{
+    cairo_surface_t* const surface =
+        cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
+                                   wxMax(size.x, 1), wxMax(size.y, 1));
+    cairo_t* const cr = cairo_create(surface);
+    cairo_surface_destroy(surface);
+
+    // wxCairoContext takes a reference of its own, so ours goes back below.
+    wxGraphicsContext* const gc = wxGraphicsContext::CreateFromNative(cr);
+    gc->SetContentScaleFactor(scale);
+    impl->SetGraphicsContext(gc);
+
+    cairo_destroy(cr);
+}
 
 wxWindowDCImpl::wxWindowDCImpl(wxWindowDC* owner, wxWindow* window)
     : wxGTKCairoDCImpl(owner, window)
@@ -445,7 +472,7 @@ wxWindowDCImpl::wxWindowDCImpl(wxWindowDC* owner, wxWindow* window)
         InitSize(widget);
     }
 
-    SetGraphicsContext(wxGraphicsContext::Create());
+    wxGTKSetSurfaceGraphicsContext(this, m_size, m_contentScaleFactor);
 }
 //-----------------------------------------------------------------------------
 
@@ -462,7 +489,7 @@ wxClientDCImpl::wxClientDCImpl(wxClientDC* owner, wxWindow* window)
         m_ok = true;
     }
 
-    SetGraphicsContext(wxGraphicsContext::Create());
+    wxGTKSetSurfaceGraphicsContext(this, m_size, m_contentScaleFactor);
 }
 
 /* static */

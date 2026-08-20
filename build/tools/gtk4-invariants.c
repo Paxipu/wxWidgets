@@ -1234,6 +1234,95 @@ static void test_focus_flags(void)
     gtk_window_destroy(GTK_WINDOW(win));
 }
 
+/* ------------------------------------------------------------------------ */
+
+static int g_sliderWarnings;
+
+/* GTK4 emits its warnings through g_log_structured(), which does not consult
+ * the handlers g_log_set_handler() installs -- so a library cannot filter
+ * them, and only an application (this one) can, by taking over the writer. */
+static GLogWriterOutput log_writer(GLogLevelFlags level,
+                                   const GLogField* fields,
+                                   gsize n_fields,
+                                   gpointer user_data)
+{
+    gsize i;
+
+    for (i = 0; i < n_fields; i++)
+    {
+        if (strcmp(fields[i].key, "MESSAGE") == 0 && fields[i].value != NULL &&
+            strstr((const char*)fields[i].value, "reported min ") != NULL)
+        {
+            g_sliderWarnings++;
+            return G_LOG_WRITER_HANDLED;
+        }
+    }
+
+    return g_log_writer_default(level, fields, n_fields, user_data);
+}
+
+static void test_scrollbar_metric(void)
+{
+    GtkWidget* sb;
+    GtkWidget* win;
+    GtkWidget* sw;
+    GtkCssProvider* css;
+    int min = 0, nat = 0;
+    int before;
+
+    printf("Scrollbar width metric, and the theme-driven slider warning:\n");
+
+    /* GetScrollbarWidth() in settings.cpp measures a scrollbar that is in no
+     * window at all: GTK4 removed the min-width query the GTK3 code summed
+     * node by node down the scrollbar's CSS tree. */
+    sb = gtk_scrollbar_new(GTK_ORIENTATION_VERTICAL, NULL);
+    g_object_ref_sink(sb);
+    gtk_widget_measure(sb, GTK_ORIENTATION_HORIZONTAL, -1,
+                       &min, &nat, NULL, NULL);
+    check(min > 0,
+          "an unparented GtkScrollbar measures a usable width",
+          "wxSYS_VSCROLL_X has nothing left to derive the scrollbar width "
+          "from");
+    g_object_unref(sb);
+
+    /* A theme that zeroes the slider node's minimum size and its border makes
+     * GTK's own slider measurement come out negative, which GTK reports as
+     * "GtkGizmo (slider) reported min width -2".  It is produced inside
+     * GtkRange, needs no wxWidgets in the process to happen, and cannot be
+     * suppressed from a library -- see log_writer() above.  This check exists
+     * so that the next person to see that warning in a wx sample does not go
+     * looking for it in wx. */
+    css = gtk_css_provider_new();
+    gtk_css_provider_load_from_data(
+        css, "slider { min-width: 0; min-height: 0; border: 0; }", -1);
+    gtk_style_context_add_provider_for_display(
+        gdk_display_get_default(), GTK_STYLE_PROVIDER(css),
+        GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+
+    before = g_sliderWarnings;
+
+    win = gtk_window_new();
+    sw = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw),
+                                   GTK_POLICY_ALWAYS, GTK_POLICY_ALWAYS);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sw),
+                                  gtk_label_new("x"));
+    gtk_window_set_child(GTK_WINDOW(win), sw);
+    gtk_widget_set_visible(win, TRUE);
+    pump_one_frame(win);
+
+    soft(g_sliderWarnings > before,
+         "a plain GtkScrolledWindow reports a negative slider size under such "
+         "a theme",
+         "GTK no longer produces it, so this warning appearing in a wx sample "
+         "would need looking at again");
+
+    gtk_window_destroy(GTK_WINDOW(win));
+    gtk_style_context_remove_provider_for_display(gdk_display_get_default(),
+                                                  GTK_STYLE_PROVIDER(css));
+    g_object_unref(css);
+}
+
 static void test_indicator_nodes(void)
 {
     GtkWidget* checkbtn;
@@ -1283,6 +1372,8 @@ static void test_indicator_nodes(void)
 
 int main(void)
 {
+    g_log_set_writer_func(log_writer, NULL, NULL);
+
     if (!gtk_init_check())
     {
         fprintf(stderr,
@@ -1314,6 +1405,8 @@ int main(void)
     test_clipboard_sync_bridge();
     printf("\n");
     test_indicator_nodes();
+    printf("\n");
+    test_scrollbar_metric();
     printf("\n");
     test_combo_box_internals();
     printf("\n");

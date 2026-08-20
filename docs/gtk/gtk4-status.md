@@ -4086,3 +4086,118 @@ mode here except "quiet" calls `wxYield()` while waiting, and yielding runs
 idle processing by hand -- which is precisely the thing that had stopped
 happening on its own. `test_gui` yields constantly, so it passed throughout.
 Removing the hook again makes only the "quiet" mode fail.
+
+## Progress update 44: the caret, and a warning that was never wx's
+
+Three more reports came in after a real application -- wxMaxima -- was built
+against the port and used. All three are about the caret sample; two were
+real, deep bugs and the third turned out to belong to GTK.
+
+### The caret drew into a single pixel
+
+> Caret sample: The caret is invisible
+
+`wxCaret` draws through a `wxClientDC`, and under GTK4 a `wxClientDC` cannot
+reach the screen: there is no `GdkWindow` to draw on outside a snapshot, so
+`CanBeUsedForDrawing()` returns false and the caret has to go through
+`wxOverlay` instead, which captures what is drawn as a cairo group and shows
+it in a widget of its own. That much was already in place. What was not is
+that the DC underneath had no real surface: it was built on
+`wxGraphicsContext::Create()`, whose context is a **1x1 measuring surface**,
+and a 1x1 clip discards everything drawn outside that one pixel. So the
+group the overlay captured was empty every time.
+
+That is a different failure from "the drawing is not shown", and it is worth
+stating separately: **a wxDC that cannot draw to the screen still has to be
+able to draw**. `wxWindowDCImpl` and `wxClientDCImpl` now build their
+graphics context on an image surface the size of the window
+(`wxGTKSetSurfaceGraphicsContext()` in `dc.cpp`), so anything drawn on them
+lands somewhere real and `wxOverlay`, `wxCaret` and `wxDragImage` can pick it
+up. Measured on a standalone probe, the same overlay went from 0 red pixels
+to 7197.
+
+### The caret that never blinked
+
+With the drawing fixed the caret was permanently on. The loop:
+
+* `wxCaretSuspend` hides the caret at the top of a paint handler and shows it
+  again at the bottom, so that the window does not draw over it. That is what
+  the caret sample does, and what any window drawing under a caret must do.
+* Hiding and showing the caret each call `Refresh()`, which redraws the
+  overlay and queues a draw of it.
+* Under GTK4 `gtk_widget_queue_draw()` on a child marks every ancestor as
+  needing to be drawn too, so the wxPizza above it re-runs its snapshot --
+  which is where wx generates `wxEVT_PAINT`.
+* ... so the paint handler runs again. And `DoShow()` restarts the blink
+  timer every time, so the timer never reached its 500 ms.
+
+`wxCaretSuspend` has an empty implementation for exactly this situation,
+selected by `wxHAS_CARET_USING_OVERLAYS`, but nothing has ever defined that
+macro. `wx/generic/caret.h` now defines it for GTK4, where
+`wxOverlay::Create()` always returns a native implementation and the caret
+therefore never draws on the window it belongs to. Suspending it is not
+merely unnecessary there, it is what stopped it blinking.
+
+### The caret that stayed where it was first put
+
+Then the caret blinked, but always in the position it had been created at.
+`wxPizza::move()` records the new position in wxPizza's own child list and
+deliberately does *not* queue a resize:
+
+```
+// normally a queue-resize would be needed here, but we know
+// wxWindowGTK::DoMoveWindow() will take care of it
+```
+
+which is true for every caller except one. The overlay is not a wxWindow, so
+nothing queued the resize on its behalf and the new position never reached
+the widget's allocation. `PositionOverlay()` now calls
+`gtk_widget_queue_allocate()` itself after a move -- and only after a move,
+which is what the `m_placedRect` bookkeeping there is for: repositioning on
+every blink would repaint the whole window twice a second for nothing.
+
+`Reset()` also no longer hides the overlay. With no surface the widget draws
+nothing anyway, and a widget that has just been shown has no allocation until
+the next layout pass, which is what produced
+
+> Trying to snapshot GtkDrawingArea 0x... without a current allocation
+
+when an overlay was reset and drawn on again from inside a paint handler.
+
+### The slider warning is GTK's
+
+> caret sample: Warning at startup
+> GtkGizmo 0x... (slider) reported min width -2, but sizes must be >= 0
+
+This one is not wxWidgets' at all, and the reporter's guess that GTK3 shows it
+too is close: it is not a wx bug on either. It reproduces here with a theme
+whose `slider` node has no minimum size and no border --
+
+```css
+slider { min-width: 0; min-height: 0; border: 0; }
+```
+
+-- and it reproduces in a **plain GTK4 program with no wxWidgets in it**: a
+`GtkScrolledWindow` with a label in it and its scrollbar policy set to
+`ALWAYS` prints the same four warnings, two scrollbars measured in two
+orientations each. The negative number comes out of GtkRange's own slider
+measurement.
+
+There is nothing wx can do about it, in either direction. It cannot avoid
+triggering it -- `wxSYS_VSCROLL_X` has to measure a scrollbar, and any
+scrolled window measures its own -- and it cannot suppress it either: GTK4
+logs through `g_log_structured()`, which does not consult the handlers
+`g_log_set_handler()` installs, and taking over the writer with
+`g_log_set_writer_func()` is an application's decision, not a library's.
+
+What it can do is record it, so the next person to see it does not go looking
+in wx. `gtk4-invariants.c` grew a `test_scrollbar_metric()` that measures an
+unparented `GtkScrollbar` -- the thing `GetScrollbarWidth()` in `settings.cpp`
+relies on -- and then applies that CSS and checks that GTK still reports the
+negative size for a scrolled window of its own. It takes over the log writer
+to count the warnings rather than print them, which is a thing a test program
+may do.
+
+### Checks
+
+`gtk4-invariants` is at **55 checks, 0 failed**.

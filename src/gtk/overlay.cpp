@@ -36,6 +36,11 @@ public:
     cairo_surface_t* m_surface;
     cairo_t* m_cr;
     wxRect m_rect;
+#ifdef __WXGTK4__
+    // Where the overlay widget has actually been placed, so that repeating the
+    // same position can be skipped: see PositionOverlay().
+    wxRect m_placedRect;
+#endif
 };
 
 wxOverlay::Impl* wxOverlay::Create()
@@ -258,8 +263,19 @@ void wxOverlayImpl::Reset()
         cairo_surface_destroy(m_surface);
         m_surface = nullptr;
     }
+#ifdef __WXGTK4__
+    // Deliberately not hidden: with no surface the widget draws nothing at
+    // all, so hiding it would only buy a hide/show cycle -- and a widget that
+    // has just been shown has no allocation until the next layout pass, which
+    // makes GTK4 complain "Trying to snapshot GtkDrawingArea without a current
+    // allocation" if anything paints in between. Code that resets an overlay
+    // and draws on it again from inside a paint handler does exactly that.
+    if (m_overlay)
+        gtk_widget_queue_draw(m_overlay);
+#else
     if (m_overlay)
         gtk_widget_hide(m_overlay);
+#endif
 }
 
 #ifdef __WXGTK4__
@@ -271,18 +287,35 @@ void wxOverlayImpl::PositionOverlay(GtkWidget* target)
 
     wxPizza* const pizza = WX_PIZZA(target);
 
-    if (gtk_widget_get_parent(m_overlay) == target)
-    {
-        pizza->move(m_overlay, m_rect.x, m_rect.y, m_rect.width, m_rect.height);
-    }
-    else
+    // Only touch the widget when the position actually changed. Moving a child
+    // has to queue a re-allocation of the pizza below, which repaints the
+    // window it belongs to, and wxCaret comes through here on every blink: a
+    // window that repainted itself twice a second just to leave the caret
+    // where it already was would be paying for nothing.
+    if (gtk_widget_get_parent(m_overlay) != target)
     {
         // put() adds the overlay as the last child, and GtkFixed draws its
         // children in order, so this is also what puts it on top.
         pizza->put(m_overlay, m_rect.x, m_rect.y, m_rect.width, m_rect.height);
+        m_placedRect = m_rect;
+    }
+    else if (m_placedRect != m_rect)
+    {
+        pizza->move(m_overlay, m_rect.x, m_rect.y, m_rect.width, m_rect.height);
+
+        // wxPizza::move() deliberately does not queue one itself: for a
+        // wxWindow child wxWindowGTK::DoMoveWindow() does that. The overlay is
+        // not a wxWindow, so without this the new position would only be
+        // recorded in wxPizza's child list and never reach the widget's
+        // allocation -- which is why a moved caret kept being drawn wherever
+        // it had first been put.
+        gtk_widget_queue_allocate(GTK_WIDGET(pizza));
+
+        m_placedRect = m_rect;
     }
 
-    gtk_widget_show(m_overlay);
+    if (!gtk_widget_get_visible(m_overlay))
+        gtk_widget_show(m_overlay);
 }
 
 #else // !__WXGTK4__

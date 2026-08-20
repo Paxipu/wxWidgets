@@ -4198,6 +4198,44 @@ negative size for a scrolled window of its own. It takes over the log writer
 to count the warnings rather than print them, which is a thing a test program
 may do.
 
+### Found while testing: a container hears about its children's focus
+
+Not reported, not fixed, and recorded here so it is not rediscovered from
+scratch. A wxPanel with a focused control inside it prints
+
+> window wxPanel@0x... ("panel") lost focus even though it didn't have it
+
+in a debug build, and receives a `wxEVT_SET_FOCUS` and a `wxEVT_KILL_FOCUS`
+of its own that GTK3 never sent it. GTK3's `focus-in-event` went to the
+widget that took the focus. GTK4 has no such event: the port uses a
+`GtkEventControllerFocus`, whose `::enter` fires when the focus enters **the
+widget or any of its descendants**, and whose `::leave` fires only when it
+leaves that whole subtree. So an ancestor is told the focus arrived, is not
+told when it moves on to a child, and is told it left much later -- by which
+time `gs_currentFocus` is somebody else, which is the message above.
+
+The obvious filter -- ask which widget actually has the focus and ignore the
+notification if it belongs to a different wxWindow -- does not work, because
+**none of that is settled when `::enter` is emitted**. Measured at that
+point, on GTK 4.14.5:
+
+| | at `::enter` |
+| --- | --- |
+| `gtk_event_controller_focus_contains_focus()` | TRUE |
+| `gtk_event_controller_focus_is_focus()` | FALSE |
+| `gtk_widget_has_focus()` | FALSE |
+| `GTK_STATE_FLAG_FOCUSED` | not set |
+| `gtk_root_get_focus()` | NULL |
+
+`is_focus()` is no use even later: for a `GtkEntry` it is FALSE, because the
+widget holding the focus is the `GtkText` inside it -- and wxTextCtrl's
+`m_focusWidget` is the entry. Any real fix has to decide after the fact,
+either at idle or by listening to the root's `notify::focus-widget` instead
+of to per-widget controllers, which is a redesign of GTK4 focus dispatch
+rather than a filter. `test_focus_controller_scope()` in
+`gtk4-invariants.c` pins all of the above down, so the day GTK settles the
+focus before `::enter` the check says so.
+
 ### Checks
 
-`gtk4-invariants` is at **55 checks, 0 failed**.
+`gtk4-invariants` is at **56 checks, 0 failed**.

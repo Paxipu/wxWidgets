@@ -1323,6 +1323,83 @@ static void test_scrollbar_metric(void)
     g_object_unref(css);
 }
 
+/* ------------------------------------------------------------------------ */
+
+typedef struct
+{
+    const char* name;
+    int is_focus;
+    int contains_focus;
+    int has_focus;
+    int state_focused;
+    int root_focus_known;
+} FocusReport;
+
+static FocusReport g_lastEnter;
+
+static void on_focus_enter(GtkEventControllerFocus* c, gpointer name)
+{
+    GtkWidget* const w =
+        gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(c));
+    GtkRoot* const root = gtk_widget_get_root(w);
+
+    g_lastEnter.name = (const char*)name;
+    g_lastEnter.is_focus = gtk_event_controller_focus_is_focus(c);
+    g_lastEnter.contains_focus = gtk_event_controller_focus_contains_focus(c);
+    g_lastEnter.has_focus = gtk_widget_has_focus(w);
+    g_lastEnter.state_focused =
+        (gtk_widget_get_state_flags(w) & GTK_STATE_FLAG_FOCUSED) != 0;
+    g_lastEnter.root_focus_known =
+        root != NULL && gtk_root_get_focus(root) != NULL;
+}
+
+static void test_focus_controller_scope(void)
+{
+    GtkWidget* win;
+    GtkWidget* box;
+    GtkWidget* entry;
+    GtkEventController* c;
+
+    printf("What a focus controller knows when it says the focus arrived:\n");
+
+    win = gtk_window_new();
+    box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    entry = gtk_entry_new();
+    gtk_box_append(GTK_BOX(box), entry);
+    gtk_window_set_child(GTK_WINDOW(win), box);
+
+    /* The container, not the widget that will take the focus. */
+    c = gtk_event_controller_focus_new();
+    g_signal_connect(c, "enter", G_CALLBACK(on_focus_enter), (gpointer)"box");
+    gtk_widget_add_controller(box, c);
+
+    memset(&g_lastEnter, 0, sizeof(g_lastEnter));
+    gtk_widget_set_visible(win, TRUE);
+    pump_one_frame(win);
+
+    /* GTK3 delivered focus-in-event only to the widget that took the focus.
+     * GTK4's controller reports the focus entering the widget or any of its
+     * descendants, so wxWindowGTK's handler runs for a container when a
+     * control inside it is focused -- which is where the "lost focus even
+     * though it didn't have it" debug message in window.cpp comes from. */
+    check(g_lastEnter.name != NULL && g_lastEnter.contains_focus,
+          "a container's focus controller reports focus entering a descendant",
+          "GTK4 no longer notifies ancestors, so wx could stop filtering");
+
+    /* And none of the obvious ways of telling the two apart works, because
+     * none of this is settled yet when ::enter is emitted. Any fix has to
+     * decide later -- at idle, or from the root's notify::focus-widget. */
+    soft(!g_lastEnter.is_focus && !g_lastEnter.has_focus &&
+             !g_lastEnter.state_focused && !g_lastEnter.root_focus_known,
+         "nothing says which widget it is yet: no is-focus, no state flag, "
+         "no root focus",
+         "GTK4 now settles the focus before ::enter, so window.cpp could "
+         "filter the ancestor notifications there and stop reporting a "
+         "spurious wxEVT_SET_FOCUS for containers");
+
+    gtk_window_destroy(GTK_WINDOW(win));
+}
+
 static void test_indicator_nodes(void)
 {
     GtkWidget* checkbtn;
@@ -1421,6 +1498,8 @@ int main(void)
     test_frame_clock_layout();
     printf("\n");
     test_focus_flags();
+    printf("\n");
+    test_focus_controller_scope();
 #ifdef HAVE_XTEST
     printf("\n");
     test_gesture_claim_semantics();

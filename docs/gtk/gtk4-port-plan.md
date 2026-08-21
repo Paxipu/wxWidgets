@@ -4,6 +4,9 @@ Status: **planning** — no code changes have been made yet. This document
 inventories the current state of GTK4 support in wxWidgets and lays out a
 phased roadmap for turning it into a real, CI-verified port.
 
+Note from gunter: If you find a bug in the port please fix it or file a
+bug report so it isn't lost.
+
 Written 2026-08, based on a survey of the tree at the time.
 
 ## 1. Current state: this is not a blank slate

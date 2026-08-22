@@ -14,9 +14,15 @@
 #include "wx/msgdlg.h"
 #include "wx/filedlg.h"
 
-// This test suite tests helpers from wx/testing.h intended for testing of code
-// that calls modal dialogs. It does not test the implementation of wxWidgets'
-// dialogs.
+#if wxUSE_WIZARDDLG && defined(__WXGTK4__)
+    #include "wx/sizer.h"
+    #include "wx/stattext.h"
+    #include "wx/wizard.h"
+#endif
+
+// The modal tests below exercise helpers from wx/testing.h intended for
+// testing code that calls modal dialogs. They don't test the implementation of
+// wxWidgets dialogs themselves.
 
 TEST_CASE("Modal::MessageDialog", "[modal]")
 {
@@ -143,3 +149,29 @@ TEST_CASE("Modal::InitDialog", "[modal]")
     dlg.ShowModal();
     CHECK( dlg.WasModal() );
 }
+
+#if wxUSE_WIZARDDLG && defined(__WXGTK4__)
+
+TEST_CASE("Wizard::LayoutAdaptation", "[wizard][layout]")
+{
+    wxWizard wizard(nullptr, wxID_ANY, "Wizard");
+    auto* const firstPage = new wxWizardPageSimple(&wizard);
+    auto* const page = new wxWizardPageSimple(&wizard);
+    firstPage->Chain(page);
+
+    auto* const text = new wxStaticText(page, wxID_ANY, "Page content");
+    auto* const pageSizer = new wxBoxSizer(wxVERTICAL);
+    pageSizer->Add(text);
+    page->SetSizer(pageSizer);
+    wizard.GetPageAreaSizer()->Add(firstPage);
+
+    REQUIRE( wizard.ShowPage(firstPage) );
+    REQUIRE( wizard.DoLayoutAdaptation() );
+
+    wxWindow* const scrolledWindow = text->GetParent();
+    CHECK( scrolledWindow != page );
+    CHECK( scrolledWindow->GetParent() == page );
+    CHECK( pageSizer->GetContainingWindow() == scrolledWindow );
+}
+
+#endif // wxUSE_WIZARDDLG && defined(__WXGTK4__)

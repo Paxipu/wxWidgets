@@ -37,6 +37,10 @@
 #include "wx/private/localeset.h"
 #include "wx/private/make_unique.h"
 
+#ifdef __WXGTK4__
+    #include "wx/gtk/private/wrapgtk.h"
+#endif // __WXGTK4__
+
 #include "textentrytest.h"
 #include "testableframe.h"
 #include "asserthelper.h"
@@ -75,6 +79,7 @@ private:
 
     CPPUNIT_TEST_SUITE( TextCtrlTestCase );
         // These tests run for single line text controls.
+        CPPUNIT_TEST( ForceUpper );
         wxTEXT_ENTRY_TESTS();
         WXUISIM_TEST( MaxLength );
         CPPUNIT_TEST( PositionToXYSingleLine );
@@ -123,6 +128,7 @@ private:
 
     void MultiLineReplace();
     void ReadOnly();
+    void ForceUpper();
     void MaxLength();
     void StreamInput();
     void Redirector();
@@ -214,6 +220,35 @@ void TextCtrlTestCase::tearDown()
 // ----------------------------------------------------------------------------
 // tests themselves
 // ----------------------------------------------------------------------------
+
+void TextCtrlTestCase::ForceUpper()
+{
+    m_text->SetValue("Initial");
+    m_text->ForceUpper();
+    CPPUNIT_ASSERT_EQUAL("INITIAL", m_text->GetValue());
+
+    m_text->SetInsertionPointEnd();
+    m_text->WriteText(" via API");
+    CPPUNIT_ASSERT_EQUAL("INITIAL VIA API", m_text->GetValue());
+
+#ifdef __WXGTK4__
+    // Text typed into GtkEntry is inserted into its GtkEditable delegate.
+    // Exercise this native path instead of WriteText(), which inserts through
+    // the outer GtkEntry and would not catch a missing delegate connection.
+    GtkEditable* const editable = GTK_EDITABLE(m_text->GetHandle());
+    GtkEditable* const delegate = gtk_editable_get_delegate(editable);
+    CPPUNIT_ASSERT(delegate);
+
+    m_text->SetInsertionPointEnd();
+    int pos = gtk_editable_get_position(delegate);
+    gtk_editable_insert_text(delegate, " typed Case", -1, &pos);
+#else
+    m_text->SetInsertionPointEnd();
+    m_text->WriteText(" typed Case");
+#endif // __WXGTK4__/!__WXGTK4__
+
+    CPPUNIT_ASSERT_EQUAL("INITIAL VIA API TYPED CASE", m_text->GetValue());
+}
 
 void TextCtrlTestCase::MultiLineReplace()
 {

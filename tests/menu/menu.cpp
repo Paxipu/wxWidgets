@@ -99,6 +99,9 @@ private:
         CPPUNIT_TEST( RadioItems );
         CPPUNIT_TEST( RemoveAdd );
         CPPUNIT_TEST( ChangeBitmap );
+#ifdef __WXGTK4__
+        CPPUNIT_TEST( UpdateUIFromIdle );
+#endif // __WXGTK4__
         WXUISIM_TEST( Events );
     CPPUNIT_TEST_SUITE_END();
 
@@ -115,6 +118,10 @@ private:
     void RadioItems();
     void RemoveAdd();
     void ChangeBitmap();
+#ifdef __WXGTK4__
+    void UpdateUIFromIdle();
+    void OnUpdateBar(wxUpdateUIEvent& event);
+#endif // __WXGTK4__
     void Events();
 
     wxFrame* m_frame;
@@ -378,6 +385,27 @@ void MenuTestCase::Labels()
     CPPUNIT_ASSERT_EQUAL( "Foo", itemFoo->GetItemLabelText() );
     CPPUNIT_ASSERT_EQUAL( "Foo", wxMenuItem::GetLabelText("&Foo\tCtrl-F") );
 }
+
+#ifdef __WXGTK4__
+
+void MenuTestCase::UpdateUIFromIdle()
+{
+    m_frame->Bind(wxEVT_UPDATE_UI, &MenuTestCase::OnUpdateBar, this,
+                  MenuTestCase_Bar);
+
+    m_frame->UpdateWindowUI(wxUPDATE_UI_FROMIDLE);
+    CPPUNIT_ASSERT( !m_menuWithBar->IsEnabled(MenuTestCase_Bar) );
+
+    m_frame->UpdateWindowUI(wxUPDATE_UI_FROMIDLE);
+    CPPUNIT_ASSERT( m_menuWithBar->IsEnabled(MenuTestCase_Bar) );
+}
+
+void MenuTestCase::OnUpdateBar(wxUpdateUIEvent& event)
+{
+    event.Enable(!m_menuWithBar->IsEnabled(MenuTestCase_Bar));
+}
+
+#endif // __WXGTK4__
 
 #if wxUSE_INTL
 

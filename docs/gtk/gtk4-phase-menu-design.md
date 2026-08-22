@@ -167,8 +167,8 @@ that cannot be ported may be dropped behind a feature test.
   work for popup menus, where wx owns the `GtkPopoverMenu` and can watch its
   `show`/`closed` signals (probe result 5). `GtkPopoverMenuBar` creates its
   per-menu popovers internally and does not publish them, so menubar
-  drop-downs cannot be observed. `UpdateUI()` is consequently driven from
-  popover show for popup menus only.
+  drop-downs cannot be observed. `UpdateUI()` is driven from popover show for
+  popup menus and from idle processing for menubar menus.
 * **`wxMENU_TEAROFF`.** `GtkTearoffMenuItem` was removed in GTK3 and the
   concept does not exist in GTK4. The style flag is accepted and ignored.
 * **`wxMB_DOCKABLE`.** `GtkHandleBox` is gone. Already ignored under GTK3

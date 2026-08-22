@@ -704,7 +704,7 @@ bool wxToolBar::Create( wxWindow *parent,
 #ifdef __WXGTK4__
     // A GTK4 "toolbar" is a box with the matching style class: GtkToolbar and
     // every GtkToolItem subclass were removed outright.
-    m_toolbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    m_toolbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, m_toolPacking);
     gtk_widget_add_css_class(m_toolbar, "toolbar");
 #else
     m_toolbar = GTK_TOOLBAR( gtk_toolbar_new() );
@@ -810,6 +810,22 @@ void wxToolBar::SetWindowStyleFlag( long style )
     if ( m_toolbar )
         GtkSetStyle();
 }
+
+#ifdef __WXGTK4__
+void wxToolBar::SetToolPacking(int packing)
+{
+    if ( packing < 0 || packing == m_toolPacking )
+        return;
+
+    wxToolBarBase::SetToolPacking(packing);
+
+    if ( m_toolbar )
+    {
+        gtk_box_set_spacing(GTK_BOX(m_toolbar), packing);
+        InvalidateBestSize();
+    }
+}
+#endif // __WXGTK4__
 
 bool wxToolBar::Realize()
 {

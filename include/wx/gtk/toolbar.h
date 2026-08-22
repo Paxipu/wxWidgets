@@ -52,6 +52,10 @@ public:
 
     virtual bool Realize() override;
 
+#ifdef __WXGTK4__
+    virtual void SetToolPacking(int packing) override;
+#endif // __WXGTK4__
+
     static wxVisualAttributes
     GetClassDefaultAttributes(wxWindowVariant variant = wxWINDOW_VARIANT_NORMAL);
 

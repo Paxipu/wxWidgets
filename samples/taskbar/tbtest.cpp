@@ -52,20 +52,23 @@ bool MyApp::OnInit()
     if ( !wxApp::OnInit() )
         return false;
 
-    if ( !wxTaskBarIcon::IsAvailable() )
+    const bool taskBarAvailable = wxTaskBarIcon::IsAvailable();
+
+    // Create and show the main window before showing any message box so that
+    // the latter can have a proper transient parent.
+    gs_dialog = new MyDialog("wxTaskBarIcon Test Dialog", taskBarAvailable);
+    gs_dialog->Show(true);
+
+    if ( !taskBarAvailable )
     {
         wxMessageBox
         (
-            "There appears to be no system tray support in your current environment. This sample may not behave as expected.",
+            "There appears to be no system tray support in your current environment. Hiding this window has been disabled.",
             "Warning",
-            wxOK | wxICON_EXCLAMATION
+            wxOK | wxICON_EXCLAMATION,
+            gs_dialog
         );
     }
-
-    // Create the main window
-    gs_dialog = new MyDialog("wxTaskBarIcon Test Dialog");
-
-    gs_dialog->Show(true);
 
     return true;
 }
@@ -83,7 +86,7 @@ wxBEGIN_EVENT_TABLE(MyDialog, wxDialog)
 wxEND_EVENT_TABLE()
 
 
-MyDialog::MyDialog(const wxString& title)
+MyDialog::MyDialog(const wxString& title, bool taskBarAvailable)
         : wxDialog(nullptr, wxID_ANY, title)
 {
     wxSizer * const sizerTop = new wxBoxSizer(wxVERTICAL);
@@ -109,23 +112,34 @@ MyDialog::MyDialog(const wxString& title)
 
     wxSizer * const sizerBtns = new wxBoxSizer(wxHORIZONTAL);
     sizerBtns->Add(new wxButton(this, wxID_ABOUT, "&About"), flags);
-    sizerBtns->Add(new wxButton(this, wxID_OK, "&Hide"), flags);
+    wxButton* const buttonHide = new wxButton(this, wxID_OK, "&Hide");
+    buttonHide->Enable(false);
+    sizerBtns->Add(buttonHide, flags);
     sizerBtns->Add(new wxButton(this, wxID_EXIT, "E&xit"), flags);
 
     sizerTop->Add(sizerBtns, flags.Align(wxALIGN_CENTER_HORIZONTAL));
     SetSizerAndFit(sizerTop);
     Centre();
 
-    m_taskBarIcon = new MyTaskBarIcon();
+    m_taskBarIcon = nullptr;
 
-    // we should be able to show up to 128 characters on Windows
-    if (!m_taskBarIcon->SetIcon(wxArtProvider::GetBitmapBundle(wxART_WX_LOGO, wxART_OTHER, wxSize(32, 32)),
-                                 "wxTaskBarIcon Sample\n"
-                                 "With a very, very, very, very\n"
-                                 "long tooltip whose length is\n"
-                                 "greater than 64 characters.") )
+    if ( taskBarAvailable )
     {
-        wxLogError("Could not set icon.");
+        m_taskBarIcon = new MyTaskBarIcon();
+
+        // we should be able to show up to 128 characters on Windows
+        if (m_taskBarIcon->SetIcon(wxArtProvider::GetBitmapBundle(wxART_WX_LOGO, wxART_OTHER, wxSize(32, 32)),
+                                    "wxTaskBarIcon Sample\n"
+                                    "With a very, very, very, very\n"
+                                    "long tooltip whose length is\n"
+                                    "greater than 64 characters.") )
+        {
+            buttonHide->Enable(true);
+        }
+        else
+        {
+            wxLogError("Could not set icon.");
+        }
     }
 
 #if defined(__WXOSX__) && wxOSX_USE_COCOA
@@ -163,7 +177,8 @@ void MyDialog::OnAbout(wxCommandEvent& WXUNUSED(event))
 
 void MyDialog::OnOK(wxCommandEvent& WXUNUSED(event))
 {
-    Show(false);
+    if ( m_taskBarIcon && m_taskBarIcon->IsIconInstalled() )
+        Show(false);
 }
 
 void MyDialog::OnExit(wxCommandEvent& WXUNUSED(event))

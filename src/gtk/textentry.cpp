@@ -180,7 +180,26 @@ wx_gtk_insert_text_callback(GtkEditable *editable,
                             gint * position,
                             wxTextEntry *text)
 {
-    GtkEntry *entry = GTK_ENTRY (editable);
+    GtkEntry* entry;
+#ifdef __WXGTK4__
+    // GtkEntry delegates editing to its GtkText child in GTK4, so text typed
+    // by the user emits "insert-text" on this child, not on the entry itself.
+    // We still need the owning entry for its maximum-length setting.
+    if ( GTK_IS_ENTRY(editable) )
+    {
+        entry = GTK_ENTRY(editable);
+    }
+    else
+    {
+        GtkWidget* const owner = gtk_widget_get_ancestor(GTK_WIDGET(editable),
+                                                         GTK_TYPE_ENTRY);
+        entry = owner ? GTK_ENTRY(owner) : nullptr;
+    }
+#else
+    entry = GTK_ENTRY(editable);
+#endif // __WXGTK4__/!__WXGTK4__
+
+    wxCHECK_RET(entry, "can't find GtkEntry owning the editable");
 
     const int text_max_length = gtk_entry_get_max_length(entry);
 
@@ -1140,7 +1159,17 @@ void wxTextEntry::GTKConnectChangedSignal()
 
 void wxTextEntry::GTKConnectInsertTextSignal(GtkEntry* entry)
 {
-    g_signal_connect(entry, "insert_text",
+#ifdef __WXGTK4__
+    // GtkEntry implements GtkEditable by delegating to an internal GtkText in
+    // GTK4. Native input is inserted into this delegate and its insert-text
+    // signal isn't forwarded by GtkEntry, so connect to the actual editable.
+    GtkEditable* const editable = gtk_editable_get_delegate(GTK_EDITABLE(entry));
+    wxCHECK_RET(editable, "GtkEntry has no GtkEditable delegate");
+#else
+    GtkEditable* const editable = GTK_EDITABLE(entry);
+#endif // __WXGTK4__/!__WXGTK4__
+
+    g_signal_connect(editable, "insert_text",
                      G_CALLBACK(wx_gtk_insert_text_callback), this);
 }
 

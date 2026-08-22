@@ -259,6 +259,116 @@ TEST_CASE_METHOD(WindowTestCase, "Window::Mouse", "[window]")
     CHECK(!m_window->HasCapture());
 }
 
+#ifdef __WXGTK4__
+TEST_CASE_METHOD(WindowTestCase, "Window::MoveVisibleCaret",
+                 "[window][caret]")
+{
+    class BlinkTimeRestorer
+    {
+    public:
+        BlinkTimeRestorer()
+            : m_blinkTime(wxCaret::GetBlinkTime())
+        {
+            wxCaret::SetBlinkTime(0);
+        }
+
+        ~BlinkTimeRestorer()
+        {
+            wxCaret::SetBlinkTime(m_blinkTime);
+        }
+
+    private:
+        const int m_blinkTime;
+    } restoreBlinkTime;
+
+    constexpr int windowWidth = 200;
+    constexpr int windowHeight = 150;
+    constexpr int caretWidth = 3;
+    constexpr int caretHeight = 12;
+
+    m_window->SetSize(windowWidth, windowHeight);
+    m_window->Show();
+    wxYield();
+
+    wxCaret* const caret = new wxCaret(m_window, caretWidth, caretHeight);
+    m_window->SetCaret(caret);
+
+    const wxPoint initialPosition(7, 9);
+    caret->Move(initialPosition);
+    caret->Show();
+    wxYield();
+
+    GtkWidget* overlay = nullptr;
+    GtkWidget* const connectWidget = m_window->GetConnectWidget();
+    for (GtkWidget* child = gtk_widget_get_first_child(connectWidget);
+         child;
+         child = gtk_widget_get_next_sibling(child))
+    {
+        if (GTK_IS_DRAWING_AREA(child) && !gtk_widget_get_can_target(child))
+        {
+            overlay = child;
+            break;
+        }
+    }
+    REQUIRE( overlay );
+
+    const auto getOverlayPosition = [overlay]
+    {
+        graphene_rect_t bounds;
+        REQUIRE( gtk_widget_compute_bounds(overlay,
+                                            gtk_widget_get_parent(overlay),
+                                            &bounds) );
+        return wxPoint(wxRound(bounds.origin.x), wxRound(bounds.origin.y));
+    };
+
+    CHECK( getOverlayPosition() == initialPosition );
+
+    const wxPoint positions[] =
+    {
+        wxPoint(31, 17),
+        wxPoint(0, 0),
+        wxPoint(177, 133),
+        wxPoint(83, 61)
+    };
+    for (const wxPoint& position : positions)
+    {
+        caret->Move(position);
+        wxYield();
+        CHECK( getOverlayPosition() == position );
+    }
+
+    // Exercise the same position invariant over a wider deterministic sample
+    // without allowing the caret to extend beyond the window.
+    unsigned state = 0x71;
+    for (int i = 0; i < 32; ++i)
+    {
+        state = state * 1664525u + 1013904223u;
+        const wxPoint position(
+            state % (windowWidth - caretWidth + 1),
+            (state >> 16) % (windowHeight - caretHeight + 1));
+        caret->Move(position);
+        wxYield();
+        CHECK( getOverlayPosition() == position );
+    }
+
+    caret->OnTimer();
+    const wxPoint blinkedOutMovePosition(47, 29);
+    caret->Move(blinkedOutMovePosition);
+    wxYield();
+    caret->OnTimer();
+    wxYield();
+    CHECK( getOverlayPosition() == blinkedOutMovePosition );
+
+    caret->Hide();
+    const wxPoint hiddenMovePosition(19, 23);
+    caret->Move(hiddenMovePosition);
+    wxYield();
+    caret->Show();
+    wxYield();
+    CHECK( getOverlayPosition() == hiddenMovePosition );
+}
+#endif // __WXGTK4__
+
 #if wxUSE_HELP
 TEST_CASE_METHOD(WindowTestCase, "Window::ContextHelpCaptureLost",
                  "[window][help]")

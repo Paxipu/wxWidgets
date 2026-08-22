@@ -372,7 +372,6 @@ void MyFrame::PopuplateWithDisplayInfo()
 #endif // wxUSE_DISPLAY
 
         page->SetSizer(sizerTop);
-        page->Layout();
 
         m_book->AddPage(page, wxString::Format("Display %zu", nDpy + 1));
     }

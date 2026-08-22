@@ -697,10 +697,12 @@ static inline bool wx_gtk_widget_is_container(GtkWidget* widget)
 
 // Counterpart of the GTK4 stub above: here the question is real, so just
 // forward to GTK.
+#ifdef __WXGTK3__
 static inline gboolean wx_gtk_widget_get_has_window(GtkWidget* widget)
 {
     return gtk_widget_get_has_window(widget);
 }
+#endif // __WXGTK3__
 
 // ----------------------------------------------------------------------------
 // the following were introduced in GTK+ 4, when the text-manipulating parts of

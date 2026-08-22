@@ -229,7 +229,10 @@ void wxPopupWindow::DoSetSize( int x, int y, int width, int height, int sizeFlag
     if (m_x != old_x || m_y != old_y ||
             m_width != old_width || m_height != old_height)
     {
-        gtk_widget_set_size_request( m_widget, m_width, m_height );
+        // A GtkPopover adds its own padding around its child, so requesting
+        // the popup size on the popover itself would make the wx client area
+        // smaller than requested and clip controls at its bottom/right edges.
+        gtk_widget_set_size_request( m_wxwindow, m_width, m_height );
         GTKUpdatePointingTo();
     }
 

@@ -32,6 +32,12 @@
 
 #include "wx/private/make_unique.h"
 
+#ifdef __WXGTK4__
+    #include "wx/popupwin.h"
+    #include "wx/scrolwin.h"
+    #include "wx/gtk/private/wrapgtk.h"
+#endif // __WXGTK4__
+
 class WindowTestCase
 {
 public:
@@ -310,6 +316,27 @@ TEST_CASE_METHOD(WindowTestCase, "Window::TransparentBackgroundSupport",
 {
     wxString reason;
     CHECK( m_window->IsTransparentBackgroundSupported(&reason) );
+}
+
+TEST_CASE_METHOD(WindowTestCase, "Window::TransientPopupClientSize",
+                 "[window][popup][scroll]")
+{
+    wxWindow* const parent = wxTheApp->GetTopWindow();
+    wxPopupTransientWindow popup(parent);
+    new wxScrolledWindow(&popup, wxID_ANY, wxDefaultPosition,
+                         wxSize(300, 300));
+    popup.SetClientSize(300, 300);
+    popup.Position(parent->ClientToScreen(wxPoint(20, 20)), wxSize(1, 1));
+
+    popup.Popup();
+    wxYield();
+
+    GtkWidget* const content =
+        gtk_popover_get_child(GTK_POPOVER(popup.GetHandle()));
+    CHECK( gtk_widget_get_width(content) == 300 );
+    CHECK( gtk_widget_get_height(content) == 300 );
+
+    popup.Dismiss();
 }
 #endif // __WXGTK4__
 

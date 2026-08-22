@@ -5436,7 +5436,9 @@ if test "$wxUSE_GTK" = 1; then
     if test "$wxUSE_PRINTING_ARCHITECTURE" = "yes" ; then
 
         if test "$wxUSE_GTKPRINT" = "yes" ; then
-            if test "$WXGTK3" = 1; then
+            if test "$WXGTK4" = 1; then
+                gtk_unix_print="gtk4-unix-print"
+            elif test "$WXGTK3" = 1; then
                 gtk_unix_print="gtk+-unix-print-${TOOLKIT_VERSION}.0"
             else
                 gtk_unix_print="gtk+-unix-print-2.0 >= 2.10"

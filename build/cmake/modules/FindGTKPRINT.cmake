@@ -14,8 +14,10 @@ set(GTKPRINT_FIND_VERSION_USED "${GTKPRINT_FIND_VERSION}" CACHE INTERNAL "")
 
 if(GTKPRINT_FIND_VERSION VERSION_LESS 3.0)
     set(GTKPRINT_LIB_NAME "gtk+-unix-print-2.0")
-else()
+elseif(GTKPRINT_FIND_VERSION VERSION_LESS 4.0)
     set(GTKPRINT_LIB_NAME "gtk+-unix-print-3.0")
+else()
+    set(GTKPRINT_LIB_NAME "gtk4-unix-print")
 endif()
 
 find_package(PkgConfig)

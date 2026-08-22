@@ -34,6 +34,9 @@
 #include "wx/private/print.h"
 
 #include "wx/gtk/private/wrapgtk.h"
+#ifdef __WXGTK4__
+#include "wx/gtk/private/gtk3-compat.h"
+#endif
 
 #if GTK_CHECK_VERSION(2,14,0)
 #include <gtk/gtkunixprint.h>
@@ -880,7 +883,11 @@ int wxGtkPageSetupDialog::ShowModal()
             break;
     }
 
+#ifdef __WXGTK4__
+    gtk_window_destroy(GTK_WINDOW(dlg));
+#else
     gtk_widget_destroy(dlg);
+#endif
 
     return result;
 }

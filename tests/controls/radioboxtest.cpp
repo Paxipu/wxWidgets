@@ -13,10 +13,13 @@
 
 #ifndef WX_PRECOMP
     #include "wx/app.h"
+    #include "wx/button.h"
     #include "wx/radiobox.h"
 #endif // WX_PRECOMP
 
 #include "wx/tooltip.h"
+#include "testableframe.h"
+#include "testwindow.h"
 
 #include <memory>
 
@@ -175,6 +178,30 @@ TEST_CASE_METHOD(RadioBoxTestCase, "RadioBox::Selection", "[radiobox][selection]
 
     CHECK( m_radio->GetSelection() == 2 );
     CHECK( m_radio->GetStringSelection() == "item 2" );
+}
+
+TEST_CASE_METHOD(RadioBoxTestCase, "RadioBox::Focus", "[radiobox][focus]")
+{
+    wxButton* const button =
+        new wxButton(wxTheApp->GetTopWindow(), wxID_ANY, "Button");
+
+    EventCounter setFocus(m_radio, wxEVT_SET_FOCUS);
+    EventCounter killFocus(m_radio, wxEVT_KILL_FOCUS);
+
+    m_radio->SetFocus();
+    wxYield();
+
+    CHECK_FOCUS_IS( m_radio );
+    CHECK( setFocus.GetCount() == 1 );
+
+    button->SetFocus();
+    wxYield();
+
+    CHECK_FOCUS_IS( button );
+    CHECK( killFocus.GetCount() == 1 );
+
+    wxTheApp->GetTopWindow()->SetFocus();
+    wxYield();
 }
 
 TEST_CASE_METHOD(RadioBoxTestCase, "RadioBox::Count", "[radiobox]")

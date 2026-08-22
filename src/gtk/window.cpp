@@ -6714,6 +6714,14 @@ bool wxWindowGTK::GTKHandleFocusOut()
     //     (i.e. in GTKHandleFocusIn() or at idle time).
     if ( GTKNeedsToFilterSameWindowFocus() )
     {
+#ifdef __WXGTK4__
+        // Both the focus controller and notify::focus-widget can report the
+        // same focus loss. The first one is already waiting to be resolved by
+        // GTKHandleFocusIn() or idle processing, so there is nothing to add.
+        if ( gs_deferredFocusOut == this )
+            return retval;
+#endif // __WXGTK4__
+
         wxASSERT_MSG( gs_deferredFocusOut == nullptr,
                       "deferred focus out event already pending" );
         wxLogTrace(TRACE_FOCUS,

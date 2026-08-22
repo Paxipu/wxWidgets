@@ -175,22 +175,8 @@ static gint gtk_radiobox_keypress_callback( GtkWidget *widget, GdkEventKey *gdk_
 #endif
 }
 
+#ifndef __WXGTK4__
 extern "C" {
-#ifdef __WXGTK4__
-// GTK4 reports focus movement through a GtkEventControllerFocus rather than
-// focus-in/out-event, and its signals carry no event and no return value.
-static void gtk_radiobutton_focus_out( GtkEventControllerFocus*,
-                                       wxRadioBox *win )
-{
-    win->GTKHandleFocusOut();
-}
-
-static void gtk_radiobutton_focus_in( GtkEventControllerFocus*,
-                                      wxRadioBox *win )
-{
-    win->GTKHandleFocusIn();
-}
-#else
 static gint gtk_radiobutton_focus_out( GtkWidget * WXUNUSED(widget),
                                        GdkEventFocus *WXUNUSED(event),
                                        wxRadioBox *win )
@@ -218,8 +204,8 @@ static gint gtk_radiobutton_focus_in( GtkWidget * WXUNUSED(widget),
     // inside the radiobox
     return FALSE;
 }
-#endif // __WXGTK4__/!__WXGTK4__
 }
+#endif // !__WXGTK4__
 
 #ifndef __WXGTK4__
 // GTK4 removed the size-allocate signal, so the button rectangles are no longer
@@ -486,13 +472,6 @@ bool wxRadioBox::Create( wxWindow *parent, wxWindowID id, const wxString& title,
 
         g_signal_connect (rbtn, "toggled",
                           G_CALLBACK (gtk_radiobutton_clicked_callback), this);
-
-        GtkEventController* const focus = gtk_event_controller_focus_new();
-        g_signal_connect (focus, "enter",
-                          G_CALLBACK (gtk_radiobutton_focus_in), this);
-        g_signal_connect (focus, "leave",
-                          G_CALLBACK (gtk_radiobutton_focus_out), this);
-        gtk_widget_add_controller( GTK_WIDGET(rbtn), focus );
 #else
         if (!i)
             gtk_toggle_button_set_active( GTK_TOGGLE_BUTTON(rbtn), TRUE );

@@ -129,6 +129,22 @@ private:
 /* static */
 wxMilliClock_t wxXSync::ms_lastEvent = 0;
 
+#ifdef __WXGTK3__
+
+// XTest can only inject events into X11 clients and can't be used for native
+// Wayland windows. Report this limitation instead of pretending that events
+// sent to a separate Xwayland connection were delivered successfully.
+class wxUIActionSimulatorWaylandImpl : public wxUIActionSimulatorImpl
+{
+public:
+    bool MouseMove(long, long) override { return false; }
+    bool MouseDown(int) override { return false; }
+    bool MouseUp(int) override { return false; }
+    bool DoKey(int, int, bool) override { return false; }
+};
+
+#endif // __WXGTK3__
+
 // Base class for both available X11 implementations.
 class wxUIActionSimulatorX11Impl : public wxUIActionSimulatorImpl
 {
@@ -426,6 +442,11 @@ wxUIActionSimulatorXTestImpl::DoX11Key(KeyCode xkeycode,
 
 wxUIActionSimulatorImpl* wxUIActionSimulatorX11Impl::New()
 {
+#ifdef __WXGTK3__
+    if ( wxGTKImpl::IsWayland(nullptr) )
+        return new wxUIActionSimulatorWaylandImpl;
+#endif // __WXGTK3__
+
     wxX11Display display;
 
 #if wxUSE_XTEST

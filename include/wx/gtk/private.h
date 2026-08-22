@@ -155,6 +155,13 @@ inline void wxGtkScrollbarSetInverted(wxGtkScrollbar* sb, bool inverted)
 // deactivated, so that wxApp can generate wxEVT_ACTIVATE_APP: GTK4 has no
 // focus-in/out signals for src/gtk/app.cpp to hook for this.
 WXDLLIMPEXP_CORE void wxGTKAppNotifyWindowActivated(bool active);
+
+// Create the GtkWindow subclass used by wx top-level windows and apply or
+// clear its visual and input shape. GTK4 removed native visual window shapes,
+// so the subclass implements them by masking its snapshot instead.
+WXDLLIMPEXP_CORE GtkWidget* wxGTKCreateTopLevelWindow();
+WXDLLIMPEXP_CORE bool wxGTKSetWindowShape(GtkWidget* widget,
+                                          const cairo_region_t* region);
 #endif // __WXGTK4__
 
 namespace wxGTKPrivate

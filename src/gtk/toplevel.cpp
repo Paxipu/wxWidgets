@@ -84,6 +84,124 @@ static bool gs_decorCacheValid;
 
 #ifdef __WXGTK4__
 
+namespace
+{
+
+struct wxGtkTopLevelWindow
+{
+    GtkWindow parent;
+};
+
+struct wxGtkTopLevelWindowClass
+{
+    GtkWindowClass parentClass;
+};
+
+static void wx_gtk_toplevel_window_snapshot(GtkWidget* widget,
+                                             GtkSnapshot* snapshot);
+
+G_DEFINE_TYPE(wxGtkTopLevelWindow, wx_gtk_toplevel_window, GTK_TYPE_WINDOW)
+
+static void wx_gtk_toplevel_window_snapshot(GtkWidget* widget,
+                                             GtkSnapshot* snapshot)
+{
+    const cairo_region_t* const region = static_cast<cairo_region_t*>(
+        g_object_get_data(G_OBJECT(widget), "wx-window-shape-region"));
+
+    if ( !region )
+    {
+        GTK_WIDGET_CLASS(wx_gtk_toplevel_window_parent_class)->snapshot(
+            widget, snapshot);
+        return;
+    }
+
+    // GTK4 removed visual surface shapes, but all of its surfaces have an
+    // alpha channel. Mask the complete GtkWindow snapshot, including its
+    // child hierarchy, to leave all pixels outside the region transparent.
+    gtk_snapshot_push_mask(snapshot, GSK_MASK_MODE_ALPHA);
+
+    graphene_rect_t bounds;
+    graphene_rect_init(&bounds, 0, 0,
+                       gtk_widget_get_width(widget),
+                       gtk_widget_get_height(widget));
+
+    cairo_t* const cr = gtk_snapshot_append_cairo(snapshot, &bounds);
+    gdk_cairo_region(cr, region);
+    cairo_set_source_rgba(cr, 1, 1, 1, 1);
+    cairo_fill(cr);
+    cairo_destroy(cr);
+
+    // The first pop completes the mask, the second one completes its source.
+    gtk_snapshot_pop(snapshot);
+    GTK_WIDGET_CLASS(wx_gtk_toplevel_window_parent_class)->snapshot(widget,
+                                                                    snapshot);
+    gtk_snapshot_pop(snapshot);
+}
+
+static void wx_gtk_toplevel_window_class_init(wxGtkTopLevelWindowClass* klass)
+{
+    GTK_WIDGET_CLASS(klass)->snapshot = wx_gtk_toplevel_window_snapshot;
+}
+
+static void wx_gtk_toplevel_window_init(wxGtkTopLevelWindow*)
+{
+}
+
+} // anonymous namespace
+
+GtkWidget* wxGTKCreateTopLevelWindow()
+{
+    return GTK_WIDGET(g_object_new(wx_gtk_toplevel_window_get_type(), nullptr));
+}
+
+bool wxGTKSetWindowShape(GtkWidget* widget, const cairo_region_t* region)
+{
+    if ( !G_TYPE_CHECK_INSTANCE_TYPE(widget,
+                                     wx_gtk_toplevel_window_get_type()) )
+        return region == nullptr;
+
+    g_object_set_data_full(
+        G_OBJECT(widget), "wx-window-shape-region",
+        region ? cairo_region_copy(region) : nullptr,
+        [](gpointer data)
+        {
+            cairo_region_destroy(static_cast<cairo_region_t*>(data));
+        });
+
+    GtkStyleContext* const style = gtk_widget_get_style_context(widget);
+    GtkCssProvider* const oldProvider = static_cast<GtkCssProvider*>(
+        g_object_get_data(G_OBJECT(widget), "wx-window-shape-css"));
+
+    if ( region && !oldProvider )
+    {
+        GtkCssProvider* const provider = gtk_css_provider_new();
+        gtk_css_provider_load_from_data(
+            provider,
+            "window { background-color: rgba(0, 0, 0, 0); }", -1);
+        gtk_style_context_add_provider(style, GTK_STYLE_PROVIDER(provider),
+                                       GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+        g_object_set_data_full(G_OBJECT(widget), "wx-window-shape-css",
+                               provider, g_object_unref);
+    }
+    else if ( !region && oldProvider )
+    {
+        gtk_style_context_remove_provider(style,
+                                          GTK_STYLE_PROVIDER(oldProvider));
+        g_object_set_data_full(G_OBJECT(widget), "wx-window-shape-css",
+                               nullptr, nullptr);
+    }
+
+    GdkSurface* const surface = wx_gtk_widget_get_surface(widget);
+    wxCHECK_MSG(surface, false, "top-level window must be realized");
+
+    // Match the visual mask for pointer input. Passing null restores the
+    // complete surface as the input region.
+    gdk_surface_set_input_region(surface,
+                                 const_cast<cairo_region_t*>(region));
+    gtk_widget_queue_draw(widget);
+    return true;
+}
+
 // gtk_window_move() was removed: under Wayland a client is not allowed to
 // position its own window, and GTK4 offers no replacement even where the
 // platform does allow it. X11 does, and it is the same call GDK3 made for
@@ -1297,7 +1415,8 @@ bool wxTopLevelWindowGTK::Create( wxWindow *parent,
     {
 #ifdef __WXGTK4__
         // GTK4 has only toplevels, so gtk_window_new() lost its argument.
-        m_widget = gtk_window_new();
+        m_widget = style & wxFRAME_SHAPED ? wxGTKCreateTopLevelWindow()
+                                          : gtk_window_new();
 #else
         m_widget = gtk_window_new(GTK_WINDOW_TOPLEVEL);
 #endif

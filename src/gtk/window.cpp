@@ -8413,7 +8413,10 @@ bool wxWindowGTK::SetBackgroundStyle(wxBackgroundStyle style)
 
 bool wxWindowGTK::IsTransparentBackgroundSupported(wxString* reason) const
 {
-#if wxGTK_HAS_COMPOSITING_SUPPORT
+#ifdef __WXGTK4__
+    wxUnusedVar(reason);
+    return true;
+#elif wxGTK_HAS_COMPOSITING_SUPPORT
 #ifndef __WXGTK3__
     if (!wx_is_at_least_gtk2(12))
     {

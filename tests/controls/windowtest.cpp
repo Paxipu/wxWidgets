@@ -304,6 +304,15 @@ TEST_CASE_METHOD(WindowTestCase, "Window::Properties", "[window]")
     CHECK( m_window->GetId() == wxID_HIGHEST + 10 );
 }
 
+#ifdef __WXGTK4__
+TEST_CASE_METHOD(WindowTestCase, "Window::TransparentBackgroundSupport",
+                 "[window][transparent]")
+{
+    wxString reason;
+    CHECK( m_window->IsTransparentBackgroundSupported(&reason) );
+}
+#endif // __WXGTK4__
+
 #if wxUSE_TOOLTIPS
 TEST_CASE_METHOD(WindowTestCase, "Window::ToolTip", "[window]")
 {

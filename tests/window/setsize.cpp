@@ -106,3 +106,21 @@ TEST_CASE("wxWindow::MovePreservesSize", "[window][size][move]")
     w->Move(rectOrig.GetPosition() + wxPoint(100, 100));
     CHECK( w->GetSize() == rectOrig.GetSize() );
 }
+
+#ifdef __WXGTK4__
+
+TEST_CASE("wxWindow::SetShape", "[window][shape]")
+{
+    std::unique_ptr<wxFrame> w(new wxFrame(nullptr, wxID_ANY, wxEmptyString,
+                                           wxDefaultPosition, wxSize(80, 80),
+                                           wxFRAME_SHAPED | wxBORDER_NONE));
+
+    WaitForPaint waitForPaint(w.get());
+    w->Show();
+    waitForPaint.YieldUntilPainted();
+
+    CHECK( w->SetShape(wxRegion(0, 0, 40, 80)) );
+    CHECK( w->SetShape(wxRegion()) );
+}
+
+#endif // __WXGTK4__

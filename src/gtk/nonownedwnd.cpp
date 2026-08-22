@@ -28,6 +28,7 @@
 
 #include "wx/graphics.h"
 
+#include "wx/gtk/private.h"
 #include "wx/gtk/private/wrapgtk.h"
 
 #include <memory>
@@ -52,12 +53,7 @@ public:
     bool SetShape()
     {
 #ifdef __WXGTK4__
-        // GTK4 has no shaped windows at all: gdk_window_shape_combine_region()
-        // went away with GdkWindow and nothing took its place, the intended
-        // way to get a non-rectangular window now being to make the parts you
-        // don't want transparent instead. Report the failure rather than
-        // quietly leaving a rectangular window behind.
-        return false;
+        return wxGTKSetWindowShape(m_win->m_widget, GetShapeRegion());
 #else
         if ( m_win->m_wxwindow )
             SetShapeIfNonNull(gtk_widget_get_window(m_win->m_wxwindow));
@@ -74,7 +70,9 @@ protected:
     wxWindow* const m_win;
 
 private:
-#ifndef __WXGTK4__
+#ifdef __WXGTK4__
+    virtual const cairo_region_t* GetShapeRegion() const = 0;
+#else
     // SetShape to the given GDK window by calling DoSetShape() if it's non-null.
     bool SetShapeIfNonNull(GdkWindow* window)
     {
@@ -101,7 +99,12 @@ public:
     virtual bool CanBeDeleted() const override { return true; }
 
 private:
-#ifndef __WXGTK4__
+#ifdef __WXGTK4__
+    virtual const cairo_region_t* GetShapeRegion() const override
+    {
+        return nullptr;
+    }
+#else
     virtual bool DoSetShape(GdkWindow* window) override
     {
         gdk_window_shape_combine_region(window, nullptr, 0, 0);
@@ -124,7 +127,12 @@ public:
     virtual bool CanBeDeleted() const override { return true; }
 
 private:
-#ifndef __WXGTK4__
+#ifdef __WXGTK4__
+    virtual const cairo_region_t* GetShapeRegion() const override
+    {
+        return m_region.GetRegion();
+    }
+#else
     virtual bool DoSetShape(GdkWindow* window) override
     {
         gdk_window_shape_combine_region(window, m_region.GetRegion(), 0, 0);
@@ -145,7 +153,11 @@ public:
     wxNonOwnedWindowShapeImplPath(wxWindow* win, const wxGraphicsPath& path) :
         wxNonOwnedWindowShapeImpl(win),
         m_path(path),
+#ifdef __WXGTK4__
+        m_region(CreateShapeBitmap(path), *wxBLACK)
+#else
         m_mask(CreateShapeBitmap(path), *wxBLACK)
+#endif
     {
 
         m_win->Bind(wxEVT_PAINT, &wxNonOwnedWindowShapeImplPath::OnPaint, this);
@@ -186,7 +198,12 @@ private:
         return bmp;
     }
 
-#ifndef __WXGTK4__
+#ifdef __WXGTK4__
+    virtual const cairo_region_t* GetShapeRegion() const override
+    {
+        return m_region.GetRegion();
+    }
+#else
     virtual bool DoSetShape(GdkWindow *window) override
     {
         if (!m_mask)
@@ -220,7 +237,11 @@ private:
     }
 
     wxGraphicsPath m_path;
+#ifdef __WXGTK4__
+    wxRegion m_region;
+#else
     wxMask m_mask;
+#endif
 };
 
 #endif // wxUSE_GRAPHICS_CONTEXT
@@ -255,6 +276,14 @@ void wxNonOwnedWindow::GTKHandleRealized()
 
 bool wxNonOwnedWindow::DoClearShape()
 {
+#ifdef __WXGTK4__
+    // A region shape is copied into the native top-level and its short-lived
+    // implementation object is then discarded, so clear the native state even
+    // when there is no m_shapeImpl left to do it for us.
+    if ( gtk_widget_get_realized(m_widget) && !m_shapeImpl )
+        return wxGTKSetWindowShape(m_widget, nullptr);
+#endif // __WXGTK4__
+
     if ( !m_shapeImpl )
     {
         // Nothing to do, we don't have any custom shape.

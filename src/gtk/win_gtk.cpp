@@ -648,6 +648,32 @@ void wxPizza::size_allocate_child(
     if (width <= 0 || height <= 0)
         return;
 
+#ifdef __WXGTK4__
+    // GTK4 requires that a widget never be allocated less than its minimum
+    // size. It does not merely prefer it: given less, its layout managers
+    // subtract padding from what they were handed and pass the negative
+    // remainder down, so a tool bar allocated 8 px where GTK wants 44 ends up
+    // asking for a 24x-12 icon, which GTK then complains about.
+    //
+    // wx does hand out sizes that small, legitimately and only for a moment:
+    // a window sized from its best size before its contents exist keeps that
+    // size until wx recalculates, and GTK's frame clock can lay out in
+    // between. GTK+ 3 drew a squashed widget for that one frame; GTK4 has to
+    // be given something it accepts instead.
+    //
+    // Measuring costs a cache lookup in the common case, and the clamp only
+    // ever does anything when the allocation would have been rejected anyway.
+    int minWidth = 0, minHeight = 0;
+    gtk_widget_measure(child, GTK_ORIENTATION_HORIZONTAL, -1,
+                       &minWidth, nullptr, nullptr, nullptr);
+    if (width < minWidth)
+        width = minWidth;
+    gtk_widget_measure(child, GTK_ORIENTATION_VERTICAL, width,
+                       &minHeight, nullptr, nullptr, nullptr);
+    if (height < minHeight)
+        height = minHeight;
+#endif // __WXGTK4__
+
     GtkAllocation child_alloc;
     // note that child positions do not take border into account, they need to
     // be relative to widget->window, which has already been adjusted

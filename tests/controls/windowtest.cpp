@@ -780,3 +780,51 @@ TEST_CASE_METHOD(WindowTestCase, "Window::Refresh", "[window]")
     CHECK(isChild2Painted == true);
     CHECK(isChild3Painted == true);
 }
+
+// Window::Refresh above only asks whether a paint event arrived. Code that
+// repaints just the damaged part -- the Life demo redraws exactly the cells
+// GetUpdateRegion() reports, and has to, since wxClientDC cannot draw outside
+// a paint handler on several platforms -- also needs the update region to
+// actually cover what was refreshed. Too small a region draws too little, and
+// nothing above would notice.
+TEST_CASE_METHOD(WindowTestCase, "Window::RefreshRectUpdateRegion", "[window]")
+{
+    wxWindow* const win = m_window;
+
+    win->SetSize(300, 200);
+    win->Refresh();
+
+    wxRect updated;
+    bool painted = false;
+    win->Bind(wxEVT_PAINT, [&](wxPaintEvent&)
+    {
+        wxPaintDC dc(win);
+        updated = win->GetUpdateRegion().GetBox();
+        painted = true;
+    });
+
+    // Settle any repaint still owed from the resize above.
+    YieldForAWhile();
+
+    const wxRect refreshed(20, 30, 100, 40);
+
+    painted = false;
+    updated = wxRect();
+    win->RefreshRect(refreshed);
+
+    REQUIRE( WaitFor("repaint", [&]() { return painted; }, 500) );
+
+    INFO("refreshed "
+         << refreshed.x << "," << refreshed.y << " "
+         << refreshed.width << "x" << refreshed.height
+         << " -- update region "
+         << updated.x << "," << updated.y << " "
+         << updated.width << "x" << updated.height);
+    CHECK( updated.Contains(refreshed) );
+
+    // Measured while adding this: GTK+ 3 reports exactly the refreshed
+    // rectangle here, GTK4 reports the whole window. Both satisfy the check
+    // above -- repainting more than asked is correct, only wasteful -- so this
+    // is deliberately not asserted, but it is why the check is a Contains()
+    // and not an equality.
+}

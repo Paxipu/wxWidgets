@@ -17,11 +17,17 @@
     #include "wx/app.h"
     #include "wx/dialog.h"
     #include "wx/frame.h"
+    #include "wx/menu.h"
     #include "wx/textctrl.h"
     #include "wx/toplevel.h"
 #endif // WX_PRECOMP
 
+#if wxUSE_MDI
+    #include "wx/mdi.h"
+#endif // wxUSE_MDI
+
 #include "testableframe.h"
+#include "waitfor.h"
 
 class DestroyOnScopeExit
 {
@@ -115,3 +121,52 @@ TEST_CASE("wxTopLevel::ShowEvent", "[tlw][show][event]")
 
     CHECK( countShow.WaitEvent() );
 }
+
+#if wxUSE_MDI
+
+// Going full screen with wxFULLSCREEN_NOMENUBAR must hide the menu bar of an
+// MDI parent frame and leave it hidden.
+//
+// wxFrame::ShowFullScreen() hides the bar without detaching it, which is the
+// normal state for a plain frame, but wxMDIParentFrame::OnInternalIdle() then
+// found a hidden parent menu bar with no child menu bar visible, took that for
+// the state it has to correct, showed the bar again and called Attach() on a
+// bar that was still attached. That asserted and undid the full screen switch
+// in one go. See #74.
+TEST_CASE("wxMDIParentFrame::ShowFullScreen", "[tlw][mdi][fullscreen]")
+{
+    wxMDIParentFrame* const frame =
+        new wxMDIParentFrame(nullptr, wxID_ANY, "MDI full screen test",
+                             wxDefaultPosition, wxSize(400, 300));
+    DestroyOnScopeExit destroy(frame);
+
+    wxMenu* const menu = new wxMenu;
+    menu->Append(wxID_EXIT, "E&xit");
+    wxMenuBar* const bar = new wxMenuBar;
+    bar->Append(menu, "&File");
+    frame->SetMenuBar(bar);
+
+    frame->Show();
+    YieldForAWhile();
+
+    REQUIRE( bar->IsShown() );
+    REQUIRE( bar->GetFrame() == frame );
+
+    REQUIRE( frame->ShowFullScreen(true) );
+    YieldForAWhile();
+
+    CHECK( !bar->IsShown() );
+    CHECK( bar->GetFrame() == frame );
+
+    // Idle processing must not undo this however long the frame stays up.
+    YieldForAWhile();
+    CHECK( !bar->IsShown() );
+
+    REQUIRE( frame->ShowFullScreen(false) );
+    YieldForAWhile();
+
+    CHECK( bar->IsShown() );
+    CHECK( bar->GetFrame() == frame );
+}
+
+#endif // wxUSE_MDI

@@ -177,9 +177,16 @@ void wxMDIParentFrame::OnInternalIdle()
         if (visible_child_menu)
         {
             m_frameMenuBar->Show( false );
-            m_frameMenuBar->Detach();
+            if ( m_frameMenuBar->GetFrame() )
+                m_frameMenuBar->Detach();
         }
-        else
+        // Only restore a menu bar that this function hid itself, which it
+        // always detaches when it does. One that is hidden but still attached
+        // was hidden by someone else -- wxFrame::ShowFullScreen() for
+        // wxFULLSCREEN_NOMENUBAR, or application code calling Show(false) on
+        // it -- and showing it again here would undo that. Attach() would
+        // assert on it too, exactly as it does for the children above.
+        else if ( m_frameMenuBar->GetFrame() != this )
         {
             m_frameMenuBar->Show( true );
             m_frameMenuBar->Attach( this );

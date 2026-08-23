@@ -294,9 +294,14 @@ namespace wxGTKImpl
 class SetLastMouseEvent
 {
 public:
-#ifndef __WXGTK4__
+#ifdef __WXGTK4__
     // GdkEventButton and GdkEventMotion don't exist under GTK4, where the
     // controller callbacks already have a plain GdkEvent to pass.
+    explicit SetLastMouseEvent(GdkEvent* event)
+    {
+        g_lastMouseEvent = event;
+    }
+#else // !__WXGTK4__
     explicit SetLastMouseEvent(GdkEventButton* event)
     {
         g_lastMouseEvent = reinterpret_cast<GdkEvent*>(event);
@@ -306,7 +311,7 @@ public:
     {
         g_lastMouseEvent = reinterpret_cast<GdkEvent*>(event);
     }
-#endif // !__WXGTK4__
+#endif // __WXGTK4__/!__WXGTK4__
 
     ~SetLastMouseEvent()
     {
@@ -3120,6 +3125,8 @@ wxGTKImpl::WindowMotionCallback(wxWindowGTK* win, GdkEvent* gdk_event,
     if ( AreGTKEventsBlocked() )
         return false;
 
+    SetLastMouseEvent setLastMouse(gdk_event);
+
     wxMouseEvent event( wxEVT_MOTION );
     InitMouseEvent(win, event, gdk_event, x, y);
     event.m_synthesized = synthesized;
@@ -3232,6 +3239,10 @@ wxGTKImpl::WindowButtonPressCallback(wxWindowGTK* win, GdkEvent* gdk_event,
     // event, as they did under GTK3.
     const wxEventType event_type = nPress == 2 ? dclick : down;
 
+    // wxDropSource::DoDragDrop() refuses to start a drag unless a mouse event
+    // is being handled, so a handler that starts one must find it recorded.
+    SetLastMouseEvent setLastMouse(gdk_event);
+
     wxMouseEvent event( event_type );
     InitMouseEvent( win, event, gdk_event, x, y );
     event.m_synthesized = synthesized;
@@ -3276,6 +3287,8 @@ wxGTKImpl::WindowButtonReleaseCallback(wxWindowGTK* win, GdkEvent* gdk_event,
         return false;
 
     g_lastButtonNumber = 0;
+
+    SetLastMouseEvent setLastMouse(gdk_event);
 
     wxEventType event_type;
     switch (button)

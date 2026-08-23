@@ -79,6 +79,12 @@ public:
     // Helper functions only used internally.
     wxTextCoalesceData* GTKGetCoalesceData() const { return m_coalesceData; }
 
+    // Called once the processing of a key press is finished, to flush any
+    // wxEVT_TEXT that was coalesced while it was being handled. Under GTK+ 3
+    // this comes from the "event-after" signal handler; under GTK+ 4, where
+    // that signal no longer exists, from the key event controller.
+    void GTKEntryOnKeypressEnd();
+
 protected:
     // This method must be called from the derived class Create() to connect
     // the handlers for the clipboard (cut/copy/paste) events.

@@ -35,6 +35,12 @@
 #include "wx/fontutil.h"
 #include "wx/recguard.h"
 #include "wx/sysopt.h"
+#ifdef __WXGTK4__
+    // For wxTextEntry::GTKEntryOnKeypressEnd(), called from the key
+    // controller: GTK4 has no "event-after" signal to drive it from.
+    #include "wx/textentry.h"
+    #include "wx/weakref.h"
+#endif
 #ifdef __WXGTK3__
     #include "wx/gtk/dc.h"
 #endif
@@ -1684,8 +1690,26 @@ wx_gtk_key_pressed_callback(GtkEventControllerKey* controller,
     keyData.time = gtk_event_controller_get_current_event_time(c);
     keyData.isPress = true;
 
-    return wxGTKHandleKeyPress(win, keyData,
-                               gtk_event_controller_get_current_event(c));
+    // Handling the press can destroy the window it happened in -- wxGrid
+    // removes its in-place editor on Enter and on Escape, for one -- so hold a
+    // weak reference across the call rather than dereferencing win afterwards.
+    wxWeakRef<wxWindow> const winGuard(win);
+
+    const gboolean handled =
+        wxGTKHandleKeyPress(win, keyData,
+                            gtk_event_controller_get_current_event(c));
+
+    // GTK3 learned that the press had been fully processed from the
+    // "event-after" signal, which GTK4 removed. This is the same point in
+    // time, and wxTextEntry needs it to flush the single wxEVT_TEXT it
+    // coalesces the several "changed" signals of one key press into.
+    if ( winGuard )
+    {
+        if ( wxTextEntry* const entry = dynamic_cast<wxTextEntry*>(winGuard.get()) )
+            entry->GTKEntryOnKeypressEnd();
+    }
+
+    return handled;
 }
 
 // GtkEventControllerKey::key-released(keyval, keycode, state) -> void.
@@ -5620,6 +5644,27 @@ void wxWindowGTK::ConnectWidget( GtkWidget *widget )
     // rather than through per-widget signals carrying a GdkEventKey.
     {
         GtkEventController* const keyController = gtk_event_controller_key_new();
+
+        // A native text-entry widget handles key presses itself and claims
+        // them, and it does so on the widget the event is actually delivered
+        // to -- the GtkText inside a GtkEntry, not the entry this controller
+        // sits on. In the default bubble phase the controller would therefore
+        // never fire for it, and wx would generate neither wxEVT_KEY_DOWN nor
+        // wxEVT_CHAR while still seeing wxEVT_KEY_UP, which is not claimed.
+        // The capture phase runs from the top level down to the target, so it
+        // reaches wx first, which is what GTK3's g_signal_connect() on
+        // "key_press_event" gave us: a look at the press before the widget's
+        // own handling of it.
+        //
+        // Only for these widgets, deliberately. Using the capture phase for
+        // every window would let the top level's controller claim every key
+        // event before it ever reached the focused control.
+        if ( GTK_IS_EDITABLE(focusWidget) || GTK_IS_TEXT_VIEW(focusWidget) )
+        {
+            gtk_event_controller_set_propagation_phase(keyController,
+                                                       GTK_PHASE_CAPTURE);
+        }
+
         g_signal_connect (keyController, "key-pressed",
                           G_CALLBACK (wx_gtk_key_pressed_callback), this);
         g_signal_connect (keyController, "key-released",

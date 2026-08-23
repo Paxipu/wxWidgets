@@ -47,6 +47,10 @@
 class wxTextCoalesceData
 {
 public:
+    // Under GTK4 handlerAfterKeyPress is 0: the "event-after" signal it refers
+    // to does not exist there and the end of the key press is signalled by
+    // wxTextEntry::GTKEntryOnKeypressEnd() instead, so every use of the id is
+    // guarded on it being real.
     wxTextCoalesceData(GtkWidget* widget, gulong handlerAfterKeyPress)
         : m_handlerAfterKeyPress(handlerAfterKeyPress)
         , m_widget(widget)
@@ -56,12 +60,14 @@ public:
 
         // This signal handler is unblocked in StartHandlingKeyPress(), so
         // we need to block it initially to compensate for this.
-        g_signal_handler_block(widget, m_handlerAfterKeyPress);
+        if ( m_handlerAfterKeyPress )
+            g_signal_handler_block(widget, m_handlerAfterKeyPress);
     }
 
     ~wxTextCoalesceData()
     {
-        g_signal_handler_disconnect(m_widget, m_handlerAfterKeyPress);
+        if ( m_handlerAfterKeyPress )
+            g_signal_handler_disconnect(m_widget, m_handlerAfterKeyPress);
     }
 
     void StartHandlingKeyPress()
@@ -69,8 +75,11 @@ public:
         m_inKeyPress = true;
         m_pendingTextChanged = false;
 
-        g_signal_handler_unblock(m_widget, m_handlerAfterKeyPress);
+        if ( m_handlerAfterKeyPress )
+            g_signal_handler_unblock(m_widget, m_handlerAfterKeyPress);
     }
+
+    bool IsHandlingKeyPress() const { return m_inKeyPress; }
 
     bool SetPendingIfInKeyPress()
     {
@@ -84,7 +93,8 @@ public:
 
     bool EndHandlingKeyPressAndCheckIfPending()
     {
-        g_signal_handler_block(m_widget, m_handlerAfterKeyPress);
+        if ( m_handlerAfterKeyPress )
+            g_signal_handler_block(m_widget, m_handlerAfterKeyPress);
 
         wxASSERT( m_inKeyPress );
         m_inKeyPress = false;
@@ -128,33 +138,33 @@ static int GetEntryTextLength(GtkEntry* entry)
 
 extern "C" {
 
+#ifndef __WXGTK4__
+
 // "event-after" handler is only connected when we get a "key-press-event", so
 // it's effectively called after the end of processing of this event and used
 // to send a single wxEVT_TEXT even if we received several (typically two, when
 // the selected text in the control is replaced by new text) "changed" signals.
+//
+// GTK4 removed "event-after" along with the rest of the GdkEvent-based
+// signals, so there this handler does not exist at all and the same point in
+// time is reached from the key controller instead -- see
+// wxTextEntry::GTKEntryOnKeypressEnd(), which holds the body below.
 static gboolean
-#ifdef __WXGTK4__
-// "event-after" is gone with the rest of the GdkEvent-based signals; under
-// GTK4 this is driven from the key controller instead, see GTKEntryOnKeypress().
-wx_gtk_text_after_key_press(GtkWidget*,
-                            GdkEvent* WXUNUSED(gdk_event),
-                            wxTextEntry* entry)
-#else
 wx_gtk_text_after_key_press(GtkWidget*,
                             GdkEventKey* WXUNUSED(gdk_event),
                             wxTextEntry* entry)
-#endif
 {
-    wxTextCoalesceData* const data = entry->GTKGetCoalesceData();
-    wxCHECK_MSG( data, FALSE, "must be non-null if this handler is called" );
+    // This handler stays blocked until a key press is being handled, so the
+    // coalescing data must exist by the time it runs.
+    wxCHECK_MSG( entry->GTKGetCoalesceData(), FALSE,
+                 "must be non-null if this handler is called" );
 
-    if ( data->EndHandlingKeyPressAndCheckIfPending() )
-    {
-        entry->GTKOnTextChanged();
-    }
+    entry->GTKEntryOnKeypressEnd();
 
     return FALSE;
 }
+
+#endif // !__WXGTK4__
 
 // "changed" handler for GtkEntry
 static void
@@ -1080,6 +1090,13 @@ void wxTextEntry::GTKEntryOnKeypress(GtkWidget* widget) const
     // this extra handler.
     if ( !m_coalesceData )
     {
+#ifdef __WXGTK4__
+        // There is no signal to connect to: "event-after" was removed with the
+        // rest of the GdkEvent-based signals. GTKEntryOnKeypressEnd() is called
+        // from the key controller once the press has been processed, which is
+        // the same point in time, so the coalescing data carries no handler.
+        const gulong handler = 0;
+#else
         // We can't use g_signal_connect_after("key-press-event") because the
         // emission of this signal is stopped by GtkEntry own key-press-event
         // handler, so we have to use the generic "event-after" instead to be
@@ -1092,11 +1109,29 @@ void wxTextEntry::GTKEntryOnKeypress(GtkWidget* widget) const
                                     G_CALLBACK(wx_gtk_text_after_key_press),
                                     const_cast<wxTextEntry*>(this)
                                 );
+#endif // __WXGTK4__/!__WXGTK4__
 
         m_coalesceData = new wxTextCoalesceData(widget, handler);
     }
 
     m_coalesceData->StartHandlingKeyPress();
+}
+
+void wxTextEntry::GTKEntryOnKeypressEnd()
+{
+    // Under GTK+ 3 the "event-after" handler this replaces stays blocked until
+    // StartHandlingKeyPress() unblocks it, so it only ever ran for a press wx
+    // had begun handling. Here the call is unconditional, so the same
+    // condition has to be checked explicitly: a key press in a control which
+    // never started one must not end one.
+    wxTextCoalesceData* const data = GTKGetCoalesceData();
+    if ( !data || !data->IsHandlingKeyPress() )
+        return;
+
+    if ( data->EndHandlingKeyPressAndCheckIfPending() )
+    {
+        GTKOnTextChanged();
+    }
 }
 
 int wxTextEntry::GTKEntryIMFilterKeypress(wxGTKNativeKeyEvent* event) const

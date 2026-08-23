@@ -5645,6 +5645,26 @@ void wxWindowGTK::ConnectWidget( GtkWidget *widget )
     {
         GtkEventController* const keyController = gtk_event_controller_key_new();
 
+        // A native text-entry widget handles key presses itself and claims
+        // them, and it does so on the widget the event is actually delivered
+        // to -- the GtkText inside a GtkEntry, not the entry this controller
+        // sits on. In the default bubble phase the controller would therefore
+        // never fire for it, and wx would generate neither wxEVT_KEY_DOWN nor
+        // wxEVT_CHAR while still seeing wxEVT_KEY_UP, which is not claimed.
+        // The capture phase runs from the top level down to the target, so it
+        // reaches wx first, which is what GTK3's g_signal_connect() on
+        // "key_press_event" gave us: a look at the press before the widget's
+        // own handling of it.
+        //
+        // Only for these widgets, deliberately. Using the capture phase for
+        // every window would let the top level's controller claim every key
+        // event before it ever reached the focused control.
+        if ( GTK_IS_EDITABLE(focusWidget) || GTK_IS_TEXT_VIEW(focusWidget) )
+        {
+            gtk_event_controller_set_propagation_phase(keyController,
+                                                       GTK_PHASE_CAPTURE);
+        }
+
         g_signal_connect (keyController, "key-pressed",
                           G_CALLBACK (wx_gtk_key_pressed_callback), this);
         g_signal_connect (keyController, "key-released",

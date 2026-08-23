@@ -1841,4 +1841,69 @@ TEST_CASE("wxTextCtrl::RichWithHint", "[wxTextCtrl][hint][rich]")
 
 #endif // wxUSE_RICHEDIT
 
+#if wxUSE_UIACTIONSIMULATOR
+
+TEST_CASE("wxTextCtrl::KeyEventsWhenFocused", "[wxTextCtrl][key][event]")
+{
+    // A focused text control has to see the key events for the text typed
+    // into it.
+    //
+    // Under GTK+ 4 it did not: the native entry handles a key press on the
+    // widget the event is delivered to and claims it there, so wx's own event
+    // controller, sitting on the entry in the default bubble phase, never ran
+    // and neither wxEVT_KEY_DOWN nor wxEVT_CHAR was generated. What made this
+    // easy to overlook is that the two things one would check first both
+    // looked right: the typed text still arrived, and wxEVT_KEY_UP still came
+    // through, because a key release is not claimed.
+    //
+    // Both control kinds are exercised because they are different native
+    // widgets -- a GtkEntry and a GtkTextView -- handled separately.
+    long style = 0;
+
+    SECTION("Single line")
+    {
+        style = 0;
+    }
+
+    SECTION("Multi line")
+    {
+        style = wxTE_MULTILINE;
+    }
+
+    auto text = std::make_unique<wxTextCtrl>
+                (
+                    wxTheApp->GetTopWindow(), wxID_ANY, "",
+                    wxDefaultPosition, wxSize(200, 100), style
+                );
+
+    EventCounter keyDown(text.get(), wxEVT_KEY_DOWN);
+    EventCounter keyUp(text.get(), wxEVT_KEY_UP);
+    EventCounter charEvents(text.get(), wxEVT_CHAR);
+
+    text->SetFocus();
+    wxYield();
+    REQUIRE( text->HasFocus() );
+
+    wxUIActionSimulator sim;
+
+    // KeyDown() reports whether the simulator can synthesize input at all: it
+    // cannot under Wayland, where there is nothing for this test to check.
+    // Char() is not usable for that -- it reports success either way.
+    if ( !sim.KeyDown('a') )
+        return;
+
+    sim.KeyUp('a');
+    wxYield();
+
+    CHECK( keyDown.GetCount() == 1 );
+    CHECK( charEvents.GetCount() == 1 );
+    CHECK( keyUp.GetCount() == 1 );
+
+    // The text arriving is what still worked before, so a failure here would
+    // mean something different from a failure above.
+    CHECK( text->GetValue() == "a" );
+}
+
+#endif // wxUSE_UIACTIONSIMULATOR
+
 #endif //wxUSE_TEXTCTRL

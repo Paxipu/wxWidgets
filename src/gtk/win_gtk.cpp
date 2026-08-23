@@ -474,7 +474,10 @@ static void class_init(void* g_class, void*)
     widget_class->measure = pizza_measure;
     widget_class->snapshot = pizza_snapshot;
 
-    gs_signalSizeAllocated = g_signal_new("wx-size-allocated",
+    // Use the exported constant rather than repeating the name: window.cpp and
+    // toplevel.cpp connect through it, and a silent divergence would cost every
+    // window its wxEVT_SIZE without any diagnostic at build time.
+    gs_signalSizeAllocated = g_signal_new(wxPIZZA_SIGNAL_SIZE_ALLOCATED,
         G_TYPE_FROM_CLASS(g_class), G_SIGNAL_RUN_LAST, 0,
         nullptr, nullptr, nullptr, G_TYPE_NONE, 0);
 
@@ -516,8 +519,18 @@ static void class_init(void* g_class, void*)
 
 } // extern "C"
 
-WXDLLIMPEXP_DATA_CORE(const char* const)
+#ifdef __WXGTK4__
+// "extern" is what makes the visibility attribute apply here: without it a
+// const object at namespace scope is not yet known to have external linkage
+// when GCC processes the attribute, so GCC drops it and warns. The exported
+// symbol came out right anyway, because the declaration in win_gtk.h carries
+// the same attribute, but the warning appeared in every build.
+//
+// The initialiser is a constant expression, so this is initialised before any
+// code runs and class_init() above may use it despite coming first.
+extern WXDLLIMPEXP_DATA_CORE(const char* const)
 wxPIZZA_SIGNAL_SIZE_ALLOCATED = "wx-size-allocated";
+#endif // __WXGTK4__
 
 GType wxPizza::type()
 {

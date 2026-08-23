@@ -24,6 +24,11 @@
 #include "asserthelper.h"
 #include "waitfor.h"
 
+#ifdef __WXGTK4__
+    #include "wx/gtk/private/wrapgtk.h"
+    #include "wx/gtk/private/win_gtk.h"
+#endif // __WXGTK4__
+
 // ----------------------------------------------------------------------------
 // tests helpers
 // ----------------------------------------------------------------------------
@@ -121,6 +126,31 @@ TEST_CASE("wxWindow::SetShape", "[window][shape]")
 
     CHECK( w->SetShape(wxRegion(0, 0, 40, 80)) );
     CHECK( w->SetShape(wxRegion()) );
+}
+
+// GTK4 removed GtkWidget's "size-allocate" signal, so wxPizza registers a
+// replacement of its own and both src/gtk/toplevel.cpp and src/gtk/window.cpp
+// connect to it using the name held in wxPIZZA_SIGNAL_SIZE_ALLOCATED. Nothing
+// else ties that constant to the name pizza_class_init() actually registers:
+// should the two ever diverge, g_signal_connect() fails at run time with a
+// GLib warning and no wxEVT_SIZE is generated at all, for any window.
+TEST_CASE("wxPizza::SizeAllocatedSignal", "[window][size]")
+{
+    REQUIRE( wxPIZZA_SIGNAL_SIZE_ALLOCATED != nullptr );
+
+    const GType type = wxPizza::type();
+    REQUIRE( type != 0 );
+
+    // The signal is created in class_init, which GType only runs on demand.
+    gpointer klass = g_type_class_ref(type);
+    REQUIRE( klass != nullptr );
+
+    INFO("wxPIZZA_SIGNAL_SIZE_ALLOCATED = " << wxPIZZA_SIGNAL_SIZE_ALLOCATED);
+    const guint id = g_signal_lookup(wxPIZZA_SIGNAL_SIZE_ALLOCATED, type);
+
+    g_type_class_unref(klass);
+
+    CHECK( id != 0 );
 }
 
 #endif // __WXGTK4__

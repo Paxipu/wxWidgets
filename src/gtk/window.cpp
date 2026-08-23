@@ -7537,10 +7537,17 @@ void wxWindowGTK::Refresh(bool WXUNUSED(eraseBackground),
             // GTK4 has neither a GdkWindow to invalidate nor any partial
             // invalidation: gtk_widget_queue_draw_area() is gone too, and a
             // widget is always redrawn whole. The rectangle therefore does not
-            // narrow what is repainted -- which costs nothing in practice, as
-            // wx already reported the whole window as the update region under
-            // GTK3, see docs/gtk/gtk4-phase4-paint-model-design.md -- but it
-            // still decides which children are in it, see below.
+            // narrow what is repainted -- it cannot, since the snapshot vfunc
+            // has to rebuild the widget's entire scene and anything wx left
+            // out would simply be missing -- but it still decides which
+            // children are in it, see below.
+            //
+            // This does cost something. Measured on a 300x200 window,
+            // RefreshRect(20,30 100x40) leaves GetUpdateRegion() reporting
+            // 20,30 100x40 under GTK+ 3 and the whole 0,0 300x200 under GTK4,
+            // on both X11 and Wayland. An application repainting incrementally
+            // therefore does full-window work per invalidation here. See
+            // docs/gtk/gtk4-phase4-paint-model-design.md section 3.
             gtk_widget_queue_draw(m_wxwindow);
             wxGTKRefreshChildren(this, rect);
 #else

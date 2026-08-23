@@ -99,10 +99,32 @@ first draft of this document overstated it. Two things temper it:
   much of the time. (Reported from experience with wxGTK3 by the maintainer of
   a wxWidgets application; consistent with the coarseness the code shows.)
 
-So the real change is from "bounding box of the damage, often the whole
-window" to "always the whole window" — a narrowing of an already-coarse
-guarantee, not the loss of a precise one. Worth documenting, and worth a line
-in the port's user-facing notes, but not a reason to hold up the phase.
+So for *scattered* damage the real change is from "bounding box of the damage,
+often the whole window" to "always the whole window" — a narrowing of an
+already-coarse guarantee, not the loss of a precise one.
+
+**For an explicit `RefreshRect()` it is the loss of a precise one, and this
+document originally said otherwise.** Measured afterwards, on a 300x200
+window, with `Window::RefreshRectUpdateRegion` in
+`tests/controls/windowtest.cpp`:
+
+| `RefreshRect(20,30 100x40)` | reported update region |
+|---|---|
+| GTK+ 3 3.24.52, X11 | `20,30 100x40` |
+| GTK+ 3 3.24.52, Wayland | `20,30 100x40` |
+| GTK4 4.22.4, X11 | `0,0 300x200` |
+| GTK4 4.22.4, Wayland | `0,0 300x200` |
+
+A single `RefreshRect()` is not scattered damage, so the bounding-box
+coarseness above does not apply to it, and that is precisely the case
+incremental drawing uses: a canvas invalidating one cell per mouse motion —
+what `demos/life` does — did a one-cell repaint under GTK+ 3 and does a
+full-window repaint under GTK4.
+
+The decision stands: wx cannot report less than it redraws, and under GTK4 it
+must redraw everything. But the cost is real for paint-heavy applications and
+belongs in the port's user-facing notes as such, not as "costs nothing in
+practice".
 
 Efficiency is not lost overall either: GTK4's renderer culls by diffing render
 nodes, so the work still gets skipped, just below wx rather than inside it.

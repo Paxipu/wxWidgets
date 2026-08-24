@@ -4060,6 +4060,8 @@ bool wxGetKeyState(wxKeyCode WXUNUSED(key))
 }
 #endif // __WINDOWS__
 
+#ifdef __WXGTK4__
+
 // Ask the X server where the pointer is, in root -- i.e. screen -- coordinates,
 // and which buttons are down while it is at it.
 //
@@ -4109,6 +4111,8 @@ wxGTKQueryPointerX11(GdkDisplay* display, int* x, int* y, GdkModifierType* mask)
     return false;
 #endif // GDK_WINDOWING_X11
 }
+
+#endif // __WXGTK4__
 
 wxMouseState wxGetMouseState()
 {

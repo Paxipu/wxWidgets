@@ -380,7 +380,40 @@ void wxSpinCtrlGTKBase::DoSetRange(double minVal, double maxVal)
     }
 
     wxSpinCtrlEventDisabler disable(this);
-    gtk_spin_button_set_range( GTK_SPIN_BUTTON(m_widget), minVal, maxVal);
+
+    bool rangeSet = false;
+
+#ifdef __WXGTK4__
+    // wx lets the range be given backwards and the other ports keep it as it
+    // was given, which is what tests/controls/spinctrltest.cpp checks. GTK+ 3
+    // kept it too, but GTK4 routes gtk_spin_button_set_range() through
+    // gtk_adjustment_configure(), which asserts "lower + page_size <= upper",
+    // rejects the call and leaves the previous range in place.
+    //
+    // The two bounds are accepted individually, so set them that way.
+    if ( minVal > maxVal )
+    {
+        GtkAdjustment* const adj =
+            gtk_spin_button_get_adjustment(GTK_SPIN_BUTTON(m_widget));
+
+        const double value = gtk_adjustment_get_value(adj);
+
+        gtk_adjustment_set_lower(adj, minVal);
+        gtk_adjustment_set_upper(adj, maxVal);
+
+        // GTK+ 3 finished by clamping the value with CLAMP(value, lower,
+        // upper), which with the bounds crossed tests the lower one first.
+        // Reproduce that rather than inventing a rule of our own.
+        gtk_adjustment_set_value(adj, value < minVal
+                                        ? minVal
+                                        : (value > maxVal ? maxVal : value));
+
+        rangeSet = true;
+    }
+#endif // __WXGTK4__
+
+    if ( !rangeSet )
+        gtk_spin_button_set_range( GTK_SPIN_BUTTON(m_widget), minVal, maxVal);
 
     InvalidateBestSize();
 

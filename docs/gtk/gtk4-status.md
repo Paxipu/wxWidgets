@@ -2900,7 +2900,6 @@ be calling it.
 | Shaped windows (`wxNonOwnedWindow::SetShape`) | `gdk_window_shape_combine_region()` has no replacement; GTK4's answer is transparency |
 | `wxChoice::SetColumns()` | The popup's grid layout, and the wrap-width property controlling it, are gone |
 | `wxScreenDC` drawing and read-back | No root window, and no backend can read the screen |
-| Horizontal scroll offset in `wxTextCtrl::HitTest()` for single-line controls | The layout belongs to the private `GtkText` inside a `GtkEntry` |
 
 `wxFileButton` and `wxDirButton` fall back to the generic implementation
 because `GtkFileChooserButton` was removed -- but that is a plain button which
@@ -3550,7 +3549,8 @@ never suppress a focus change the user actually made.
   rather than fixed.
 * **`TextCtrl::HitTestSingleLine/Scrolled`** -- the horizontal scroll offset gap
   recorded earlier: a single-line entry's scroll position is not reachable
-  through GTK4's API, so hit testing past the visible text is off.
+  through GTK4's API, so hit testing past the visible text is off. (Since
+  closed -- see progress update 47.)
 
 ## Progress update 37: the samples run
 
@@ -4626,3 +4626,56 @@ The general point, again: this bug was in the port from the beginning, in
 code every wxWindow runs, and no amount of running the development build
 would have shown it. It took a differently linked build to change the test
 order.
+
+## Progress update 47: the last failing test, and how it was reachable after all
+
+`wxTextCtrl::HitTest()` for a single-line control was the one thing left
+failing under GTK4, and it had been written off. The reasoning was sound as
+far as it went: `gtk_entry_get_layout_offsets()` is gone, the layout belongs
+to the private `GtkText` inside the `GtkEntry`, and GTK4 has no getter for how
+far the text has been scrolled. Hit testing a scrolled entry was therefore off
+by the scroll amount, and the limitation went into the table of things the
+port cannot do.
+
+It turns out GTK4 does report it, just not as a scroll offset.
+`gtk_text_compute_cursor_extents()` (GTK 4.4) gives the cursor rectangle for a
+character index, in the `GtkText`'s own coordinates -- and the rectangle for
+index 0 begins exactly where the layout begins. A standalone probe against
+plain GTK, with no wx involved:
+
+    short text, cursor at home : origin.x = 0
+    200 chars, cursor at home  : origin.x = 0
+    200 chars, cursor at end   : origin.x = -1650
+
+Zero while the text fits, and negative by the scrolled amount once it does
+not: that is precisely what the removed getter returned. Subtracting it after
+translating the point into the `GtkText`'s coordinate space -- which already
+handled the border, padding and icons -- completes the conversion. It is a
+no-op for an unscrolled entry, so the cases that already passed are untouched.
+
+Only the horizontal offset is taken from it. A single-line layout has one
+line, so where it sits vertically makes no difference to which character a
+point lands on, and leaving `y` alone keeps the change to the axis that was
+actually wrong.
+
+Guarded at compile time with `GTK_CHECK_VERSION(4,4,0)` and at run time with
+`gtk_check_version(4,4,0)`, so a build against an older GTK4 keeps the
+previous approximation rather than failing to build.
+
+### The suite
+
+    All tests passed (49444 assertions in 503 test cases)
+
+**Every GUI test passes under GTK4**, in the configuration CI builds -- shared,
+OpenGL, wxSTC, wxMedia, all samples. That is the first time in this port.
+
+### Worth remembering
+
+Two of the three hardest things fixed today were declared impossible or
+recorded as unfixable earlier in this same document, and both turned out to
+have an answer in an API that does not carry the name of the thing it
+replaces. `gtk_entry_get_layout_offsets()` was not replaced by another
+"layout offsets" call; it was replaced by a cursor-extents call that happens
+to expose the same number. Searching the GTK4 headers for the *removed*
+function's concept finds nothing. Searching for what a caller actually needs
+-- "where on screen is character N" -- finds it immediately.

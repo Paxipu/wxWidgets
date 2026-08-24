@@ -2501,12 +2501,18 @@ wxTextCtrl::HitTest(const wxPoint& pt, long *pos) const
         // the layout belongs to the private GtkText widget inside the entry
         // and is not reachable from outside any more.
         //
-        // Translating the point into that widget's own coordinate space does
-        // account for the entry's border, padding and any icons, which is most
-        // of what the layout offset used to provide, and a layout built from
-        // the same widget and text measures identically. What is not accounted
-        // for is horizontal scrolling of a text longer than the entry, as
-        // nothing in GTK4 reports how far the text has been scrolled.
+        // Translating the point into that widget's own coordinate space
+        // accounts for the entry's border, padding and any icons, which is
+        // most of what the layout offset used to provide, and a layout built
+        // from the same widget and text measures identically.
+        //
+        // The rest of it is how far the text has been scrolled, for a value
+        // too long to fit. GTK4 has no getter for that either, but
+        // gtk_text_compute_cursor_extents() gives the cursor rectangle for a
+        // character index in the GtkText's own coordinates, and for index 0
+        // that rectangle starts exactly where the layout does -- so it is
+        // zero while the text fits and goes negative by the scrolled amount
+        // once it does not, which is what the removed getter reported.
         GtkWidget* textWidget = m_text;
         for ( GtkWidget* c = gtk_widget_get_first_child(m_text);
               c;
@@ -2527,6 +2533,20 @@ wxTextCtrl::HitTest(const wxPoint& pt, long *pos) const
             x = int(ptInText.x);
             y = int(ptInText.y);
         }
+
+#if GTK_CHECK_VERSION(4,4,0)
+        // Only the horizontal offset is taken from this: a single line layout
+        // has just the one line, so its vertical origin makes no difference to
+        // which character a point falls on.
+        if ( GTK_IS_TEXT(textWidget) && gtk_check_version(4,4,0) == nullptr )
+        {
+            graphene_rect_t strong;
+            gtk_text_compute_cursor_extents(GTK_TEXT(textWidget), 0,
+                                            &strong, nullptr);
+
+            x -= int(strong.origin.x);
+        }
+#endif // GTK_CHECK_VERSION(4,4,0)
 
         // And scale the coordinates for Pango.
         x *= PANGO_SCALE;

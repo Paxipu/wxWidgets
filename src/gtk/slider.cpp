@@ -200,6 +200,88 @@ gtk_move_slider(GtkRange*, GtkScrollType scrollType, wxSlider* win)
 }
 }
 
+#ifdef __WXGTK4__
+
+// GTK4 rebound the arrow and page keys of a GtkRange: they now change the
+// value regardless of how the range is laid out, where GTK+ 3 moved the slider
+// in the direction the key points at. For a plain horizontal wxSlider that
+// reverses all four of them -- measured with one starting at 50, page 20,
+// line 2:
+//
+//              GTK+ 3   GTK4
+//   Page Up      30       70
+//   Page Down    70       30
+//   Up           48       52
+//   Down         52       48
+//
+// which is a visible change for users and what makes
+// SliderTestCase::LinePageSize fail. wxSL_INVERSE shows which of the two is
+// which: with it, GTK+ 3 gives 70 as well, so its binding follows the layout,
+// while GTK4 gives 70 either way.
+//
+// Take the keys over and ask the range for the movement GTK+ 3 would have
+// made. Going through GTK's own "move-slider" keeps its clamping and leaves
+// gtk_move_slider() above to record the scroll type, so the wxEVT_SCROLL_*
+// events come out as before.
+extern "C" {
+static gboolean
+wx_slider_key_pressed(GtkEventControllerKey*, guint keyval, guint,
+                      GdkModifierType state, wxSlider* win)
+{
+    // Anything with a modifier is not ours to interpret.
+    if ( state & (GDK_CONTROL_MASK | GDK_ALT_MASK | GDK_SHIFT_MASK) )
+        return FALSE;
+
+    GtkScrollType scroll;
+    switch ( keyval )
+    {
+        case GDK_KEY_Up:
+        case GDK_KEY_KP_Up:
+            scroll = GTK_SCROLL_STEP_BACKWARD;
+            break;
+
+        case GDK_KEY_Down:
+        case GDK_KEY_KP_Down:
+            scroll = GTK_SCROLL_STEP_FORWARD;
+            break;
+
+        case GDK_KEY_Page_Up:
+        case GDK_KEY_KP_Page_Up:
+            scroll = GTK_SCROLL_PAGE_BACKWARD;
+            break;
+
+        case GDK_KEY_Page_Down:
+        case GDK_KEY_KP_Page_Down:
+            scroll = GTK_SCROLL_PAGE_FORWARD;
+            break;
+
+        default:
+            return FALSE;
+    }
+
+    // BACKWARD and FORWARD are about the value, not the layout, so an
+    // inverted scale -- where GTK+ 3 moved the other way, as measured above --
+    // needs them the other way round.
+    if ( gtk_range_get_inverted(GTK_RANGE(win->m_scale)) )
+    {
+        switch ( scroll )
+        {
+            case GTK_SCROLL_STEP_BACKWARD: scroll = GTK_SCROLL_STEP_FORWARD;  break;
+            case GTK_SCROLL_STEP_FORWARD:  scroll = GTK_SCROLL_STEP_BACKWARD; break;
+            case GTK_SCROLL_PAGE_BACKWARD: scroll = GTK_SCROLL_PAGE_FORWARD;  break;
+            case GTK_SCROLL_PAGE_FORWARD:  scroll = GTK_SCROLL_PAGE_BACKWARD; break;
+            default: break;
+        }
+    }
+
+    g_signal_emit_by_name(win->m_scale, "move-slider", scroll);
+
+    return TRUE;
+}
+}
+
+#endif // __WXGTK4__
+
 //-----------------------------------------------------------------------------
 // mouse button tracking, and the "after the release was handled" hook
 //-----------------------------------------------------------------------------
@@ -521,6 +603,14 @@ bool wxSlider::Create(wxWindow *parent,
     g_signal_connect(m_scale, "button_release_event", G_CALLBACK(gtk_button_release_event), this);
 #endif // __WXGTK4__/!__WXGTK4__
     g_signal_connect(m_scale, "move_slider", G_CALLBACK(gtk_move_slider), this);
+#ifdef __WXGTK4__
+    // Before the range acts on the key itself; see wx_slider_key_pressed().
+    GtkEventController* const keys = gtk_event_controller_key_new();
+    gtk_event_controller_set_propagation_phase(keys, GTK_PHASE_CAPTURE);
+    g_signal_connect(keys, "key-pressed",
+                     G_CALLBACK(wx_slider_key_pressed), this);
+    gtk_widget_add_controller(m_scale, keys);
+#endif // __WXGTK4__
 #ifdef __WXGTK4__
     // The "format-value" signal is gone; a plain callback replaces it. The
     // callback has the same signature the signal handler had, so the same

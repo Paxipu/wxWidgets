@@ -1547,8 +1547,11 @@ void MyFrame::OnUpdateUI(wxUpdateUIEvent& event)
 
 void MyFrame::OnUpdateTabKindUI(wxUpdateUIEvent& event)
 {
+    // wxDynamicCast, not wxCheckCast: the pane's window is momentarily null
+    // while the pane is being floated or re-docked, and wxCheckCast asserts on
+    // null before the test below can run.
     auto* const book =
-        wxCheckCast<wxAuiNotebook>(m_mgr.GetPane("notebook_content").window);
+        wxDynamicCast(m_mgr.GetPane("notebook_content").window, wxAuiNotebook);
 
     if ( !book )
     {
@@ -1570,8 +1573,11 @@ void MyFrame::OnUpdateTabKindUI(wxUpdateUIEvent& event)
 
 void MyFrame::OnNotebookSetTabKind(wxCommandEvent& event)
 {
+    // wxDynamicCast, not wxCheckCast: the pane's window is momentarily null
+    // while the pane is being floated or re-docked, and wxCheckCast asserts on
+    // null before the test below can run.
     auto* const book =
-        wxCheckCast<wxAuiNotebook>(m_mgr.GetPane("notebook_content").window);
+        wxDynamicCast(m_mgr.GetPane("notebook_content").window, wxAuiNotebook);
 
     if ( !book )
         return;
@@ -1597,8 +1603,11 @@ void MyFrame::OnNotebookNextOrPrev(wxCommandEvent& evt)
 
 void MyFrame::OnNotebookSplit(wxCommandEvent& WXUNUSED(evt))
 {
+    // wxDynamicCast, not wxCheckCast: the pane's window is momentarily null
+    // while the pane is being floated or re-docked, and wxCheckCast asserts on
+    // null before the test below can run.
     auto* const book =
-        wxCheckCast<wxAuiNotebook>(m_mgr.GetPane("notebook_content").window);
+        wxDynamicCast(m_mgr.GetPane("notebook_content").window, wxAuiNotebook);
 
     if ( !book || book->GetPageCount() < 3 )
     {

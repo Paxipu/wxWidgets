@@ -6201,15 +6201,34 @@ static void wxGTKGetOriginInRoot(GtkWidget* widget, int* org_x, int* org_y)
     // it directly rather than reporting toplevel-relative coordinates and
     // leaving them to disagree with wxTopLevelWindow::GetPosition().
     GdkSurface* const surface = gtk_native_get_surface(GTK_NATIVE(root));
-    if ( surface && GDK_IS_X11_SURFACE(surface) )
+
+    // GDK_IS_X11_SURFACE() is a type check, not a liveness one: it stays true
+    // for a surface whose X window has already been destroyed, and
+    // GDK_SURFACE_XID() then hands the server a stale XID. The server answers
+    // BadWindow, and GDK's error handler exits the process -- which is not a
+    // theoretical risk, it killed test_gui halfway through the suite. See #85.
+    if ( surface && GDK_IS_X11_SURFACE(surface) &&
+            !gdk_surface_is_destroyed(surface) )
     {
         Display* const dpy = GDK_SURFACE_XDISPLAY(surface);
         int rx = 0,
             ry = 0;
         Window unused;
-        if ( XTranslateCoordinates(dpy, GDK_SURFACE_XID(surface),
-                                   DefaultRootWindow(dpy),
-                                   0, 0, &rx, &ry, &unused) )
+
+        // The check above still leaves a window: X is asynchronous, so the
+        // surface can be destroyed between asking and the request reaching the
+        // server. Trapping the error is what actually makes this safe -- the
+        // check merely avoids the common case of trapping one every time.
+        GdkDisplay* const display = gdk_surface_get_display(surface);
+        gdk_x11_display_error_trap_push(display);
+
+        const Bool ok = XTranslateCoordinates(dpy, GDK_SURFACE_XID(surface),
+                                              DefaultRootWindow(dpy),
+                                              0, 0, &rx, &ry, &unused);
+
+        // Sync so that the error, if any, is caught by the pop below rather
+        // than arriving later, outside the trap, where it would be fatal.
+        if ( gdk_x11_display_error_trap_pop(display) == 0 && ok )
         {
             *org_x += rx;
             *org_y += ry;

@@ -1493,6 +1493,56 @@ static void test_drop_arrow_drawing(void)
           "the route DrawDropArrow() takes under GTK4 stopped working");
 }
 
+/* ------------------------------------------------------------------------ */
+
+#ifdef HAVE_XTEST
+
+static void test_destroyed_surface_still_typed(void)
+{
+    GtkWidget* win;
+    GdkSurface* surface;
+    int stillX11, destroyed;
+
+    printf("What GDK_IS_X11_SURFACE() answers after the window is gone:\n");
+
+    win = gtk_window_new();
+    gtk_widget_set_visible(win, TRUE);
+    pump_one_frame(win);
+
+    surface = gtk_native_get_surface(GTK_NATIVE(win));
+    if (surface == NULL)
+    {
+        soft(0, "the window has a surface to test", "no X11 surface here");
+        gtk_window_destroy(GTK_WINDOW(win));
+        return;
+    }
+
+    /* Hold the surface alive so it can still be asked about afterwards. */
+    g_object_ref(surface);
+    gtk_window_destroy(GTK_WINDOW(win));
+
+    stillX11 = GDK_IS_X11_SURFACE(surface);
+    destroyed = gdk_surface_is_destroyed(surface);
+
+    /* This is why wxGTKGetOriginInRoot() cannot use GDK_IS_X11_SURFACE() on
+     * its own: it is a type check, and a type does not stop being itself when
+     * the X window behind it is destroyed. GDK_SURFACE_XID() then hands the
+     * server a stale XID, the server answers BadWindow, and GDK's error
+     * handler exits the process. See issue #85. */
+    check(stillX11,
+          "a destroyed surface still passes GDK_IS_X11_SURFACE()",
+          "GDK now clears the type on destroy, so the extra guard in "
+          "wxGTKGetOriginInRoot() could go");
+
+    check(destroyed,
+          "and gdk_surface_is_destroyed() reports it",
+          "there is no way left to tell a live surface from a dead one");
+
+    g_object_unref(surface);
+}
+
+#endif /* HAVE_XTEST */
+
 static void test_indicator_nodes(void)
 {
     GtkWidget* checkbtn;
@@ -1580,6 +1630,10 @@ int main(void)
     printf("\n");
     test_drop_arrow_drawing();
     printf("\n");
+#ifdef HAVE_XTEST
+    test_destroyed_surface_still_typed();
+    printf("\n");
+#endif
     test_combo_box_internals();
     printf("\n");
     test_css_parser_strictness();

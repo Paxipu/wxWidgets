@@ -7201,8 +7201,9 @@ void wxWindowGTK::RealizeTabOrder()
                     // GTK-level child: parenting one here gave a GtkWindow a
                     // CSS parent, and GTK aborts the next time it validates
                     // that window as a root:
-                    //   gtk_css_node_validate: assertion failed:
-                    //       (cssnode->parent == NULL)
+                    //   gtk_css_node_validate: assertion failed,
+                    //   because it requires cssnode->parent to be null
+                    //   for a root.
                     // See docs/gtk/probes/wx-stylecontext-abort.cpp.
                     if (gtk_widget_get_parent(w) != m_wxwindow)
                         continue;

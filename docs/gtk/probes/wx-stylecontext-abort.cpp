@@ -9,7 +9,7 @@
 // wxTopLevelWindow has a wx parent.
 //
 //     Gtk:ERROR:../../../gtk/gtkcssnode.c:1358:gtk_css_node_validate:
-//     assertion failed: (cssnode->parent == NULL)
+//     assertion failed, because it requires cssnode->parent to be null.
 //
 // This is the abort that stops test_gui at 445 of 490 test cases, in
 // wxPersistTLW.

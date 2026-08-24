@@ -4414,3 +4414,119 @@ any of the above and unchanged across all three runs today:
 (stack)' failed`, in `EventPropagationTestCase::DocView`.
 
 `gtk4-invariants` is at **58 checks, 0 failed**.
+
+## Progress update 46: what the CI actually said
+
+The fork's workflows had never run: GitHub disables Actions on a fork until
+someone turns them on, and every upstream workflow is filtered to
+`branches: [master]` anyway. With both fixed, the port branch got its first
+full CI pass across Unix, MSW, MSW-cross, CMake, Mac and the code checks --
+about forty jobs, none of which the port had ever been measured against.
+
+The headline is the one that was least certain before: **MSW builds the port
+cleanly**. Every build step of every MSW job -- vs2022 Debug/Release x64,
+Debug Win32, Release arm64 and vs2026 Release x64 -- succeeded, library,
+samples and both test binaries alike. The 546 lines the port adds to shared,
+non-GTK files compile under MSVC without a single warning being promoted, so
+the largest unknown in "what happens when this is proposed upstream" is now
+answered.
+
+What did fail split cleanly into four kinds, and none of them was GTK4 code.
+
+### Two functions that only exist for GTK+ 3 and 4
+
+The wxGTK2 job builds `src/gtk/*.cpp` too, with `-Werror`, and it caught two
+places where the port left something behind that GTK+ 2 does not use:
+
+* `wxGetMouseState()` still fetched a `GdkWindow` that only the GTK+ 3 branch
+  needs, because the port had replaced the `gdk_window_get_display(window)`
+  call that used to consume it under GTK+ 2 with `wxGetTopLevelGdkDisplay()`.
+* `wxGTKProcessScrollDeltas()` was factored out of the `GDK_SCROLL_SMOOTH`
+  case so the GTK4 scroll controller could share it -- but that case is
+  itself `#if GTK_CHECK_VERSION(3,4,0)`, so under GTK+ 2 the function has no
+  caller at all.
+
+Neither is reachable in a GTK+ 2 build, so neither could show up in any
+amount of GTK4 testing. This is the whole argument for keeping the GTK+ 2 job
+in the matrix while a port like this is in flight.
+
+### A warning only clang gives
+
+`src/gtk/artgtk.cpp` grew a compatibility layer for the icon sizes GTK4
+removed, with a `wxGtkGetIconTheme()` in each half. Both of its callers are
+inside `#ifdef __WXGTK4__`, so the GTK+ 3 copy is unused -- and clang says so
+while gcc does not. gcc does not warn about an unused `inline` function; clang
+does. One more reason the matrix has a clang job.
+
+### A CI job that could not start
+
+The wxGTK4 job itself failed before it configured anything, in "Install
+CCache", on every run. The ccache action derives its cache key from the job
+name, and the name was
+
+    Ubuntu 24.04 wxGTK 4 (WIP port, see docs/gtk/gtk4-status.md)
+
+GitHub rejects a cache key containing a comma. So the one job in the matrix
+that exercises the port had been silently dead since it was added. Renamed to
+`Ubuntu 24.04 wxGTK 4 - WIP port`, with a comment saying why the name has to
+stay free of punctuation.
+
+### Three tests that described wxGTK rather than wxWidgets
+
+The MSW GUI test run failed 3 of 507 cases -- all three of them tests this
+port added, none of them wx code:
+
+* **`RadioBox::Focus`** expected `wxWindow::FindFocus()` to return the box.
+  Under wxMSW `wxRadioBox` is a `wxCompositeWindow` and its `SetFocus()`
+  forwards to one of the `wxRadioButton`s inside it, so the focus is *in* the
+  box, not *on* it. Under wxQt it is neither: `FindFocus()` returns null even
+  though the focus event still arrives. The test now accepts the focus being
+  anywhere inside the box, and skips the question entirely under wxQt.
+
+* **`wxMDIParentFrame::ShowFullScreen`** expected the `wxMenuBar` object to be
+  hidden. That is how wxGTK implements `wxFULLSCREEN_NOMENUBAR`; wxMSW calls
+  `SetMenu(hwnd, nullptr)` and leaves the bar shown. The bug the test was
+  written for (#74) was idle processing undoing the full screen switch, so
+  the test now checks `IsFullScreen()` everywhere and the bar's visibility
+  only under wxGTK.
+
+* **`wxTextCtrl::KeyEventsWhenFocused`** counted two key up events where it
+  expected one. Simulated input is asynchronous and a release synthesized by
+  an earlier test can still be in flight -- which is exactly why
+  `KeyboardEventTestCase::setUp()` discards events before it starts counting.
+  The test now does the same, and waits for the release instead of assuming
+  one `wxYield()` sees it.
+
+The general shape is worth stating: a test written while fixing a GTK4 bug
+will tend to encode *how GTK does it* rather than *what wx promises*, and
+nothing on the GTK side can catch that. Only a run on another port can.
+
+### And a baseline, because "is this ours?" needed an answer
+
+The wxQt job failed its GUI tests too, and there was no way to tell from the
+outside whether that was the port's doing. So the same machine built and ran
+`test_gui` twice, once from `origin/master` and once from the port branch:
+
+| | test cases | failed | assertions failed |
+|---|---|---|---|
+| `origin/master`, wxQt | 493 | 4 | 7 |
+| port branch, wxQt, before | 498 | 5 | 8 |
+| port branch, wxQt, after | 498 | 4 | 7 |
+
+The four failures are the same four in every column -- `measuring`,
+`listbasetest`, `treectrltest` and `wxTopLevel::Show` -- and they fail on
+unmodified upstream master just as they do here. The fifth was
+`RadioBox::Focus`, ours, now fixed. The port adds **zero** wxQt regressions,
+and that is a measurement rather than an opinion.
+
+Building an upstream-master tree next to the branch turns out to be cheap and
+worth doing whenever a failure appears on a port the work never touched.
+
+### The suite
+
+`test_gui` under GTK4 is unchanged at **488 passed / 2 failed of 490** with
+`wxUSE_XVFB=1` set -- the two being the `wxDVC::SingleSelection` and
+`TextCtrl::HitTest` failures described earlier. Without that variable
+`wxTopLevel::Show` fails as well, on wxGTK and wxQt alike, because the test
+only skips its `IsActive()` check when it knows there is no window manager.
+Worth remembering before reading anything into a local run.

@@ -4859,3 +4859,82 @@ This was not one failing test. Nothing a wxGTK4 application copied could be
 pasted anywhere, including into itself, whenever the application cleared the
 clipboard first -- which is the documented way to replace its contents. The
 test suite only noticed because the new test reads back what it wrote.
+
+## Progress update 51: a GTK+ 2 regression the port had introduced
+
+The upstream resync's other new CI failure was the **wxGTK 2** job, crashing in
+`XRC::UnknownControlSizeHints` -- a test that came in with upstream's
+[4958d2d](https://github.com/wxWidgets/wxWidgets/commit/4958d2d), which makes
+`wxXmlResource::AttachUnknownControl()` refresh the top level's size hints
+after reparenting a control into its placeholder.
+
+The comfortable reading was that this is upstream's bug and upstream CI does
+not see it because it no longer builds wxGTK 2 on this image. That reading was
+wrong, and checking it took one measurement: the same test, built from
+`upstream/master` with the same `--with-gtk=2` configure line on this machine,
+passes. On the port branch it segfaults. So the port introduced it.
+
+The backtrace says where:
+
+```
+#0  gtk_widget_is_toplevel ()
+#7  gtk_widget_unparent ()
+...
+#23 g_object_run_dispose ()
+#24 wxWindow::~wxWindow ()
+```
+
+A top-level window is being disposed, GTK walks its list of children, and one
+of them is freed memory.
+
+### One line
+
+`wxWindowGTK::Reparent()` detaches the widget from its old parent before
+attaching it to the new one. Upstream:
+
+```cpp
+if ( GtkWidget *parentGTK = gtk_widget_get_parent(m_widget) )
+    gtk_container_remove(GTK_CONTAINER(parentGTK), m_widget);
+```
+
+The port, from the batch that replaced `gtk_widget_destroy()` and the
+`GtkContainer` API across the GTK sources:
+
+```cpp
+if ( gtk_widget_get_parent(m_widget) )
+{
+#ifdef __WXGTK4__
+    GTKDetachFromParent();
+#else
+    gtk_widget_unparent(m_widget);
+#endif
+}
+```
+
+Those are not the same call. `gtk_container_remove()` goes through the
+container's `remove` vfunc, which takes the child off the container's *own*
+list and then unparents it. `gtk_widget_unparent()` only does the second half,
+so the container is left holding a pointer to a widget that is about to be
+freed, and unparents it again when it is disposed.
+
+This is exactly the mistake `GTKDetachFromParent()` was written to avoid on the
+GTK4 side, where the same substitution produced stale `wxPizza::m_children`
+entries and eventually an abort inside `gtk_css_node_validate()`. The comment
+above that function has said so since it was written. The GTK+ 2 and 3 branch
+of `Reparent()` simply never got the same treatment.
+
+### What it does and does not affect
+
+| | |
+| --- | --- |
+| wxGTK 2 | crashes, reproducibly |
+| wxGTK 3 | survives, silently -- the stale entry does not get walked |
+| wxGTK 4 | unaffected, `GTKDetachFromParent()` was already right |
+
+`docs/gtk/probes` is not the right home for this one: it needs wx, and the
+test that finds it is already upstream's. The standalone reproduction is fifty
+lines and lives in the issue.
+
+The fix restores `gtk_container_remove()` for GTK+ 2 and 3, with a comment
+saying why the shorter call is not a substitute -- since the whole point of a
+mechanical substitution is that it looks equivalent.

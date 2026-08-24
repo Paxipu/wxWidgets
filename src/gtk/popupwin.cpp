@@ -84,6 +84,39 @@ bool gtk_dialog_delete_callback( GtkWidget *WXUNUSED(widget), GdkEvent *WXUNUSED
 
 #endif // !__WXGTK4__
 
+#ifdef __WXGTK4__
+
+extern "C" {
+
+static gboolean wx_popup_place_again(void* data)
+{
+    wxPopupWindow* const win = static_cast<wxPopupWindow*>(data);
+
+    win->m_placeAgainIdle = 0;
+    win->GTKUpdatePointingTo();
+
+    return G_SOURCE_REMOVE;
+}
+
+static void wx_popup_mapped(GtkWidget*, wxPopupWindow* win)
+{
+    // The inset is only measurable once the popover has been laid out, which
+    // has not happened yet even here -- measured, "map" still reports 0 and
+    // the following idle reports 11. So place it again from there.
+    if ( !win->m_placeAgainIdle )
+    {
+        // Ahead of the redraw, or the popover would be painted where it was
+        // first put and then visibly hop into place.
+        win->m_placeAgainIdle = g_idle_add_full(GDK_PRIORITY_REDRAW - 1,
+                                                wx_popup_place_again,
+                                                win, nullptr);
+    }
+}
+
+}
+
+#endif // __WXGTK4__
+
 //-----------------------------------------------------------------------------
 // wxPopupWindow
 //-----------------------------------------------------------------------------
@@ -96,6 +129,14 @@ wxEND_EVENT_TABLE()
 
 wxPopupWindow::~wxPopupWindow()
 {
+#ifdef __WXGTK4__
+    if ( m_placeAgainIdle )
+    {
+        // Don't let it fire with a pointer which is about to dangle.
+        g_source_remove(m_placeAgainIdle);
+    }
+#endif // __WXGTK4__
+
 }
 
 bool wxPopupWindow::Create( wxWindow *parent, int style )
@@ -150,6 +191,8 @@ bool wxPopupWindow::Create( wxWindow *parent, int style )
 
     m_wxwindow = wxPizza::New();
     gtk_popover_set_child( GTK_POPOVER(m_widget), m_wxwindow );
+
+    g_signal_connect( m_widget, "map", G_CALLBACK(wx_popup_mapped), this );
 #else // !__WXGTK4__
     m_widget = gtk_window_new( GTK_WINDOW_POPUP );
     g_object_ref( m_widget );
@@ -271,6 +314,39 @@ void wxPopupWindow::DoSetSize( int x, int y, int width, int height, int sizeFlag
 
 #ifdef __WXGTK4__
 
+int wxPopupWindow::GTKGetContentTopInset()
+{
+    // Once there is an allocation the exact figure can be read off it.
+    graphene_rect_t bounds;
+    if ( m_wxwindow &&
+            gtk_widget_compute_bounds(m_wxwindow, m_widget, &bounds) &&
+            bounds.origin.y > 0 )
+    {
+        m_contentTopInset = int(bounds.origin.y);
+        return m_contentTopInset;
+    }
+
+    if ( m_contentTopInset )
+        return m_contentTopInset;
+
+    // There is none yet, and waiting for one is not good enough: a popup shown
+    // and clicked within the same burst of events would be placed wrongly for
+    // exactly as long as it mattered. What can be measured without an
+    // allocation is how much taller the popover is than its child, i.e. both
+    // insets together; splitting that evenly is off by a pixel or so against
+    // the measured 11 above and 13 below, which is close enough to be clicked,
+    // and the exact figure replaces it as soon as there is an allocation.
+    int popoverHeight = 0, childHeight = 0;
+    gtk_widget_measure(m_widget, GTK_ORIENTATION_VERTICAL, m_width,
+                       &popoverHeight, nullptr, nullptr, nullptr);
+    gtk_widget_measure(m_wxwindow, GTK_ORIENTATION_VERTICAL, m_width,
+                       &childHeight, nullptr, nullptr, nullptr);
+
+    const int both = popoverHeight - childHeight;
+
+    return both > 0 ? both / 2 : 0;
+}
+
 void wxPopupWindow::GTKUpdatePointingTo()
 {
     wxWindow* const parent = GetParent();
@@ -288,9 +364,16 @@ void wxPopupWindow::GTKUpdatePointingTo()
     // the popover is wider than its content by its own padding on each side,
     // using the content width here cancels that padding out rather than
     // needing it to be measured. See docs/gtk/probes/gtk4-popover-placement.c.
+    // Vertically nothing cancels out: the top edge which lands on the
+    // rectangle is the popover's own, and its content starts below that by
+    // however much the popover keeps for itself. Measured on plain GTK, a
+    // 120x60 child gives a 144x84 popover with the child at (12, 11) -- so
+    // without this the content appears eleven pixels below where it was asked
+    // for, which is enough for a click aimed at the first row of an
+    // autocompletion list to land above it and select nothing.
     GdkRectangle rect;
     rect.x = pos.x;
-    rect.y = pos.y;
+    rect.y = pos.y - GTKGetContentTopInset();
     rect.width = m_width;
     rect.height = 0;
 

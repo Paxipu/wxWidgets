@@ -3354,7 +3354,26 @@ void wxAuiManager::Update()
 
 void wxAuiManager::DoFrameLayout()
 {
-    m_frame->Layout();
+    // Nothing may replace the frame's sizer while this walk is inside it.
+    // Counted rather than flagged, and unwound even if Layout() throws --
+    // leaving the count raised would make OnMotion() ignore the mouse for
+    // good.
+    class LayoutDepth
+    {
+    public:
+        explicit LayoutDepth(int& depth) : m_depth(depth) { ++m_depth; }
+        ~LayoutDepth() { --m_depth; }
+
+    private:
+        int& m_depth;
+
+        wxDECLARE_NO_COPY_CLASS(LayoutDepth);
+    };
+
+    {
+        LayoutDepth inLayout(m_frameLayoutDepth);
+        m_frame->Layout();
+    }
 
     for ( auto& part : m_uiParts )
     {
@@ -5133,6 +5152,15 @@ void wxAuiManager::OnLeftUp(wxMouseEvent& event)
 
 void wxAuiManager::OnMotion(wxMouseEvent& event)
 {
+    // GTK4 dispatches input from inside a layout, so this can arrive while
+    // DoFrameLayout() is still walking the frame's sizer. Acting on it goes
+    // back into Update(), which replaces and deletes that sizer underneath the
+    // walk. Dropping the motion is safe -- another one follows immediately --
+    // and it is the only place that covers every route back in, rather than
+    // guarding Update() itself, which some callers need to run synchronously.
+    if ( m_frameLayoutDepth > 0 )
+        return;
+
     // sometimes when Update() is called from inside this method,
     // a spurious mouse move event is generated; this check will make
     // sure that only real mouse moves will get anywhere in this method;

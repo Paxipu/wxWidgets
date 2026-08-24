@@ -33,6 +33,7 @@
 #include "wx/private/make_unique.h"
 
 #ifdef __WXGTK4__
+    #include "wx/button.h"
     #include "wx/popupwin.h"
     #include "wx/scrolwin.h"
     #include "wx/gtk/private/wrapgtk.h"
@@ -828,3 +829,45 @@ TEST_CASE_METHOD(WindowTestCase, "Window::RefreshRectUpdateRegion", "[window]")
     // is deliberately not asserted, but it is why the check is a Contains()
     // and not an equality.
 }
+
+#ifdef __WXGTK4__
+
+// GTK4 requires that a widget never be allocated less than its minimum size.
+// Given less, its layout managers subtract padding from what they were handed
+// and pass the negative remainder down, so the complaint surfaces on some
+// grandchild rather than where the too-small size came from.
+//
+// wx does ask for sizes that small, legitimately: a window sized from its best
+// size before its contents exist keeps that size until wx recalculates, and
+// GTK can lay out in between. wxPizza::size_allocate_child() therefore has to
+// hand GTK something it accepts. See #95.
+TEST_CASE_METHOD(WindowTestCase, "wxWindow::MinimumAllocation", "[window][size]")
+{
+    // A button with a real label has a native minimum size well above what is
+    // asked for below. The fixture destroys it with the rest of the children.
+    wxButton* const button =
+        new wxButton(wxTheApp->GetTopWindow(), wxID_ANY,
+                     "A button with a fairly long label");
+
+    button->SetSize(0, 0, 10, 4);
+    YieldForAWhile();
+
+    GtkWidget* const widget = button->m_widget;
+    REQUIRE( widget != nullptr );
+
+    const int allocWidth = gtk_widget_get_allocated_width(widget);
+    const int allocHeight = gtk_widget_get_allocated_height(widget);
+
+    int minWidth = 0, minHeight = 0;
+    gtk_widget_measure(widget, GTK_ORIENTATION_HORIZONTAL, -1,
+                       &minWidth, nullptr, nullptr, nullptr);
+    gtk_widget_measure(widget, GTK_ORIENTATION_VERTICAL, allocWidth,
+                       &minHeight, nullptr, nullptr, nullptr);
+
+    INFO("allocated " << allocWidth << "x" << allocHeight
+         << ", GTK minimum " << minWidth << "x" << minHeight);
+    CHECK( allocWidth >= minWidth );
+    CHECK( allocHeight >= minHeight );
+}
+
+#endif // __WXGTK4__

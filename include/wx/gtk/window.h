@@ -41,6 +41,7 @@ typedef struct _GtkRange GtkRange;
 typedef GtkRange wxGtkScrollbar;
 #endif
 typedef struct _GtkIMContext GtkIMContext;
+typedef struct _GdkFrameClock GdkFrameClock;
 
 WX_DEFINE_EXPORTED_ARRAY_PTR(GdkWindow *, wxArrayGdkWindows);
 
@@ -329,6 +330,16 @@ public:
     // rather than including gtk.h, so GTK_CHECK_VERSION() is not available
     // here to match the guard on the definition.
     void GTKDisconnectFrameClock();
+
+    // The frame clock GTKHandleRealized() connected to, or null.
+    //
+    // Remembering it is what makes disconnecting reliable:
+    // gtk_widget_get_frame_clock() only answers while the widget is still
+    // rooted, so by the time a window is being destroyed it can already
+    // return null while the clock is still alive and still holding handlers
+    // that take this window as their user data. A weak pointer is kept on it
+    // so this goes back to null by itself if the clock dies first.
+    GdkFrameClock* m_frameClock = nullptr;
 
     // Common scroll event handling code for wxWindow and wxScrollBar
     wxEventType GTKGetScrollEventType(wxGtkScrollbar* range);

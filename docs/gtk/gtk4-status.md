@@ -4576,3 +4576,53 @@ and both test binaries -- builds clean under GTK4. The lesson is worth keeping
 for any port of this size: a development build configured for fast iteration
 is a *subset* of what CI compiles, and the difference is invisible until CI
 runs. Configuring one build directory the way CI does, once, is cheap.
+
+### A crash only CI could find
+
+With the build fixed, the wxGTK4 job got as far as running `test_gui` -- and
+the run ended at test case 270 of 503 with
+
+    ./controls/textctrltest.cpp:87: FAILED:
+    due to a fatal error condition:
+      SIGSEGV - Segmentation violation signal
+
+    #0  wxWindow::GTKSendSizeEventIfNeeded()
+    #1  frame_clock_layout_after ()
+    ...
+    #11 g_main_context_iteration ()
+    #12 wxGUIEventLoop::DoYieldFor(long)
+
+A frame clock "layout" handler firing with a `this` that had been freed --
+the very thing `GTKDisconnectFrameClock()` exists to prevent. It reproduced
+immediately in the CI-shaped build directory and never in the development
+one, because the two link differently (shared versus static) and Catch runs
+the test cases in a different order as a result.
+
+The disconnect was written as
+
+    if (GdkFrameClock* const clock = gtk_widget_get_frame_clock(m_widget))
+        g_signal_handlers_disconnect_by_data(clock, this);
+
+and `gtk_widget_get_frame_clock()` only answers while the widget is still
+rooted. By the time a window is being destroyed it can already return null
+while the clock itself is alive and still holding handlers whose user data is
+the window about to be freed -- so both the unrealize call and the destructor
+backstop quietly did nothing. Nothing warns about this: the disconnect
+"succeeds" by finding no clock at all.
+
+The fix is to stop asking GTK and remember the answer: `wxWindowGTK` now
+holds the `GdkFrameClock*` it connected to, with a weak pointer on it so the
+field clears itself if the clock dies first, and disconnects from that. A
+re-realize that hands out a different clock now also releases the old one,
+which the previous code could not do either.
+
+With that, `test_gui` under GTK4 in the CI configuration runs to completion:
+**502 passed / 1 failed of 503**, the one being `TextCtrl::HitTestSingleLine`
+`Scrolled`. `wxDVC::SingleSelection` passes in this configuration -- the
+selection-on-focus effect described earlier depends on which test ran before
+it, and this link order does not trigger it.
+
+The general point, again: this bug was in the port from the beginning, in
+code every wxWindow runs, and no amount of running the development build
+would have shown it. It took a differently linked build to change the test
+order.

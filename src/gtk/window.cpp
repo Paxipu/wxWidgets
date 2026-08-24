@@ -3792,11 +3792,13 @@ static void frame_clock_layout_after(GdkFrameClock*, wxWindowGTK* win)
 // destroyed several test cases earlier.
 void wxWindowGTK::GTKDisconnectFrameClock()
 {
-    if (!IsTopLevel() || m_widget == nullptr)
+    if (!m_frameClock)
         return;
 
-    if (GdkFrameClock* const clock = gtk_widget_get_frame_clock(m_widget))
-        g_signal_handlers_disconnect_by_data(clock, this);
+    g_signal_handlers_disconnect_by_data(m_frameClock, this);
+    g_object_remove_weak_pointer(G_OBJECT(m_frameClock),
+                                 reinterpret_cast<gpointer*>(&m_frameClock));
+    m_frameClock = nullptr;
 }
 #endif // GTK_CHECK_VERSION(3,8,0)
 
@@ -3904,11 +3906,21 @@ void wxWindowGTK::GTKHandleRealized()
     if (IsTopLevel() && gtk_check_version(3,8,0) == nullptr)
     {
         GdkFrameClock* clock = gtk_widget_get_frame_clock(m_widget);
-        if (clock &&
-            !g_signal_handler_find(clock, G_SIGNAL_MATCH_DATA, 0, 0, nullptr, nullptr, this))
+
+        // Re-realizing can hand us a different clock, and the old one keeps
+        // its handlers -- and its pointer to this window -- until told
+        // otherwise, so let go of it first.
+        if (clock != m_frameClock)
+            GTKDisconnectFrameClock();
+
+        if (clock && !m_frameClock)
         {
             g_signal_connect(clock, "layout", G_CALLBACK(frame_clock_layout), this);
             g_signal_connect_after(clock, "layout", G_CALLBACK(frame_clock_layout_after), this);
+
+            m_frameClock = clock;
+            g_object_add_weak_pointer(G_OBJECT(clock),
+                                      reinterpret_cast<gpointer*>(&m_frameClock));
         }
     }
 #endif

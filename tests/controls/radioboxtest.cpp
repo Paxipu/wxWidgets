@@ -180,6 +180,11 @@ TEST_CASE_METHOD(RadioBoxTestCase, "RadioBox::Selection", "[radiobox][selection]
     CHECK( m_radio->GetStringSelection() == "item 2" );
 }
 
+// Under wxQt focusing the box leaves the focus on no wxWindow at all --
+// wxWindow::FindFocus() returns null -- even though the box does get the focus
+// event, so only the events are checked there and this helper is not needed.
+#ifndef __WXQT__
+
 // Where the focus really ends up after giving it to a wxRadioBox is not the
 // same everywhere: under MSW the control is composite and wxRadioBox::SetFocus()
 // forwards to one of the wxRadioButtons inside it, so the focus is in the box
@@ -190,6 +195,8 @@ static wxWindow* FocusInsideRadioBoxAsBox(wxRadioBox* radio)
 
     return focus && radio->IsDescendant(focus) ? radio : focus;
 }
+
+#endif // !__WXQT__
 
 TEST_CASE_METHOD(RadioBoxTestCase, "RadioBox::Focus", "[radiobox][focus]")
 {
@@ -202,9 +209,6 @@ TEST_CASE_METHOD(RadioBoxTestCase, "RadioBox::Focus", "[radiobox][focus]")
     m_radio->SetFocus();
     wxYield();
 
-    // Under wxQt focusing the box leaves the focus on no wxWindow at all --
-    // wxWindow::FindFocus() returns null -- even though the focus event below
-    // still arrives, so only check where the focus went on the other ports.
 #ifndef __WXQT__
     CHECK_SAME_WINDOW( FocusInsideRadioBoxAsBox(m_radio), m_radio );
 #endif // !__WXQT__

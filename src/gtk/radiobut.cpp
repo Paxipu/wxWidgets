@@ -51,6 +51,62 @@ void gtk_radiobutton_clicked_callback( GtkToggleButton *button, wxRadioButton *r
     event.SetEventObject( rb );
     rb->HandleWindowEvent( event );
 }
+
+#ifdef __WXGTK4__
+
+// "toggled" only says that the selection changed, while GTK3's "clicked" said
+// that the button was clicked, whether or not that changed anything. Clicking
+// a radio button which is already selected therefore went unreported here,
+// even though every other port sends wxEVT_RADIOBUTTON for it -- and the
+// RadioButtonTestCase::Click test, which clicks the single button of its
+// group, expects exactly that.
+//
+// So watch the click as well, and report one when the button came out of it
+// selected without "toggled" having said so.
+
+// Remember what the button was before the click, to tell the two apart.
+static const char* const wxGTK_RADIO_WAS_ACTIVE = "wx-radio-was-active";
+
+static void
+wx_gtk_radio_pressed(GtkGestureClick* gesture, int, double, double, wxRadioButton*)
+{
+    GtkWidget* const w =
+        gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
+
+    g_object_set_data(G_OBJECT(w), wxGTK_RADIO_WAS_ACTIVE,
+                      GINT_TO_POINTER(
+                          gtk_check_button_get_active(GTK_CHECK_BUTTON(w))));
+}
+
+static void
+wx_gtk_radio_released(GtkGestureClick* gesture, int, double x, double y,
+                      wxRadioButton* rb)
+{
+    if (g_blockEventsOnDrag) return;
+
+    GtkWidget* const w =
+        gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
+    // A release which wandered off the button does not activate it, so it must
+    // not report anything either.
+    if ( x < 0 || y < 0 ||
+            x >= gtk_widget_get_width(w) || y >= gtk_widget_get_height(w) )
+        return;
+
+    // This runs before the button acts on the click, so the state to judge by
+    // is the one recorded at press time. Already selected means the click
+    // cannot change anything and "toggled" will stay silent -- exactly the
+    // case that needs reporting here. Not selected means the click will select
+    // it and "toggled" will report that itself, so keep quiet.
+    if ( !g_object_get_data(G_OBJECT(w), wxGTK_RADIO_WAS_ACTIVE) )
+        return;
+
+    wxCommandEvent event( wxEVT_RADIOBUTTON, rb->GetId());
+    event.SetInt( rb->GetValue() );
+    event.SetEventObject( rb );
+    rb->HandleWindowEvent( event );
+}
+
+#endif // __WXGTK4__
 }
 
 //-----------------------------------------------------------------------------
@@ -121,15 +177,21 @@ bool wxRadioButton::Create( wxWindow *parent,
 #ifdef __WXGTK4__
     m_widget = gtk_check_button_new_with_label( label.utf8_str() );
 
-    if (HasFlag(wxRB_SINGLE))
+    if (HasFlag(wxRB_SINGLE) || !radioButtonGroup)
     {
+        // GTK4 has no call for starting a group: a GtkCheckButton is in one
+        // only once another button has been linked to it, and until then it is
+        // an ordinary check box -- drawn as one, and switched off again by a
+        // second click on it. So a button which starts its own group needs the
+        // hidden partner just as much as a wxRB_SINGLE one does, or it would
+        // not be a radio button at all.
         m_hiddenButton = gtk_check_button_new();
         g_object_ref_sink(m_hiddenButton);
 
         gtk_check_button_set_group( GTK_CHECK_BUTTON(m_widget),
                                     GTK_CHECK_BUTTON(m_hiddenButton) );
     }
-    else if (radioButtonGroup)
+    else
     {
         gtk_check_button_set_group( GTK_CHECK_BUTTON(m_widget),
                                     GTK_CHECK_BUTTON(radioButtonGroup) );
@@ -163,6 +225,17 @@ bool wxRadioButton::Create( wxWindow *parent,
 #ifdef __WXGTK4__
     g_signal_connect_after (m_widget, "toggled",
                             G_CALLBACK (gtk_radiobutton_clicked_callback), this);
+
+    // See the comment above wx_gtk_radio_pressed(): "toggled" alone misses a
+    // click on an already selected button.
+    GtkGesture* const clickGesture = gtk_gesture_click_new();
+    g_signal_connect (clickGesture, "pressed",
+                      G_CALLBACK (wx_gtk_radio_pressed), this);
+    g_signal_connect (clickGesture, "released",
+                      G_CALLBACK (wx_gtk_radio_released), this);
+    gtk_event_controller_set_propagation_phase(
+        GTK_EVENT_CONTROLLER(clickGesture), GTK_PHASE_CAPTURE);
+    gtk_widget_add_controller (m_widget, GTK_EVENT_CONTROLLER(clickGesture));
 #else
     g_signal_connect_after (m_widget, "clicked",
                             G_CALLBACK (gtk_radiobutton_clicked_callback), this);

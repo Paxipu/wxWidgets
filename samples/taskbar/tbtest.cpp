@@ -92,7 +92,7 @@ MyDialog::MyDialog(const wxString& title, bool taskBarAvailable)
     wxSizer * const sizerTop = new wxBoxSizer(wxVERTICAL);
 
     wxSizerFlags flags;
-    flags.DoubleBorder(wxALL);
+    flags.DoubleBorder();
 
     sizerTop->Add(new wxStaticText
                       (

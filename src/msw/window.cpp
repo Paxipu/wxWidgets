@@ -79,6 +79,7 @@
 #include "wx/msw/private/keyboard.h"
 #include "wx/msw/private/metrics.h"
 #include "wx/msw/private/paint.h"
+#include "wx/msw/private/power.h"
 #include "wx/msw/private/winstyle.h"
 #include "wx/msw/dcclient.h"
 #include "wx/msw/seh.h"
@@ -3846,10 +3847,18 @@ wxWindowMSW::MSWHandleMessage(WXLRESULT *result,
 
                     case wxBORDER_STATIC:
                     case wxBORDER_RAISED:
-                    case wxBORDER_SUNKEN:
                         // In dark mode, explicitly draw these border styles because
                         // the default drawing uses light mode colours.
                         drawBorder = wxMSWDarkMode::IsActive();
+                        break;
+
+                    case wxBORDER_SUNKEN:
+                        // In dark mode, explicitly draw the border unless the window
+                        // draws a good border itself. When the window draws a good
+                        // border, DoTranslateBorder() translates wxBORDER_THEME to
+                        // wxBORDER_SUNKEN.
+                        drawBorder = wxMSWDarkMode::IsActive() &&
+                            MSWShouldDrawDarkThemeBorder();
                         break;
 
                     case wxBORDER_NONE:
@@ -3923,9 +3932,8 @@ void wxWindowMSW::MSWDrawThemeBorder(WXHDC hdc)
     {
         // There does not seem to be a theme class that draws a good
         // border on all supported versions of Windows. Manually draw a
-        // 1-pixel thick border. Use the observed colour of the simple
-        // border, WS_BORDER.
-        AutoHBRUSH brushBorder(0x646464);
+        // 1-pixel thick border.
+        AutoHBRUSH brushBorder(wxMSWDarkMode::GetBorderPen().GetColour().GetPixel());
         ::FrameRect(hdc, &rcBorder, brushBorder);
         // Draw the background with consecutively smaller 1-pixel thick
         // rectangles.
@@ -4150,19 +4158,24 @@ void wxWindowMSW::MSWGetDarkModeSupport(MSWDarkModeSupport& support) const
 
 void wxWindowMSW::MSWSetDarkOrLightMode(SetMode WXUNUSED(setmode))
 {
+    const wchar_t* themeName = nullptr;
+    const wchar_t* themeId = nullptr;
+
     MSWDarkModeSupport support;
+    MSWGetDarkModeSupport(support);
     if ( wxMSWDarkMode::IsActive() )
     {
-        MSWGetDarkModeSupport(support);
+        themeName = support.themeName;
+        themeId = support.themeId;
     }
-    else
+    else if ( support.isLightModeThemed )
     {
-        // This is the theme name for light mode.
-        support.themeName = L"Explorer";
+        themeName = L"Explorer";
     }
+    //else: Disable themes.
 
     // This updates scroll bars, if there are any.
-    wxMSWDarkMode::AllowForWindow(m_hWnd, support.themeName, support.themeId);
+    wxMSWDarkMode::AllowForWindow(m_hWnd, themeName, themeId);
 
     // If the window class has a background brush, update it.
     // This is the value in WNDCLASS::hbrBackground.
@@ -4176,6 +4189,13 @@ void wxWindowMSW::MSWSetDarkOrLightMode(SetMode WXUNUSED(setmode))
         HBRUSH hbr = GetHbrushOf(*brush);
         ::SetClassLongPtr(m_hWnd, GCLP_HBRBACKGROUND, LONG_PTR(hbr));
     }
+
+#if wxUSE_TOOLTIPS
+    if ( m_tooltip )
+    {
+        wxToolTip::SetDarkOrLightMode();
+    }
+#endif
 }
 
 // ===========================================================================
@@ -4311,6 +4331,15 @@ bool wxWindowMSW::HandleQueryEndSession(long logOff, bool *mayEnd)
 {
     if ( gs_queryEndSession == QueryEndSession::Unknown )
     {
+        if ( (logOff & ENDSESSION_LOGOFF) == 0 &&
+             wxMSWPowerResourceIsSystemBlockActive() )
+        {
+            wxMSWUpdateShutdownBlockReason();
+            gs_queryEndSession = QueryEndSession::Veto;
+            *mayEnd = false;
+            return true;
+        }
+
         // Make sure we won't generate another wxEVT_QUERY_END_SESSION.
         gs_queryEndSession = QueryEndSession::Allow;
 

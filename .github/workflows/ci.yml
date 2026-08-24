@@ -97,7 +97,7 @@ jobs:
           - name: Ubuntu 24.04 wxGTK 4 - WIP port
             runner: ubuntu-24.04
             gtk_version: 4
-            configure_flags: --disable-uiactionsim
+            configure_flags: --disable-uiactionsim --enable-accessibility
             # Still true: the port emits deprecation warnings, tracked in #78.
             allow_warnings: true
             use_xvfb: true
@@ -397,6 +397,30 @@ jobs:
           python3 build/tools/gtk4-property-names.py || \
             test $? -eq 77
 
+      - name: Checking GTK4 accessibility against GTK itself
+        if: matrix.gtk_version == 4
+        run: |
+          # wxUSE_ACCESSIBILITY under GTK4 rests on three things GTK4 added in
+          # 4.10, and on one GTK bug. None of them are visible at compile time:
+          # a GTK upgrade that changed any of them would leave wxAccessible
+          # quietly describing nothing, or describing it wrongly, with the
+          # suite still green. These need only GTK, so they run before the
+          # library is built. See docs/gtk/gtk4-accessibility.md.
+          gcc -o /tmp/gtk4-a11y-virtual-child \
+              docs/gtk/probes/gtk4-a11y-virtual-child.c \
+              $(pkg-config --cflags --libs gtk4)
+          GTK_A11Y=test xvfb-run -a /tmp/gtk4-a11y-virtual-child
+
+          # And the clipboard: releasing the selection and claiming it again
+          # in one turn of the main loop loses what was just put on it, which
+          # is why wxClipboard::Clear() defers the release. If GTK ever fixes
+          # that, the deferral becomes unnecessary rather than wrong, but the
+          # other three orderings must stay reliable.
+          gcc -o /tmp/gtk4-clipboard-reclaim \
+              docs/gtk/probes/gtk4-clipboard-reclaim.c \
+              $(pkg-config --cflags --libs gtk4)
+          xvfb-run -a /tmp/gtk4-clipboard-reclaim
+
       - name: Building
         run: |
           if [ ${{ matrix.use_asan }} ]; then
@@ -411,6 +435,21 @@ jobs:
             /bin/sh -xc "`make -n install_webkit2_ext | sed -n -e 's/-fsanitize=address//gp'`"
           fi
           make -k $wxBUILD_ARGS "CXXFLAGS=$wxMAKEFILE_ERROR_CXXFLAGS"
+
+      - name: Checking the wxAccessible bridge
+        if: matrix.gtk_version == 4
+        run: |
+          # The end-to-end check: a wxAccessible's name, role, states, bounds
+          # and child tree, and a real wxGrid's twelve cells and headers,
+          # read back out of GTK. Unlike the two probes above this needs the
+          # library, and an accessibility-enabled one, so it cannot live in
+          # tests/ -- wx-config does not name GTK's include paths.
+          g++ -o /tmp/gtk4-a11y-wx-bridge \
+              docs/gtk/probes/gtk4-a11y-wx-bridge.cpp \
+              $(./wx-config --cxxflags --libs core,base) \
+              $(pkg-config --cflags --libs gtk4)
+          GTK_A11Y=test LD_LIBRARY_PATH=$(pwd)/lib \
+              xvfb-run -a /tmp/gtk4-a11y-wx-bridge
 
       - name: Building tests
         working-directory: tests

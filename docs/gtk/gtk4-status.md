@@ -4530,3 +4530,49 @@ worth doing whenever a failure appears on a port the work never touched.
 `wxTopLevel::Show` fails as well, on wxGTK and wxQt alike, because the test
 only skips its `IsActive()` check when it knows there is no window manager.
 Worth remembering before reading anything into a local run.
+
+### The GTK4 job's first run, and what it had never covered
+
+With the cache key fixed, the wxGTK4 job ran for the first time -- and failed
+to build, on a file no GTK4 build here had ever compiled:
+
+    src/unix/mediactrl.cpp:1055: error: 'gtk_widget_set_double_buffered'
+                                        was not declared in this scope
+
+The cause is a gap in the local configuration rather than anything subtle. The
+GTK4 build used for development was `--disable-shared --without-opengl
+--disable-stc`, on a machine with no GStreamer development packages, so three
+whole libraries had never been through a GTK4 compiler:
+
+* `wxgl` -- `glcanvas.cpp`, `glegl.cpp`, `glx11.cpp` and the two Unix files
+  the port modified,
+* `wxstc`, including the `ScintillaWX.cpp` change the port made,
+* `wxmedia`, both GStreamer backends.
+
+The CI job builds all of them. Reproducing it needed only a second build
+directory configured the way CI configures, plus `libgstreamer1.0-dev`,
+`libgstreamer-plugins-base1.0-dev` and the Mesa development packages; with
+those, the failure appeared immediately and the fix could be checked locally.
+
+The fix is the one already applied to `mediactrl_gstplayer.cpp`, mirrored into
+the other GStreamer backend. Which of the two gets built depends on
+`wxUSE_GSTREAMER_PLAYER`, which needs `gstreamer-player-1.0` from
+plugins-bad -- absent on the CI image and absent here, so CI builds the
+`mediactrl.cpp` one and the port had only ever ported the other. Both now:
+
+* `gtk_widget_set_double_buffered()` is gone in GTK4 (a no-op since GTK+ 3.14)
+  and the control sets `m_noExpose`, so nothing paints over the video anyway;
+* there is no `draw` signal to connect to, so the realize handler sets a
+  render rectangle instead;
+* `wxGtkGetIdFromWidget()` hands GStreamer the *top level's* surface, because
+  an ordinary GTK4 widget has no native window -- so the video has to be
+  confined to the control's area with
+  `gst_video_overlay_set_render_rectangle()`, and repositioned from `Move()`
+  whenever the control moves or is resized. This is the same shape as the
+  GTK+ 3 Wayland path, where subsurfaces don't exist either.
+
+With that, the CI configuration -- shared, OpenGL, wxSTC, wxMedia, all samples
+and both test binaries -- builds clean under GTK4. The lesson is worth keeping
+for any port of this size: a development build configured for fast iteration
+is a *subset* of what CI compiles, and the difference is invisible until CI
+runs. Configuring one build directory the way CI does, once, is cheap.

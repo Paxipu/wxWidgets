@@ -247,6 +247,28 @@ wxIMPLEMENT_DYNAMIC_CLASS(wxGStreamerMediaBackend, wxMediaBackend);
 // TODO: Do a DEBUG_MAIN_THREAD/install_idle_handler here?
 //-----------------------------------------------------------------------------
 #ifdef __WXGTK__
+#ifdef __WXGTK4__
+
+// Under GTK4 an ordinary widget has no native window of its own, so the video
+// goes onto the top level's surface (see wxGtkGetIdFromWidget()) and has to be
+// confined to the control's area explicitly -- and kept there whenever the
+// control moves or is resized, which is what Move() below does.
+static void update_render_rectangle(GtkWidget* widget, wxGStreamerMediaBackend* be)
+{
+    if ( !be->m_xoverlay )
+        return;
+
+    GdkRectangle rect;
+    if ( !wxGtkGetVideoRect(widget, &rect) )
+        return;
+
+    gst_video_overlay_set_render_rectangle(be->m_xoverlay,
+                                           rect.x, rect.y,
+                                           rect.width, rect.height);
+}
+
+#else // !__WXGTK4__
+
 extern "C" {
 static gboolean
 #ifdef __WXGTK3__
@@ -292,6 +314,8 @@ expose_event(GtkWidget* widget, GdkEventExpose* event, wxGStreamerMediaBackend* 
     return FALSE;
 }
 }
+
+#endif // __WXGTK4__/!__WXGTK4__
 #endif // wxGTK
 
 //-----------------------------------------------------------------------------
@@ -313,12 +337,20 @@ static gint gtk_window_realize_callback(GtkWidget* widget,
 #else
     gst_x_overlay_set_xwindow_id( GST_X_OVERLAY(be->m_xoverlay), window_id);
 #endif
+#ifdef __WXGTK4__
+    // The handle above is the whole top level's, so the render rectangle is
+    // what keeps the video inside the control, and there is no "draw" signal
+    // to connect to any more: wxPizza paints from a snapshot vfunc and this
+    // control doesn't paint at all, see m_noExpose in CreateControl().
+    update_render_rectangle(widget, be);
+#else
     GtkWidget* w = be->GetControl()->m_wxwindow;
 #ifdef __WXGTK3__
     g_signal_connect(w, "draw", G_CALLBACK(draw), be);
 #else
     g_signal_connect(w, "expose_event", G_CALLBACK(expose_event), be);
 #endif
+#endif // __WXGTK4__/!__WXGTK4__
     return 0;
 }
 }
@@ -685,12 +717,16 @@ void wxGStreamerMediaBackend::SetupXOverlay()
 #endif
 
 #ifdef __WXGTK__
+#ifdef __WXGTK4__
+        update_render_rectangle(m_ctrl->m_wxwindow, this);
+#else
         GtkWidget* w = m_ctrl->m_wxwindow;
 #ifdef __WXGTK3__
         g_signal_connect(w, "draw", G_CALLBACK(draw), this);
 #else
         g_signal_connect(w, "expose_event", G_CALLBACK(expose_event), this);
 #endif
+#endif // __WXGTK4__/!__WXGTK4__
     } // end if GtkPizza realized
 #endif
 }
@@ -1047,10 +1083,14 @@ bool wxGStreamerMediaBackend::CreateControl(wxControl* ctrl, wxWindow* parent,
         return false;
     }
 
-#ifdef __WXGTK__
+#if defined(__WXGTK__) && !defined(__WXGTK4__)
     // Turn off double-buffering so that
     // so it doesn't draw over the video and cause sporadic
     // disappearances of the video
+    //
+    // GTK4 removed gtk_widget_set_double_buffered() (it was already a no-op
+    // under GTK3), and m_noExpose above means we don't paint over the video
+    // in the first place there.
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     gtk_widget_set_double_buffered(m_ctrl->m_wxwindow, FALSE);
     wxGCC_WARNING_RESTORE(deprecated-declarations)
@@ -1457,6 +1497,14 @@ void wxGStreamerMediaBackend::Move(int WXUNUSED(x),
                                    int WXUNUSED(w),
                                    int WXUNUSED(h))
 {
+#ifdef __WXGTK4__
+    // The overlay covers the whole top level surface here, so it does have to
+    // be repositioned whenever the control moves or is resized. The values
+    // passed in are relative to the parent, so recompute them from the widget
+    // rather than using them directly.
+    if ( m_ctrl && m_ctrl->m_wxwindow )
+        update_render_rectangle(m_ctrl->m_wxwindow, this);
+#endif // __WXGTK4__
 }
 
 //-----------------------------------------------------------------------------

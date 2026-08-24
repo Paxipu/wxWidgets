@@ -832,16 +832,15 @@ TEST_CASE_METHOD(WindowTestCase, "Window::RefreshRectUpdateRegion", "[window]")
 
 #ifdef __WXGTK4__
 
-// GTK4 requires that a widget never be allocated less than its minimum size.
-// Given less, its layout managers subtract padding from what they were handed
-// and pass the negative remainder down, so the complaint surfaces on some
-// grandchild rather than where the too-small size came from.
-//
-// wx does ask for sizes that small, legitimately: a window sized from its best
-// size before its contents exist keeps that size until wx recalculates, and
-// GTK can lay out in between. wxPizza::size_allocate_child() therefore has to
-// hand GTK something it accepts. See #95.
-TEST_CASE_METHOD(WindowTestCase, "wxWindow::MinimumAllocation", "[window][size]")
+// A window given a size has to report that size back, whatever GTK would
+// rather draw. This pins #125: a clamp in wxPizza::size_allocate_child(),
+// added for #95, quietly replaced any size below the child's minimum with that
+// minimum -- and since the size_allocate handler reads wx's own m_width and
+// m_height back out of the allocation, GetSize() then reported the
+// replacement. An application placing siblings by hand got overlapping
+// controls under GTK4 and not under GTK+ 2 or GTK+ 3, which both report the
+// size that was asked for.
+TEST_CASE_METHOD(WindowTestCase, "wxWindow::SetSizeIsHonoured", "[window][size]")
 {
     // A button with a real label has a native minimum size well above what is
     // asked for below. The fixture destroys it with the rest of the children.
@@ -852,22 +851,7 @@ TEST_CASE_METHOD(WindowTestCase, "wxWindow::MinimumAllocation", "[window][size]"
     button->SetSize(0, 0, 10, 4);
     YieldForAWhile();
 
-    GtkWidget* const widget = button->m_widget;
-    REQUIRE( widget != nullptr );
-
-    const int allocWidth = gtk_widget_get_allocated_width(widget);
-    const int allocHeight = gtk_widget_get_allocated_height(widget);
-
-    int minWidth = 0, minHeight = 0;
-    gtk_widget_measure(widget, GTK_ORIENTATION_HORIZONTAL, -1,
-                       &minWidth, nullptr, nullptr, nullptr);
-    gtk_widget_measure(widget, GTK_ORIENTATION_VERTICAL, allocWidth,
-                       &minHeight, nullptr, nullptr, nullptr);
-
-    INFO("allocated " << allocWidth << "x" << allocHeight
-         << ", GTK minimum " << minWidth << "x" << minHeight);
-    CHECK( allocWidth >= minWidth );
-    CHECK( allocHeight >= minHeight );
+    CHECK( button->GetSize() == wxSize(10, 4) );
 }
 
 #endif // __WXGTK4__

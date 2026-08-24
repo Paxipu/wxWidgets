@@ -183,7 +183,13 @@ wxClipboard::wxClipboard()
 
 wxClipboard::~wxClipboard()
 {
-    Clear();
+    // Unlike Clear(), this cannot be deferred: there will be no more main loop
+    // to defer it to.
+    for ( int kind = Primary; kind <= Clipboard; kind++ )
+    {
+        GTKCancelRelease(Kind(kind));
+        GTKDoRelease(Kind(kind));
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -278,14 +284,77 @@ bool wxClipboard::DoIsSupported(const wxDataFormat& format)
 // wxClipboard public API implementation
 // ----------------------------------------------------------------------------
 
+extern "C" {
+
+static gboolean wx_clipboard_release_primary(gpointer user_data)
+{
+    static_cast<wxClipboard*>(user_data)->GTKDoRelease(wxClipboard::Primary);
+
+    return G_SOURCE_REMOVE;
+}
+
+static gboolean wx_clipboard_release_clipboard(gpointer user_data)
+{
+    static_cast<wxClipboard*>(user_data)->GTKDoRelease(wxClipboard::Clipboard);
+
+    return G_SOURCE_REMOVE;
+}
+
+} // extern "C"
+
+void wxClipboard::GTKDoRelease(Kind kind)
+{
+    m_idRelease[kind] = 0;
+
+    GdkDisplay* const display = gdk_display_get_default();
+    if ( !display )
+        return;
+
+    GdkClipboard* const clipboard =
+        kind == Primary ? gdk_display_get_primary_clipboard(display)
+                        : gdk_display_get_clipboard(display);
+
+    gdk_clipboard_set_content(clipboard, nullptr);
+}
+
+void wxClipboard::GTKCancelRelease(Kind kind)
+{
+    if ( m_idRelease[kind] )
+    {
+        g_source_remove(m_idRelease[kind]);
+        m_idRelease[kind] = 0;
+    }
+}
+
 void wxClipboard::Clear()
 {
-    if ( GdkClipboard* const clipboard = GTKGetClipboard() )
-        gdk_clipboard_set_content(clipboard, nullptr);
-
+    // The obvious thing to do here is to give up ownership at once, with
+    // gdk_clipboard_set_content(clipboard, nullptr). It cannot be done,
+    // because applications routinely clear the clipboard immediately before
+    // putting something new on it -- SetData() is documented as replacing the
+    // contents, and callers make that explicit -- and under GTK4/X11 giving up
+    // ownership and claiming it again without returning to the main loop in
+    // between loses the new contents entirely: the SelectionClear caused by
+    // the release is acted on after the claim, and takes what was just set
+    // with it. Measured on GTK 4.14.5, and reproducible with no wx involved at
+    // all: see docs/gtk/probes/gtk4-clipboard-reclaim.c, where that sequence
+    // fails ten times out of ten while every other one is reliable.
+    //
+    // So the release waits for the main loop, and AddData() cancels it if a
+    // new claim comes first. What wx itself reports is cleared immediately
+    // either way; only the moment the X selection is given up moves.
     Data().reset();
 
     m_formatSupported = false;
+
+    const Kind kind = m_usePrimary ? Primary : Clipboard;
+    if ( !m_idRelease[kind] )
+    {
+        m_idRelease[kind] = g_idle_add(kind == Primary
+                                          ? wx_clipboard_release_primary
+                                          : wx_clipboard_release_clipboard,
+                                       this);
+    }
 }
 
 bool wxClipboard::Flush()
@@ -320,6 +389,10 @@ bool wxClipboard::AddData( wxDataObject *data )
 
     // we can only store one wxDataObject so clear the old one
     Data().reset(data);
+
+    // Claiming the clipboard supersedes any release Clear() left pending, and
+    // must, or it would undo this one.
+    GTKCancelRelease(m_usePrimary ? Primary : Clipboard);
 
     GdkClipboard* const clipboard = GTKGetClipboard();
     if ( !clipboard )

@@ -4800,3 +4800,62 @@ refused elsewhere. The default is unchanged: off everywhere but wxMSW.
 
 The details, the full mapping, and the list of `wxAccessibleBase` members that
 GTK4 has no counterpart for are in `docs/gtk/gtk4-accessibility.md`.
+
+## Progress update 50: the clipboard was losing everything put on it
+
+The upstream resync brought in `RichTextCtrlTestCase::CutCopyPaste`, and the
+wxGTK4 CI job failed on it -- 508 of 509 -- while wxGTK3 passed. The failure
+looked like a rich text problem and was not.
+
+A wxWidgets program doing nothing but this:
+
+```cpp
+wxClipboardLocker lock;
+wxTheClipboard->Clear();
+wxTheClipboard->SetData(new wxTextDataObject("hello"));
+```
+
+ends up, one turn of the main loop later, with an empty clipboard.
+`SetData()` returns true, the content is there immediately afterwards, and
+then it is gone: `gdk_clipboard_is_local()` goes back to false and
+`gdk_clipboard_get_formats()` reports nothing.
+
+`docs/gtk/probes/gtk4-clipboard-reclaim.c` takes wx out of it entirely and
+tries the four orderings against GDK directly, ten times each:
+
+| sequence | clipboard kept |
+| --- | --- |
+| `set_content(provider)` | 10/10 |
+| `set_content(NULL)` then `set_content(provider)` | **0/10** |
+| `set_content(NULL)`, iterate the main loop, `set_content(provider)` | 10/10 |
+| `set_content(providerA)` then `set_content(providerB)` | 10/10 |
+
+So it is release-then-claim without returning to the main loop in between:
+GDK's X11 backend acts on the `SelectionClear` caused by the release *after*
+the claim has already happened, and takes the newly set content with it.
+Claiming over an existing claim is fine. Releasing is fine if the loop runs
+first. Measured on GTK 4.14.5 under X11; not checked against newer GTK or
+under Wayland.
+
+That is exactly the sequence `wxClipboard` produced, because `Clear()` gave up
+ownership immediately and applications clear before setting -- the test does it
+in as many words.
+
+### The fix
+
+`Clear()` still empties everything wx reports at once, but the release of the
+X selection waits for an idle callback, and `AddData()` cancels that callback
+if a new claim comes first. Only the moment the selection is given up moves;
+nothing observable through the wxWidgets API changes. The destructor releases
+directly, since there is no main loop left to defer to.
+
+Deferred per clipboard kind rather than globally: clearing the primary
+selection must not cancel a pending release of the clipboard, or the other way
+round.
+
+### What it was hiding
+
+This was not one failing test. Nothing a wxGTK4 application copied could be
+pasted anywhere, including into itself, whenever the application cleared the
+clipboard first -- which is the documented way to replace its contents. The
+test suite only noticed because the new test reads back what it wrote.

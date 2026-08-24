@@ -78,6 +78,13 @@ public:
 
     // clear the data for the given clipboard kind
     void GTKClearData(Kind kind);
+
+    // Give up ownership of the given clipboard, and cancel a release Clear()
+    // scheduled for it but not yet done. See the comment on Clear() in
+    // clipbrd.cpp for why the release is deferred at all. Public because the
+    // idle callback that performs it has to reach them.
+    void GTKDoRelease(Kind kind);
+    void GTKCancelRelease(Kind kind);
 #else
     // get our clipboard item (depending on m_usePrimary value)
     GdkAtom GTKGetClipboardAtom() const;
@@ -149,6 +156,12 @@ private:
     // ID of the connection to "selection_get" signal, initially 0.
     unsigned long m_idSelectionGetHandler;
 #endif // !__WXGTK4__
+
+#ifdef __WXGTK4__
+    // Per kind, the idle source that will give up ownership of that
+    // clipboard, or 0. Indexed by Kind.
+    unsigned m_idRelease[2] = { 0, 0 };
+#endif // __WXGTK4__
 
     bool m_open;
     bool m_formatSupported;

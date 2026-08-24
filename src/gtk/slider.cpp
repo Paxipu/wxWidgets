@@ -327,7 +327,7 @@ wx_slider_after_release(void* data)
 }
 
 static void
-wx_slider_released(GtkGestureClick*, int, double, double, wxSlider* win)
+wx_slider_finish_drag(wxSlider* win)
 {
     win->m_mouseButtonDown = false;
     if (win->m_isScrolling)
@@ -336,6 +336,33 @@ wx_slider_released(GtkGestureClick*, int, double, double, wxSlider* win)
         if (win->m_afterReleaseIdle == 0)
             win->m_afterReleaseIdle = g_idle_add(wx_slider_after_release, win);
     }
+}
+
+static void
+wx_slider_released(GtkGestureClick*, int, double, double, wxSlider* win)
+{
+    wx_slider_finish_drag(win);
+}
+
+// GtkRange claims the sequence for itself the moment the thumb is grabbed, and
+// a gesture whose sequence was claimed elsewhere is never told about the
+// release: dragging the thumb therefore ended without wxEVT_SCROLL_THUMBRELEASE
+// ever being sent, which is what SliderTestCase::Thumb catches. ("end" does
+// arrive eventually, but only when the widget goes away, which is far too
+// late.) A legacy controller sees every event whatever the gestures decide, so
+// the release is picked up there; both paths funnel into the same place, which
+// does nothing twice thanks to the m_afterReleaseIdle check.
+static gboolean
+wx_slider_legacy_event(GtkEventControllerLegacy*, GdkEvent* event,
+                       wxSlider* win)
+{
+    if ( gdk_event_get_event_type(event) == GDK_BUTTON_RELEASE &&
+            gdk_button_event_get_button(event) == GDK_BUTTON_PRIMARY )
+    {
+        wx_slider_finish_drag(win);
+    }
+
+    return GDK_EVENT_PROPAGATE;
 }
 }
 
@@ -596,6 +623,11 @@ bool wxSlider::Create(wxWindow *parent,
                                                    GTK_PHASE_CAPTURE);
         g_signal_connect(click, "pressed", G_CALLBACK(wx_slider_pressed), this);
         g_signal_connect(click, "released", G_CALLBACK(wx_slider_released), this);
+
+        GtkEventController* const legacy = gtk_event_controller_legacy_new();
+        g_signal_connect(legacy, "event",
+                         G_CALLBACK(wx_slider_legacy_event), this);
+        gtk_widget_add_controller(m_scale, legacy);
         gtk_widget_add_controller(m_scale, GTK_EVENT_CONTROLLER(click));
     }
 #else // !__WXGTK4__

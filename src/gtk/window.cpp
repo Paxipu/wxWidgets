@@ -3387,6 +3387,44 @@ extern "C" {
 // competes for the sequence and both events always arrive, which is why
 // CAPTURE is not used instead: it would fix the release at the cost of wx no
 // longer being able to stop a native control acting at all, which is worse.
+// GTK4 dropped the query that used to answer "which mouse buttons are down
+// right now": gdk_device_get_modifier_state() covers the keyboard only, so
+// wxGetMouseState() would report every button as up, always. Events do still
+// carry the button mask, so it is remembered from them as they arrive.
+//
+// Motion keeps it honest -- a press or release that wx never saw, because a
+// native widget took it, is corrected by the next movement -- while the press
+// and release handlers make it right immediately, without waiting for one.
+static GdkModifierType gs_buttonState = GdkModifierType(0);
+
+static constexpr GdkModifierType wxGTK_ALL_BUTTONS_MASK =
+    GdkModifierType(GDK_BUTTON1_MASK | GDK_BUTTON2_MASK | GDK_BUTTON3_MASK |
+                    GDK_BUTTON4_MASK | GDK_BUTTON5_MASK);
+
+static GdkModifierType wxGTKButtonMaskFor(int button)
+{
+    switch ( button )
+    {
+        case 1: return GDK_BUTTON1_MASK;
+        case 2: return GDK_BUTTON2_MASK;
+        case 3: return GDK_BUTTON3_MASK;
+        case 4: return GDK_BUTTON4_MASK;
+        case 5: return GDK_BUTTON5_MASK;
+    }
+
+    return GdkModifierType(0);
+}
+
+// Take the buttons from an event which reports them, i.e. any pointer event.
+static void wxGTKRefreshButtonState(GdkEvent* gdk_event)
+{
+    if ( !gdk_event )
+        return;
+
+    gs_buttonState = GdkModifierType(
+        gdk_event_get_modifier_state(gdk_event) & wxGTK_ALL_BUTTONS_MASK);
+}
+
 static void
 wx_gtk_button_pressed_callback(GtkGestureClick* gesture,
                                int nPress, double x, double y,
@@ -3395,11 +3433,17 @@ wx_gtk_button_pressed_callback(GtkGestureClick* gesture,
     GtkEventController* const c = GTK_EVENT_CONTROLLER(gesture);
 
     GdkEvent* const gdk_event = gtk_event_controller_get_current_event(c);
-    if ( ButtonEventAlreadyProcessed(gdk_event) )
-        return;
 
     const int button = int(gtk_gesture_single_get_current_button(
                                 GTK_GESTURE_SINGLE(gesture)));
+
+    // Before the duplicate check below can return: a second delivery of the
+    // same press is still a press, and the state has to hold either way.
+    gs_buttonState =
+        GdkModifierType(gs_buttonState | wxGTKButtonMaskFor(button));
+
+    if ( ButtonEventAlreadyProcessed(gdk_event) )
+        return;
 
     if ( wxGTKImpl::WindowButtonPressCallback(
                 win, gdk_event,
@@ -3417,11 +3461,15 @@ wx_gtk_button_released_callback(GtkGestureClick* gesture,
     GtkEventController* const c = GTK_EVENT_CONTROLLER(gesture);
 
     GdkEvent* const gdk_event = gtk_event_controller_get_current_event(c);
-    if ( ButtonEventAlreadyProcessed(gdk_event) )
-        return;
 
     const int button = int(gtk_gesture_single_get_current_button(
                                 GTK_GESTURE_SINGLE(gesture)));
+
+    gs_buttonState =
+        GdkModifierType(gs_buttonState & ~wxGTKButtonMaskFor(button));
+
+    if ( ButtonEventAlreadyProcessed(gdk_event) )
+        return;
 
     if ( wxGTKImpl::WindowButtonReleaseCallback(
                 win, gdk_event,
@@ -3435,10 +3483,12 @@ static void
 wx_gtk_motion_callback(GtkEventControllerMotion* controller,
                        double x, double y, wxWindowGTK* win)
 {
-    wxGTKImpl::WindowMotionCallback(
-        win,
-        gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(controller)),
-        x, y);
+    GdkEvent* const gdk_event =
+        gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(controller));
+
+    wxGTKRefreshButtonState(gdk_event);
+
+    wxGTKImpl::WindowMotionCallback(win, gdk_event, x, y);
 }
 
 static void
@@ -4010,6 +4060,56 @@ bool wxGetKeyState(wxKeyCode WXUNUSED(key))
 }
 #endif // __WINDOWS__
 
+// Ask the X server where the pointer is, in root -- i.e. screen -- coordinates,
+// and which buttons are down while it is at it.
+//
+// GTK4 has no call for this: gdk_device_get_surface_at_position() answers
+// relative to whichever surface the pointer happens to be over, which is not
+// the same thing and is wrong for anything comparing positions across windows.
+// Wayland does not allow the question to be asked at all, by design, so this
+// only helps under X11 -- but that is where the callers that need it, such as
+// wxAUI's docking hit test, are typically running.
+static bool
+wxGTKQueryPointerX11(GdkDisplay* display, int* x, int* y, GdkModifierType* mask)
+{
+#ifdef GDK_WINDOWING_X11
+    if ( !wxGTKImpl::IsX11(display) )
+        return false;
+
+    Display* const xdisplay = GDK_DISPLAY_XDISPLAY(display);
+    if ( !xdisplay )
+        return false;
+
+    Window rootRet, childRet;
+    int rootX = 0, rootY = 0, winX = 0, winY = 0;
+    unsigned int stateRet = 0;
+
+    if ( !XQueryPointer(xdisplay, DefaultRootWindow(xdisplay),
+                        &rootRet, &childRet,
+                        &rootX, &rootY, &winX, &winY, &stateRet) )
+    {
+        // The pointer is on another screen: nothing sensible to report.
+        return false;
+    }
+
+    if ( x )
+        *x = rootX;
+    if ( y )
+        *y = rootY;
+    if ( mask )
+        *mask = GdkModifierType(stateRet);
+
+    return true;
+#else
+    wxUnusedVar(display);
+    wxUnusedVar(x);
+    wxUnusedVar(y);
+    wxUnusedVar(mask);
+
+    return false;
+#endif // GDK_WINDOWING_X11
+}
+
 wxMouseState wxGetMouseState()
 {
     wxMouseState ms;
@@ -4027,14 +4127,21 @@ wxMouseState wxGetMouseState()
     // meaningful while the pointer is over one of this application's own
     // windows; see docs/gtk/gtk4-status.md for the tracked limitation.
     GdkDisplay* display = wxGetTopLevelGdkDisplay();
-    GdkSeat* seat = gdk_display_get_default_seat(display);
-    GdkDevice* device = gdk_seat_get_pointer(seat);
-    double dx = 0, dy = 0;
-    if (gdk_device_get_surface_at_position(device, &dx, &dy))
+    if ( !wxGTKQueryPointerX11(display, &x, &y, &mask) )
     {
-        x = gint(dx);
-        y = gint(dy);
-        mask = gdk_device_get_modifier_state(device);
+        GdkSeat* seat = gdk_display_get_default_seat(display);
+        GdkDevice* device = gdk_seat_get_pointer(seat);
+        double dx = 0, dy = 0;
+        if (gdk_device_get_surface_at_position(device, &dx, &dy))
+        {
+            x = gint(dx);
+            y = gint(dy);
+            mask = gdk_device_get_modifier_state(device);
+        }
+
+        // That state has the keyboard modifiers but no mouse buttons at all,
+        // so the buttons come from what the events said; see gs_buttonState.
+        mask = GdkModifierType(mask | gs_buttonState);
     }
 #else
     GdkDisplay* display = wxGetTopLevelGdkDisplay();
@@ -9259,15 +9366,18 @@ void wxGetMousePosition(int* x, int* y)
 {
     GdkDisplay* display = wxGetTopLevelGdkDisplay();
 #ifdef __WXGTK4__
-    // See the identical comment in wxGetMouseState() above: this is only
-    // meaningful while the pointer is over one of this application's own
-    // windows, not truly global screen coordinates.
-    GdkSeat* seat = gdk_display_get_default_seat(display);
-    GdkDevice* device = gdk_seat_get_pointer(seat);
-    double dx = 0, dy = 0;
-    gdk_device_get_surface_at_position(device, &dx, &dy);
-    if (x) *x = gint(dx);
-    if (y) *y = gint(dy);
+    if ( !wxGTKQueryPointerX11(display, x, y, nullptr) )
+    {
+        // See the identical comment in wxGetMouseState() above: this is only
+        // meaningful while the pointer is over one of this application's own
+        // windows, not truly global screen coordinates.
+        GdkSeat* seat = gdk_display_get_default_seat(display);
+        GdkDevice* device = gdk_seat_get_pointer(seat);
+        double dx = 0, dy = 0;
+        gdk_device_get_surface_at_position(device, &dx, &dy);
+        if (x) *x = gint(dx);
+        if (y) *y = gint(dy);
+    }
 #elif defined(__WXGTK3__)
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     GdkDeviceManager* manager = gdk_display_get_device_manager(display);

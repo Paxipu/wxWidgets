@@ -2470,11 +2470,15 @@ static void AdjustRangeValue(wxGtkScrollbar* range, double step)
     }
 }
 
+#if GTK_CHECK_VERSION(3,4,0)
+
 // Handle a smooth (delta-based) scroll. GTK3 reaches this from the
 // GDK_SCROLL_SMOOTH case of its direction switch; GTK4 has no direction enum
 // on this path at all -- GtkEventControllerScroll reports everything as deltas
 // -- so it is the only path there, which is why this is factored out rather
-// than left inline.
+// than left inline. Neither caller exists before GTK+ 3.4, where
+// GDK_SCROLL_SMOOTH was added, so building it there would just be an unused
+// function.
 static bool
 wxGTKProcessScrollDeltas(wxWindow* win, wxMouseEvent& event,
                          wxGtkScrollbar* range_h, wxGtkScrollbar* range_v,
@@ -2525,6 +2529,8 @@ wxGTKProcessScrollDeltas(wxWindow* win, wxMouseEvent& event,
     }
     return handled;
 }
+
+#endif // GTK_CHECK_VERSION(3,4,0)
 
 extern "C"
 {
@@ -4019,9 +4025,9 @@ wxMouseState wxGetMouseState()
         mask = gdk_device_get_modifier_state(device);
     }
 #else
-    GdkWindow* window = wxGetTopLevelGDK();
     GdkDisplay* display = wxGetTopLevelGdkDisplay();
 #ifdef __WXGTK3__
+    GdkWindow* window = wxGetTopLevelGDK();
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     GdkDeviceManager* manager = gdk_display_get_device_manager(display);
     GdkDevice* device = gdk_device_manager_get_client_pointer(manager);

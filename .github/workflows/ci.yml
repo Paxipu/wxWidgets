@@ -91,7 +91,10 @@ jobs:
             runner: ubuntu-26.04
             gtk_version: 2
             use_xvfb: true
-          - name: Ubuntu 24.04 wxGTK 4 (WIP port, see docs/gtk/gtk4-status.md)
+          # The name is used as the ccache key, which GitHub rejects if it
+          # contains a comma, so keep it free of punctuation. The port's
+          # status is tracked in docs/gtk/gtk4-status.md.
+          - name: Ubuntu 24.04 wxGTK 4 - WIP port
             runner: ubuntu-24.04
             gtk_version: 4
             configure_flags: --disable-uiactionsim

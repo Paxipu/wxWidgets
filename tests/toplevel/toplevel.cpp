@@ -124,17 +124,27 @@ TEST_CASE("wxTopLevel::ShowEvent", "[tlw][show][event]")
 
 #if wxUSE_MDI
 
-// Going full screen with wxFULLSCREEN_NOMENUBAR must hide the menu bar of an
-// MDI parent frame and leave it hidden.
+// An MDI parent frame must stay full screen once it has been asked to, and its
+// menu bar must survive the switch in both directions.
 //
-// wxFrame::ShowFullScreen() hides the bar without detaching it, which is the
-// normal state for a plain frame, but wxMDIParentFrame::OnInternalIdle() then
-// found a hidden parent menu bar with no child menu bar visible, took that for
-// the state it has to correct, showed the bar again and called Attach() on a
-// bar that was still attached. That asserted and undid the full screen switch
-// in one go. See #74.
+// Under wxGTK it did not. wxFrame::ShowFullScreen() hides the bar without
+// detaching it, which is the normal state for a plain frame, but
+// wxMDIParentFrame::OnInternalIdle() then found a hidden parent menu bar with
+// no child menu bar visible, took that for the state it has to correct, showed
+// the bar again and called Attach() on a bar that was still attached. That
+// asserted and undid the full screen switch in one go. See #74.
+//
+// Whether the bar object itself is hidden is a port detail rather than part of
+// the contract: wxGTK hides it, while wxMSW detaches the menu from the window
+// with SetMenu() and leaves the wxMenuBar shown. Only wxGTK is checked for it.
 TEST_CASE("wxMDIParentFrame::ShowFullScreen", "[tlw][mdi][fullscreen]")
 {
+#ifdef __WXGTK__
+    const bool checkBarHidden = true;
+#else
+    const bool checkBarHidden = false;
+#endif
+
     wxMDIParentFrame* const frame =
         new wxMDIParentFrame(nullptr, wxID_ANY, "MDI full screen test",
                              wxDefaultPosition, wxSize(400, 300));
@@ -155,16 +165,21 @@ TEST_CASE("wxMDIParentFrame::ShowFullScreen", "[tlw][mdi][fullscreen]")
     REQUIRE( frame->ShowFullScreen(true) );
     YieldForAWhile();
 
-    CHECK( !bar->IsShown() );
+    CHECK( frame->IsFullScreen() );
     CHECK( bar->GetFrame() == frame );
+    if ( checkBarHidden )
+        CHECK( !bar->IsShown() );
 
     // Idle processing must not undo this however long the frame stays up.
     YieldForAWhile();
-    CHECK( !bar->IsShown() );
+    CHECK( frame->IsFullScreen() );
+    if ( checkBarHidden )
+        CHECK( !bar->IsShown() );
 
     REQUIRE( frame->ShowFullScreen(false) );
     YieldForAWhile();
 
+    CHECK( !frame->IsFullScreen() );
     CHECK( bar->IsShown() );
     CHECK( bar->GetFrame() == frame );
 }

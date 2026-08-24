@@ -189,10 +189,9 @@ inline void wxGtkIconSizeToPixels(wxGtkIconSize size, gint* width, gint* height)
     gtk_icon_size_lookup(size, width, height);
 }
 
-inline GtkIconTheme* wxGtkGetIconTheme()
-{
-    return gtk_icon_theme_get_default();
-}
+// Note that there is deliberately no wxGtkGetIconTheme() here: the GTK+ 3 code
+// below uses gtk_icon_theme_get_default() directly, so defining one would just
+// be an unused function, which clang diagnoses.
 
 #endif // __WXGTK4__/!__WXGTK4__
 

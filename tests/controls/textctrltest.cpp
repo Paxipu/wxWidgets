@@ -1876,13 +1876,18 @@ TEST_CASE("wxTextCtrl::KeyEventsWhenFocused", "[wxTextCtrl][key][event]")
                     wxDefaultPosition, wxSize(200, 100), style
                 );
 
+    text->SetFocus();
+
+    // Simulated input is delivered asynchronously, so a key release synthesized
+    // by an earlier test can still be on its way here and would be counted as
+    // one of ours. Let everything queued arrive before the counters below start
+    // counting -- the same precaution KeyboardEventTestCase::setUp() takes.
+    YieldForAWhile();
+    REQUIRE( text->HasFocus() );
+
     EventCounter keyDown(text.get(), wxEVT_KEY_DOWN);
     EventCounter keyUp(text.get(), wxEVT_KEY_UP);
     EventCounter charEvents(text.get(), wxEVT_CHAR);
-
-    text->SetFocus();
-    wxYield();
-    REQUIRE( text->HasFocus() );
 
     wxUIActionSimulator sim;
 
@@ -1893,7 +1898,11 @@ TEST_CASE("wxTextCtrl::KeyEventsWhenFocused", "[wxTextCtrl][key][event]")
         return;
 
     sim.KeyUp('a');
-    wxYield();
+
+    // Wait for the release too, not just for the press: with a plain wxYield()
+    // the process can get as far as the checks below while the key up event is
+    // still in flight.
+    YieldForAWhile();
 
     CHECK( keyDown.GetCount() == 1 );
     CHECK( charEvents.GetCount() == 1 );

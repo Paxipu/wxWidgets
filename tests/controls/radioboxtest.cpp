@@ -180,6 +180,17 @@ TEST_CASE_METHOD(RadioBoxTestCase, "RadioBox::Selection", "[radiobox][selection]
     CHECK( m_radio->GetStringSelection() == "item 2" );
 }
 
+// Where the focus really ends up after giving it to a wxRadioBox is not the
+// same everywhere: under MSW the control is composite and wxRadioBox::SetFocus()
+// forwards to one of the wxRadioButtons inside it, so the focus is in the box
+// rather than on it. Both count as focusing the box here.
+static wxWindow* FocusInsideRadioBoxAsBox(wxRadioBox* radio)
+{
+    wxWindow* const focus = wxWindow::FindFocus();
+
+    return focus && radio->IsDescendant(focus) ? radio : focus;
+}
+
 TEST_CASE_METHOD(RadioBoxTestCase, "RadioBox::Focus", "[radiobox][focus]")
 {
     wxButton* const button =
@@ -191,7 +202,7 @@ TEST_CASE_METHOD(RadioBoxTestCase, "RadioBox::Focus", "[radiobox][focus]")
     m_radio->SetFocus();
     wxYield();
 
-    CHECK_FOCUS_IS( m_radio );
+    CHECK_SAME_WINDOW( FocusInsideRadioBoxAsBox(m_radio), m_radio );
     CHECK( setFocus.GetCount() == 1 );
 
     button->SetFocus();

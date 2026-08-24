@@ -808,11 +808,19 @@ void wxTextCtrl::Init()
 #endif
 }
 
+#if wxUSE_SPELLCHECK && defined(__WXGTK4__)
+// wxTextCtrlSpellCheck is defined further down this file, so the destructor
+// below cannot delete one directly: deleting through an incomplete type is
+// undefined behaviour and, in practice, silently skips the destructor. This
+// forwards to a helper defined after the class, where the type is complete.
+static void wxGTKDeleteSpellCheck(class wxTextCtrlSpellCheck* spellCheck);
+#endif // wxUSE_SPELLCHECK && __WXGTK4__
+
 wxTextCtrl::~wxTextCtrl()
 {
 #if wxUSE_SPELLCHECK && defined(__WXGTK4__)
     // Must happen before the widgets go away, as it disconnects from them.
-    delete m_spellCheck;
+    wxGTKDeleteSpellCheck(m_spellCheck);
 #endif
 
     if (m_text)
@@ -1831,6 +1839,12 @@ private:
 
     wxDECLARE_NO_COPY_CLASS(wxTextCtrlSpellCheck);
 };
+
+// Declared before ~wxTextCtrl(), which cannot see the class above.
+static void wxGTKDeleteSpellCheck(wxTextCtrlSpellCheck* spellCheck)
+{
+    delete spellCheck;
+}
 
 bool wxTextCtrl::EnableProofCheck(const wxTextProofOptions& options)
 {

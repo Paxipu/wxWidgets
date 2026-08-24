@@ -354,10 +354,14 @@ bool wxFileDialog::Create(wxWindow *parent, const wxString& message,
     const wxString dir = fn.GetPath();
     if ( !dir.empty() )
     {
+#ifdef __WXGTK4__
+        m_pendingFolder = dir;
+#else
         const auto folder(wxGTK_CONV_FN(dir));
         gtk_file_chooser_set_current_folder(file_chooser, folder);
         if (m_fileChooserNative)
             gtk_file_chooser_set_current_folder(m_fileChooserNative, folder);
+#endif
     }
 
     const wxString fname = fn.GetFullName();
@@ -365,10 +369,17 @@ bool wxFileDialog::Create(wxWindow *parent, const wxString& message,
     {
         if ( !fname.empty() )
         {
+#ifdef __WXGTK4__
+            // Held back with the location, and sent after it: setting the
+            // folder can clear the name entry, so the original order -- folder
+            // first, name second -- has to survive the deferral.
+            m_pendingName = fname;
+#else
             const auto curName(wxGTK_CONV_FN(fname));
             gtk_file_chooser_set_current_name(file_chooser, curName);
             if (m_fileChooserNative)
                 gtk_file_chooser_set_current_name(m_fileChooserNative, curName);
+#endif
         }
 
 #if GTK_CHECK_VERSION(2,7,3)
@@ -384,10 +395,14 @@ bool wxFileDialog::Create(wxWindow *parent, const wxString& message,
     {
         if ( !fname.empty() )
         {
+#ifdef __WXGTK4__
+            m_pendingFile = fn.GetFullPath();
+#else
             const auto filename(wxGTK_CONV_FN(fn.GetFullPath()));
             gtk_file_chooser_set_filename(file_chooser, filename);
             if (m_fileChooserNative)
                 gtk_file_chooser_set_filename(m_fileChooserNative, filename);
+#endif
         }
     }
 
@@ -453,11 +468,68 @@ void wxFileDialog::GTKDropNative()
     }
 }
 
+#ifdef __WXGTK4__
+
+namespace
+{
+
+// Give one chooser its starting location, in a single call.
+//
+// Setting the file already selects the folder it is in, so it stands for both
+// when both were asked for. Only when there is no file, or GTK will not take
+// it -- a name that does not exist yet, typically -- is the folder sent on its
+// own, which is safe because a refused file never started a load.
+void wxGTKSetChooserLocation(GtkFileChooser* chooser,
+                             const wxString& file,
+                             const wxString& folder)
+{
+    if ( !file.empty() &&
+            gtk_file_chooser_set_filename(chooser, wxGTK_CONV_FN(file)) )
+        return;
+
+    if ( !folder.empty() )
+        gtk_file_chooser_set_current_folder(chooser, wxGTK_CONV_FN(folder));
+}
+
+} // anonymous namespace
+
+void wxFileDialog::GTKApplyPendingLocation()
+{
+    wxGTKSetChooserLocation(GTK_FILE_CHOOSER(m_widget),
+                            m_pendingFile, m_pendingFolder);
+    if ( m_fileChooserNative )
+    {
+        wxGTKSetChooserLocation(m_fileChooserNative,
+                                m_pendingFile, m_pendingFolder);
+    }
+
+    if ( !m_pendingName.empty() )
+    {
+        const auto curName(wxGTK_CONV_FN(m_pendingName));
+        gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(m_widget), curName);
+        if ( m_fileChooserNative )
+            gtk_file_chooser_set_current_name(m_fileChooserNative, curName);
+    }
+
+    // Anything set from now on goes straight through: the dialog is about to
+    // be shown, and a location arriving after that navigates as the user would.
+    m_pendingFile.clear();
+    m_pendingFolder.clear();
+    m_pendingName.clear();
+    m_locationApplied = true;
+}
+
+#endif // __WXGTK4__
+
 int wxFileDialog::ShowModal()
 {
     WX_HOOK_MODAL_DIALOG();
 
     CreateExtraControl();
+
+#ifdef __WXGTK4__
+    GTKApplyPendingLocation();
+#endif
 
 #if GTK_CHECK_VERSION(3,20,0)
     if (m_extraControl)
@@ -561,6 +633,14 @@ void wxFileDialog::SetPath(const wxString& path)
     // it: use the initial directory if it was set or just CWD otherwise (this
     // is the default behaviour if m_dir is empty)
     const wxString str(wxFileName(path).GetAbsolutePath(m_dir));
+#ifdef __WXGTK4__
+    if ( !m_locationApplied )
+    {
+        m_pendingFile = str;
+        return;
+    }
+#endif
+
     m_fc.SetPath(str);
     if (m_fcNative)
         m_fcNative->SetPath(str);
@@ -569,6 +649,18 @@ void wxFileDialog::SetPath(const wxString& path)
 void wxFileDialog::SetDirectory(const wxString& dir)
 {
     BaseType::SetDirectory(dir);
+
+#ifdef __WXGTK4__
+    if ( !m_locationApplied )
+    {
+        // Last one wins, as it would if these went to GTK as they are made:
+        // asking for a directory discards a file asked for earlier, whose own
+        // directory would otherwise still be the one shown.
+        m_pendingFolder = dir;
+        m_pendingFile.clear();
+        return;
+    }
+#endif
 
     m_fc.SetDirectory(dir);
     if (m_fcNative)
@@ -581,6 +673,14 @@ void wxFileDialog::SetFilename(const wxString& name)
 
     if (HasFdFlag(wxFD_SAVE))
     {
+#ifdef __WXGTK4__
+        if ( !m_locationApplied )
+        {
+            m_pendingName = name;
+            return;
+        }
+#endif
+
         const auto curName(name.utf8_str());
         gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(m_widget), curName);
         if (m_fileChooserNative)

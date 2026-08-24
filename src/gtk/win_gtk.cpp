@@ -487,6 +487,19 @@ static void pizza_snapshot(GtkWidget* widget, GtkSnapshot* snapshot)
           child != nullptr;
           child = gtk_widget_get_next_sibling(child) )
     {
+        // A child which has not been allocated yet -- shown between its
+        // parent's last size_allocate and the next one -- has nothing to draw,
+        // and asking GTK to draw it anyway earns a warning for every frame it
+        // stays in that state. It is drawn from the first frame after it has
+        // been given a size.
+        //
+        // Deciding this from the size is deliberate: gtk_widget_compute_bounds()
+        // and gtk_widget_get_realized() were both tried here and caught exactly
+        // the same children, at more cost per child per frame.
+        if ( gtk_widget_get_width(child) <= 0 ||
+                gtk_widget_get_height(child) <= 0 )
+            continue;
+
         gtk_widget_snapshot_child(widget, child, snapshot);
     }
 }

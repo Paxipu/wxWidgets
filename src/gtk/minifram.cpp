@@ -226,6 +226,10 @@ gtk_window_button_press_callback(GtkGestureClick* gesture,
     {
         gdk_toplevel_begin_move(toplevel, device, button, x, y, time);
         gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+
+        // The compositor moves the window from here on and tells us nothing
+        // about it, so follow it ourselves and keep sending wxMoveEvent.
+        win->GTKTrackCompositorMove();
     }
 }
 

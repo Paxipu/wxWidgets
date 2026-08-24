@@ -1713,6 +1713,73 @@ bool wxTopLevelWindowGTK::Create( wxWindow *parent,
     return true;
 }
 
+#ifdef __WXGTK4__
+// ----------------------------------------------------------------------------
+// following a move the compositor makes for us
+// ----------------------------------------------------------------------------
+
+extern "C" {
+static gboolean wxgtk_tlw_poll_move(gpointer data)
+{
+    return static_cast<wxTopLevelWindowGTK*>(data)->GTKPollCompositorMove()
+                ? G_SOURCE_CONTINUE
+                : G_SOURCE_REMOVE;
+}
+}
+
+void wxTopLevelWindowGTK::GTKTrackCompositorMove()
+{
+    if ( m_moveTrackerId )
+        return;
+
+    // 20 ms is far finer than the eye needs and costs one round trip to the X
+    // server; it also has to stay well under the 3 px that
+    // wxAuiFloatingFrame::OnMoveEvent() treats as "moving too fast" to react
+    // to, or the events would arrive too coarse to be of use.
+    m_moveTrackerId = g_timeout_add(20, wxgtk_tlw_poll_move, this);
+}
+
+bool wxTopLevelWindowGTK::GTKPollCompositorMove()
+{
+#ifdef GDK_WINDOWING_X11
+    GdkSurface* const surface = gtk_native_get_surface(GTK_NATIVE(m_widget));
+    if ( surface && GDK_IS_X11_SURFACE(surface) )
+    {
+        Display* const xdisplay = GDK_SURFACE_XDISPLAY(surface);
+        Window child;
+        int rootX = 0, rootY = 0;
+
+        if ( XTranslateCoordinates(xdisplay, GDK_SURFACE_XID(surface),
+                                   DefaultRootWindow(xdisplay),
+                                   0, 0, &rootX, &rootY, &child) )
+        {
+            if ( m_x != rootX || m_y != rootY )
+            {
+                m_lastPos = wxPoint(m_x, m_y);
+
+                m_x = rootX;
+                m_y = rootY;
+
+                wxMoveEvent event(wxPoint(m_x, m_y), GetId());
+                event.SetEventObject(this);
+                HandleWindowEvent(event);
+            }
+        }
+    }
+#endif // GDK_WINDOWING_X11
+
+    // The drag ends when the button that started it is let go. Asking the
+    // pointer is the only way to tell: the compositor owns the drag and sends
+    // us neither motion nor release while it lasts.
+    if ( wxGetMouseState().LeftIsDown() )
+        return true;
+
+    m_moveTrackerId = 0;
+    return false;
+}
+
+#endif // __WXGTK4__
+
 wxTopLevelWindowGTK::~wxTopLevelWindowGTK()
 {
     if ( m_netFrameExtentsTimerId )
@@ -1721,6 +1788,14 @@ wxTopLevelWindowGTK::~wxTopLevelWindowGTK()
         // will become invalid very soon.
         g_source_remove(m_netFrameExtentsTimerId);
     }
+
+#ifdef __WXGTK4__
+    if ( m_moveTrackerId )
+    {
+        // Same reasoning as above.
+        g_source_remove(m_moveTrackerId);
+    }
+#endif // __WXGTK4__
 
     if (m_grabbedEventLoop)
     {

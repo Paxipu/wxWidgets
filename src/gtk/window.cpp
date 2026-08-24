@@ -2584,6 +2584,33 @@ wx_gtk_scroll_callback(GtkEventControllerScroll* controller,
     event.m_linesPerAction = 3;
     event.m_columnsPerAction = 3;
 
+#if GTK_CHECK_VERSION(4,8,0)
+    // GTK 4.8 started saying what unit the deltas are in, and the two are not
+    // interchangeable: a wheel reports detents, where 1.0 is one click, but a
+    // touchpad reports "surface logical pixels to scroll directly on screen",
+    // where 1.0 is one pixel.
+    //
+    // wxMouseEvent's rotation is in detents scaled by m_wheelDelta, so passing
+    // a pixel delta through unconverted asks for as many detents as the finger
+    // moved pixels -- a modest two-finger swipe of 50 px becomes 50 clicks.
+    // That is what makes touchpad scrolling feel several times too fast.
+    //
+    // One detent scrolls m_linesPerAction lines vertically and
+    // m_columnsPerAction columns horizontally, so that much text is what a
+    // detent is worth in pixels on each axis.
+    if ( gtk_check_version(4,8,0) == nullptr &&
+            gdk_scroll_event_get_unit(gdk_event) == GDK_SCROLL_UNIT_SURFACE )
+    {
+        // A zero char size would be a degenerate font: leave the delta alone
+        // rather than divide by zero.
+        if ( const int charWidth = win->GetCharWidth() )
+            delta_x /= double(event.m_columnsPerAction) * charWidth;
+
+        if ( const int charHeight = win->GetCharHeight() )
+            delta_y /= double(event.m_linesPerAction) * charHeight;
+    }
+#endif // GTK_CHECK_VERSION(4,8,0)
+
     wxGtkScrollbar* const range_h = win->m_scrollBar[wxWindow::ScrollDir_Horz];
     wxGtkScrollbar* const range_v = win->m_scrollBar[wxWindow::ScrollDir_Vert];
 

@@ -13,6 +13,10 @@
 #include "wx/gtk/private/win_gtk.h"
 #include "wx/window.h"
 
+#if wxUSE_ACCESSIBILITY
+    #include "wx/gtk/private/access.h"
+#endif
+
 /*
 wxPizza is a custom GTK+ widget derived from GtkFixed.  A custom widget
 is needed to adapt GTK+ to wxWidgets needs in 3 areas: scrolling, window
@@ -36,6 +40,63 @@ struct wxPizzaChild
 };
 
 static GtkWidgetClass* parent_class;
+
+#if defined(__WXGTK4__) && wxUSE_ACCESSIBILITY
+// ----------------------------------------------------------------------------
+// accessibility
+// ----------------------------------------------------------------------------
+//
+// wxPizza is the widget behind every custom-drawn wx control, so it is where
+// the parts of such a control that have no window of their own -- a wxGrid
+// cell, a wxDataViewCtrl item -- have to be attached. GTK4 asks a widget for
+// its first accessible child through the GtkAccessible interface, and only a
+// re-implementation of that interface can answer with something that is not a
+// widget, so wxPizza implements it too and defers to GtkWidget for everything
+// else.
+
+static GtkAccessibleInterface* parent_accessible_iface;
+
+extern "C" {
+
+static GtkAccessible* pizza_get_first_accessible_child(GtkAccessible* accessible)
+{
+    if ( GtkAccessible* const child =
+            wxGTKPizzaGetFirstAccessibleChild(GTK_WIDGET(accessible)) )
+        return child;
+
+    // No wxAccessible with children here, so this is an ordinary widget with
+    // ordinary widget children.
+    return parent_accessible_iface->get_first_accessible_child(accessible);
+}
+
+// GTK gives every widget class its own accessible role, defaulting to WIDGET
+// rather than inheriting the parent class's -- so a wxPizza would report itself
+// as a bare widget where the GtkFixed it derives from reports a generic
+// container. GENERIC is both more accurate and the only value GTK will let an
+// instance override later, should a way of setting the role per instance be
+// found: see docs/gtk/gtk4-accessibility.md.
+static void pizza_set_default_accessible_role(GtkWidgetClass* widget_class)
+{
+    gtk_widget_class_set_accessible_role(widget_class,
+                                         GTK_ACCESSIBLE_ROLE_GENERIC);
+}
+
+static void pizza_accessible_init(void* g_iface, void*)
+{
+    GtkAccessibleInterface* const iface =
+        static_cast<GtkAccessibleInterface*>(g_iface);
+
+    // Re-implementing an interface starts from a copy of the implementation
+    // being replaced, so only the one vfunc that differs is assigned here --
+    // but the original still has to be kept to fall back on.
+    parent_accessible_iface =
+        static_cast<GtkAccessibleInterface*>(g_type_interface_peek_parent(iface));
+
+    iface->get_first_accessible_child = pizza_get_first_accessible_child;
+}
+
+} // extern "C"
+#endif // __WXGTK4__ && wxUSE_ACCESSIBILITY
 
 #ifdef __WXGTK3__
 enum {
@@ -462,6 +523,9 @@ static void class_init(void* g_class, void*)
     widget_class->realize = pizza_realize;
     widget_class->show = pizza_show;
     widget_class->hide = pizza_hide;
+#if defined(__WXGTK4__) && wxUSE_ACCESSIBILITY
+    pizza_set_default_accessible_role(widget_class);
+#endif
 #ifndef __WXGTK4__
     // GtkContainerClass doesn't exist under GTK4 -- see the comment above
     // pizza_add()/pizza_remove().
@@ -557,6 +621,11 @@ GType wxPizza::type()
 #ifdef __WXGTK3__
         const GInterfaceInfo interface_info = { nullptr, nullptr, nullptr };
         g_type_add_interface_static(type, GTK_TYPE_SCROLLABLE, &interface_info);
+#endif
+#if defined(__WXGTK4__) && wxUSE_ACCESSIBILITY
+        const GInterfaceInfo accessible_info =
+            { pizza_accessible_init, nullptr, nullptr };
+        g_type_add_interface_static(type, GTK_TYPE_ACCESSIBLE, &accessible_info);
 #endif
     }
     return type;

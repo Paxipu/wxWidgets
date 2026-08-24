@@ -94,11 +94,22 @@ public:
     // Log messages to the text control
     void Log(const wxString& text);
 
+#ifdef __WXMSW__
     // Recursively give information about an object
     void LogObject(int indent, IAccessible* obj);
 
     // Get info for a child (id > 0) or object (id == 0)
     void GetInfo(IAccessible* accessible, int id, wxString& name, wxString& role);
+#else // !__WXMSW__
+    // Recursively give information about a wxAccessible and its child ids.
+    //
+    // The wxMSW version above asks the platform, which is the better check
+    // there because it goes through the same path an assistive technology
+    // would. No other port offers that from inside the process, so this asks
+    // the wxAccessible instead: what it answers is exactly what the port has
+    // to hand to the platform.
+    void LogAccessible(int indent, wxAccessible* obj);
+#endif // __WXMSW__/!__WXMSW__
 private:
     wxTextCtrl* m_textCtrl;
 
@@ -396,6 +407,8 @@ void MyFrame::OnAbout(wxCommandEvent& WXUNUSED(event))
     wxMessageBox(msg, "About AccessTest", wxOK | wxICON_INFORMATION, this);
 }
 
+#ifdef __WXMSW__
+
 void MyFrame::OnQuery(wxCommandEvent& WXUNUSED(event))
 {
     m_textCtrl->Clear();
@@ -473,6 +486,144 @@ void MyFrame::OnQuery(wxCommandEvent& WXUNUSED(event))
     }
 }
 
+#else // !__WXMSW__
+
+namespace
+{
+
+// wxAccRole is a plain enum starting at wxROLE_NONE, so it indexes this
+// directly.
+const char* const wxAccRoleNames[] =
+{
+    "NONE",
+    "SYSTEM_ALERT",
+    "SYSTEM_ANIMATION",
+    "SYSTEM_APPLICATION",
+    "SYSTEM_BORDER",
+    "SYSTEM_BUTTONDROPDOWN",
+    "SYSTEM_BUTTONDROPDOWNGRID",
+    "SYSTEM_BUTTONMENU",
+    "SYSTEM_CARET",
+    "SYSTEM_CELL",
+    "SYSTEM_CHARACTER",
+    "SYSTEM_CHART",
+    "SYSTEM_CHECKBUTTON",
+    "SYSTEM_CLIENT",
+    "SYSTEM_CLOCK",
+    "SYSTEM_COLUMN",
+    "SYSTEM_COLUMNHEADER",
+    "SYSTEM_COMBOBOX",
+    "SYSTEM_CURSOR",
+    "SYSTEM_DIAGRAM",
+    "SYSTEM_DIAL",
+    "SYSTEM_DIALOG",
+    "SYSTEM_DOCUMENT",
+    "SYSTEM_DROPLIST",
+    "SYSTEM_EQUATION",
+    "SYSTEM_GRAPHIC",
+    "SYSTEM_GRIP",
+    "SYSTEM_GROUPING",
+    "SYSTEM_HELPBALLOON",
+    "SYSTEM_HOTKEYFIELD",
+    "SYSTEM_INDICATOR",
+    "SYSTEM_LINK",
+    "SYSTEM_LIST",
+    "SYSTEM_LISTITEM",
+    "SYSTEM_MENUBAR",
+    "SYSTEM_MENUITEM",
+    "SYSTEM_MENUPOPUP",
+    "SYSTEM_OUTLINE",
+    "SYSTEM_OUTLINEITEM",
+    "SYSTEM_PAGETAB",
+    "SYSTEM_PAGETABLIST",
+    "SYSTEM_PANE",
+    "SYSTEM_PROGRESSBAR",
+    "SYSTEM_PROPERTYPAGE",
+    "SYSTEM_PUSHBUTTON",
+    "SYSTEM_RADIOBUTTON",
+    "SYSTEM_ROW",
+    "SYSTEM_ROWHEADER",
+    "SYSTEM_SCROLLBAR",
+    "SYSTEM_SEPARATOR",
+    "SYSTEM_SLIDER",
+    "SYSTEM_SOUND",
+    "SYSTEM_SPINBUTTON",
+    "SYSTEM_STATICTEXT",
+    "SYSTEM_STATUSBAR",
+    "SYSTEM_TABLE",
+    "SYSTEM_TEXT",
+    "SYSTEM_TITLEBAR",
+    "SYSTEM_TOOLBAR",
+    "SYSTEM_TOOLTIP",
+    "SYSTEM_WHITESPACE",
+    "SYSTEM_WINDOW",
+};
+
+wxString RoleName(wxAccRole role)
+{
+    const size_t n = size_t(role);
+
+    return n < WXSIZEOF(wxAccRoleNames) ? wxAccRoleNames[n] : "?";
+}
+
+} // anonymous namespace
+
+void MyFrame::OnQuery(wxCommandEvent& WXUNUSED(event))
+{
+    m_textCtrl->Clear();
+
+    wxAccessible* const accessible = GetOrCreateAccessible();
+    if ( !accessible )
+    {
+        Log("This window has no wxAccessible.");
+        return;
+    }
+
+    LogAccessible(0, accessible);
+}
+
+void MyFrame::LogAccessible(int indent, wxAccessible* obj)
+{
+    const wxString pad(' ', indent);
+
+    wxString name;
+    obj->GetName(wxACC_SELF, &name);
+
+    wxAccRole role = wxROLE_NONE;
+    obj->GetRole(wxACC_SELF, &role);
+
+    Log(wxString::Format("%sName = %s; Role = %s", pad, name, RoleName(role)));
+
+    int childCount = 0;
+    if ( obj->GetChildCount(&childCount) != wxACC_OK )
+    {
+        Log(pad + "Does not say how many children it has.");
+        return;
+    }
+
+    Log(wxString::Format("%sThere are %d children.", pad, childCount));
+
+    for ( int i = 1; i <= childCount; i++ )
+    {
+        wxString childName;
+        obj->GetName(i, &childName);
+
+        wxAccRole childRole = wxROLE_NONE;
+        obj->GetRole(i, &childRole);
+
+        Log(wxString::Format("%s%d) Name = %s; Role = %s",
+                             pad, i, childName, RoleName(childRole)));
+
+        wxAccessible* child = nullptr;
+        if ( obj->GetChild(i, &child) == wxACC_OK && child )
+            LogAccessible(indent + 4, child);
+        else
+            Log(pad + "    This is an element.");
+    }
+}
+
+#endif // __WXMSW__/!__WXMSW__
+
 // Log messages to the text control
 void MyFrame::Log(const wxString& text)
 {
@@ -485,6 +636,8 @@ void MyFrame::Log(const wxString& text)
         m_textCtrl->WriteText(text2 + "\n");
     }
 }
+
+#ifdef __WXMSW__
 
 // Recursively give information about an object
 void MyFrame::LogObject(int indent, IAccessible* obj)
@@ -589,6 +742,8 @@ void MyFrame::GetInfo(IAccessible* accessible, int id, wxString& name, wxString&
         role = "NO ROLE";
     }
 }
+
+#endif // __WXMSW__
 
 /*
  * SplitterWindowAccessible implementation

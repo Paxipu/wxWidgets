@@ -31,6 +31,10 @@
 #include "wx/gtk/dcclient.h"
 #endif
 
+#if wxUSE_ACCESSIBILITY && wxUSE_MARKUP
+    #include "wx/private/markupparser.h"
+#endif
+
 #include "wx/gtk/private.h"
 #include "wx/gtk/private/event.h"
 #include "wx/gtk/private/gdkconv.h"
@@ -2652,6 +2656,24 @@ bool wxDataViewTextRenderer::GetTextValue(wxString& str) const
     return true;
 }
 
+#if wxUSE_ACCESSIBILITY
+wxString wxDataViewTextRenderer::GetAccessibleDescription() const
+{
+    wxString str;
+    if ( !GetTextValue(str) )
+        return wxString();
+
+#if wxUSE_MARKUP
+    // GetTextValue() reads back whichever property was set, so with markup
+    // enabled that is the markup itself and it has to be stripped first.
+    if ( m_useMarkup )
+        return wxMarkupParser::Strip(str);
+#endif // wxUSE_MARKUP
+
+    return str;
+}
+#endif // wxUSE_ACCESSIBILITY
+
 void wxDataViewTextRenderer::GtkUpdateAlignment()
 {
     wxDataViewRenderer::GtkUpdateAlignment();
@@ -2919,6 +2941,15 @@ wxDataViewBitmapRenderer::IsCompatibleVariantType(const wxString& variantType) c
             || variantType == wxS("wxIcon");
 }
 
+#if wxUSE_ACCESSIBILITY
+wxString wxDataViewBitmapRenderer::GetAccessibleDescription() const
+{
+    // Same as in the generic version: an image on its own says nothing that
+    // could be read out, and inventing something would be worse than silence.
+    return wxString();
+}
+#endif // wxUSE_ACCESSIBILITY
+
 // ---------------------------------------------------------
 // wxDataViewToggleRenderer
 // ---------------------------------------------------------
@@ -3000,6 +3031,20 @@ bool wxDataViewToggleRenderer::GetValue( wxVariant &value ) const
 
     return true;
 }
+
+#if wxUSE_ACCESSIBILITY
+wxString wxDataViewToggleRenderer::GetAccessibleDescription() const
+{
+    wxVariant value;
+    if ( !GetValue(value) )
+        return wxString();
+
+    /* TRANSLATORS: Checkbox state name */
+    return value.GetBool() ? _("checked")
+    /* TRANSLATORS: Checkbox state name */
+                           : _("unchecked");
+}
+#endif // wxUSE_ACCESSIBILITY
 
 // ---------------------------------------------------------
 // wxDataViewCustomRenderer

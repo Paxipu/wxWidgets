@@ -6946,6 +6946,19 @@ dnl ---------------------------------------------------------------------------
 
 dnl please keep the settings below in alphabetical order
 if test "$wxUSE_ACCESSIBILITY" = "yes"; then
+    dnl Outside wxMSW only wxGTK implements this, and only against GTK 4.10 or
+    dnl later: that is where an accessible object stopped having to be a
+    dnl widget, without which a wxAccessible cannot describe a grid cell or a
+    dnl list item, which is most of what the API exists for.
+    if test "$wxUSE_MSW" != 1; then
+        if test "$WXGTK4" = 1; then
+            PKG_CHECK_EXISTS([gtk4 >= 4.10], [],
+                [AC_MSG_ERROR([--enable-accessibility requires GTK 4.10 or later])])
+        else
+            AC_MSG_ERROR([--enable-accessibility is only supported in wxMSW and wxGTK4])
+        fi
+    fi
+
     AC_DEFINE(wxUSE_ACCESSIBILITY)
     SAMPLES_SUBDIRS="$SAMPLES_SUBDIRS access"
 fi

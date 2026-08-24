@@ -4745,3 +4745,58 @@ of this suite assume something about font metrics, so "all tests pass" means
 At the default font, in the CI configuration:
 
     All tests passed (47715 assertions in 503 test cases)
+
+## Progress update 49: accessibility (#81)
+
+`wxUSE_ACCESSIBILITY` was wxMSW-only. `include/wx/chkconf.h` turned it off
+again everywhere else, `wx/access.h` declared only the abstract
+`wxAccessibleBase`, and building with it on anywhere else failed: with
+`--enable-accessibility --with-gtk=4`, `configure` succeeded and the build then
+produced 96 errors in `src/generic/grid.cpp`, `src/generic/gridsel.cpp` and
+`src/generic/datavgen.cpp`, all of them `wxAccessible` being an incomplete type.
+
+The issue quoted an opinion that a GTK4 implementation "would be relatively
+easy". Half of that is right: the pieces exist, and there is now a working
+implementation. The other half is not, and it is worth being precise about why,
+because the reasons are all things GTK4 changed rather than things wx got wrong.
+
+`wxAccessibleBase` is shaped like MSAA and answers questions. GTK4 dropped ATK
+and does not ask them: it caches what the application last pushed, and the only
+things it pulls are bounds, platform states, and the tree walk. So the port has
+to push, and the only moments it knows something changed are the
+`NotifyEvent()` calls the generic controls already make.
+
+Three things had to be true for any of it to work, since most of what a
+`wxAccessible` describes has no window of its own.
+`docs/gtk/probes/gtk4-a11y-virtual-child.c` settles them: a plain `GObject` can
+implement `GtkAccessible` and carry a role, properties and states pushed to it
+read back, and a widget can name a non-widget as its first accessible child.
+
+Two things turned out not to be true:
+
+* `gtk_accessible_get_next_accessible_sibling()` does not call the interface
+  vfunc it declares. It returns whatever `gtk_accessible_set_accessible_parent()`
+  stored, while `gtk_accessible_get_first_accessible_child()` right beside it
+  does call its vfunc. So children cannot be made lazily along the walk -- the
+  chain has to exist first -- which is a real cost for a wxGrid, which reports
+  `rows * cols` of them.
+* A widget's `accessible-role` cannot be changed once it has an AT context,
+  which a wx window already has by the time an application attaches a
+  `wxAccessible`. The role's ARIA name goes into the role *description* instead.
+
+And one is a GTK bug: `gtk_accessible_update_next_accessible_sibling()` drops a
+reference on the accessible parent, which with stock widgets and no wx involved
+is enough to finalize it. The probe reproduces it.
+
+What works now, verified end to end by
+`docs/gtk/probes/gtk4-a11y-wx-bridge.cpp` against a real wxGrid: name,
+description, keyboard shortcut, states, bounds, the child tree, and which child
+has the focus, all reaching GTK's accessibility tree. A three-by-two wxGrid
+exposes its twelve cells and headers, each with its label -- "Column A: hello",
+"Row 2 Header", "Grid Corner".
+
+`--enable-accessibility` is accepted for wxGTK4 against GTK 4.10 or later and
+refused elsewhere. The default is unchanged: off everywhere but wxMSW.
+
+The details, the full mapping, and the list of `wxAccessibleBase` members that
+GTK4 has no counterpart for are in `docs/gtk/gtk4-accessibility.md`.

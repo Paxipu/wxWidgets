@@ -40749,6 +40749,23 @@ fi
 
 
 if test "$wxUSE_ACCESSIBILITY" = "yes"; then
+                    if test "$wxUSE_MSW" != 1; then
+        if test "$WXGTK4" = 1; then
+            if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"gtk4 >= 4.10\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "gtk4 >= 4.10") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  :
+else
+  as_fn_error $? "--enable-accessibility requires GTK 4.10 or later" "$LINENO" 5
+fi
+        else
+            as_fn_error $? "--enable-accessibility is only supported in wxMSW and wxGTK4" "$LINENO" 5
+        fi
+    fi
+
     $as_echo "#define wxUSE_ACCESSIBILITY 1" >>confdefs.h
 
     SAMPLES_SUBDIRS="$SAMPLES_SUBDIRS access"

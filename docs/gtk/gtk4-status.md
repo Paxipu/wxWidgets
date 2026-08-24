@@ -4938,3 +4938,78 @@ lines and lives in the issue.
 The fix restores `gtk_container_remove()` for GTK+ 2 and 3, with a comment
 saying why the shorter call is not a substitute -- since the whole point of a
 mechanical substitution is that it looks equivalent.
+
+## Progress update 52: what the CI job was not looking at
+
+The cross-review (#111) turned up something larger than the commits it was
+reviewing. The wxGTK 4 CI job passes `--disable-uiactionsim`, which compiles
+out every test that needs synthesised input. Same configure line otherwise,
+same machine:
+
+| | test cases | result |
+| --- | --- | --- |
+| `--disable-uiactionsim`, what CI runs | 509 | all passed |
+| without it | 533 | 521 passed, 12 failed |
+
+So the suite has been reporting green with 24 cases absent, and half of those
+fail. The reason the flag was added -- progress update 7, `uiactionx11.cpp`
+"not attempted" -- has been stale for a while: that file has a working GTK4
+branch. Verified rather than assumed, in a build with the simulator enabled:
+
+    mouse    : MouseMove=1 MouseClick=1  left-down events seen=1
+    keyboard : focus is on the text ctrl: 1
+               Text() returned 1; key-downs=3 chars=3 value="abc"
+
+Tracked as #126.
+
+### Triage
+
+Running each failure on its own splits them three ways, which is more useful
+than the count:
+
+| | |
+| --- | --- |
+| fail on their own -- real, reproducible bugs | `EnterLeaveEvents`, `MenuTestCase`, `RadioButton::Click`, `SliderTestCase`, `wxTreeCtrl::CollapseExpandEvents` |
+| pass alone, fail only in the suite -- ordering, like update 48 | `EventPropagationTestCase`, `HtmlWindowTestCase`, `KeyboardEventTestCase`, `ValNum::Interactive` |
+| the two wxStyledTextCtrl cases | `AutoComp`, `Calltip` |
+
+Two of the first group are fixed as of #123 and #124: `SliderTestCase` passes
+all 28 assertions and `RadioButton::Click` passes. Three remain.
+
+### The GTK4 differences behind the slider and radio button ones
+
+Recorded here because they are toolkit behaviour rather than anything about
+wx, and the measurements are worth keeping. On a 0..100 scale starting at 50,
+step 1, page increment 20, driven by real key events against plain GTK:
+
+|  | Up | Down | Page_Up | Page_Down |
+| --- | --- | --- | --- | --- |
+| GTK+ 3, horizontal | 49 | 51 | 30 | 70 |
+| **GTK 4, horizontal** | **51** | **49** | **70** | **30** |
+| GTK+ 3, horizontal inverted | 51 | 49 | 70 | 30 |
+| GTK 4, horizontal inverted | 51 | 49 | 70 | 30 |
+| GTK+ 3, vertical | 49 | 51 | 30 | 70 |
+| GTK 4, vertical | 49 | 51 | 30 | 70 |
+
+Exactly one row differs, and Left and Right agree everywhere -- so a fix that
+reverses the keys unconditionally would have broken the other rows, while one
+that reverses them and then compensates for `inverted`, as #124 does, comes out
+right on all six.
+
+For the thumb release, the relevant fact is when a `GtkGestureClick` gives up
+on a `GtkScale` that has claimed the sequence for its own drag:
+
+    press at x=60:  legacy: button press / begin / pressed / end
+    drag to x=260:
+    release:        legacy: button release
+
+All of `begin`, `pressed` and `end` arrive at press time, before the drag
+starts -- not at the release, and not when the widget is destroyed. Only the
+legacy controller hears the release, which is what #124 hooks.
+
+Worth one caution, since the two look interchangeable: this is `GtkScale`
+specifically. The same probe against a `GtkScrollbar` gets `released` as
+expected, so the scrollbar tracking in `window.cpp` -- which clears the global
+`g_blockEventsOnScroll` from that handler -- is not affected and needs no
+change. That was checked because it looked like the same bug and would have
+been much worse; it is not.

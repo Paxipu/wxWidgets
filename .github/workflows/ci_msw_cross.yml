@@ -5,6 +5,9 @@ on:
   push:
     branches:
       - master
+      # Fork only, not for upstream: without this branch here none of
+      # these workflows ever run on any of the port's commits.
+      - claude/gtk4-wxwidgets-port-plan-pwo52u
     paths-ignore:
       - '.circleci/**'
       - '.github/ISSUE_TEMPLATE/**'
@@ -31,6 +34,9 @@ on:
   pull_request:
     branches:
       - master
+      # Fork only, not for upstream: without this branch here none of
+      # these workflows ever run on any of the port's commits.
+      - claude/gtk4-wxwidgets-port-plan-pwo52u
     paths-ignore:
       - '.circleci/**'
       - '.github/ISSUE_TEMPLATE/**'

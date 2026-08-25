@@ -1732,11 +1732,22 @@ void wxTopLevelWindowGTK::GTKTrackCompositorMove()
     if ( m_moveTrackerId )
         return;
 
-    // 20 ms is far finer than the eye needs and costs one round trip to the X
-    // server; it also has to stay well under the 3 px that
-    // wxAuiFloatingFrame::OnMoveEvent() treats as "moving too fast" to react
-    // to, or the events would arrive too coarse to be of use.
-    m_moveTrackerId = g_timeout_add(20, wxgtk_tlw_poll_move, this);
+#ifdef GDK_WINDOWING_X11
+    // Only X11 will say where a window ended up, and asking that is the entire
+    // point of the poll: under Wayland it would run for the length of every
+    // drag, ask the pointer where it is, and have nothing to do with the
+    // answer. So it only starts where it can achieve something.
+    //
+    // 20 ms is far finer than the eye needs, and it has to stay under the 3 px
+    // that wxAuiFloatingFrame::OnMoveEvent() treats as "moving too fast" to
+    // react to, or the events would arrive too coarse to be of use. One tick
+    // costs two round trips to the X server, measured at 92 us together, so
+    // 0.5% of a core while a drag is in progress and nothing at all outside
+    // one.
+    GdkSurface* const surface = gtk_native_get_surface(GTK_NATIVE(m_widget));
+    if ( surface && GDK_IS_X11_SURFACE(surface) )
+        m_moveTrackerId = g_timeout_add(20, wxgtk_tlw_poll_move, this);
+#endif // GDK_WINDOWING_X11
 }
 
 bool wxTopLevelWindowGTK::GTKPollCompositorMove()

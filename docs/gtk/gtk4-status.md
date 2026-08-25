@@ -4801,6 +4801,14 @@ refused elsewhere. The default is unchanged: off everywhere but wxMSW.
 The details, the full mapping, and the list of `wxAccessibleBase` members that
 GTK4 has no counterpart for are in `docs/gtk/gtk4-accessibility.md`.
 
+CI builds this. The wxGTK4 job passes `--enable-accessibility`, so
+`src/gtk/accessgtk.cpp` is compiled there, and two steps run the probes: one
+before the library is built, checking the GTK 4.10 capabilities and the GTK bug
+the implementation rests on together with the clipboard release ordering, and
+one after it, running the wxGrid bridge check. None of what they establish is
+visible to a compiler, so without them a GTK upgrade could leave `wxAccessible`
+describing nothing with the suite still green.
+
 ## Progress update 50: the clipboard was losing everything put on it
 
 The upstream resync brought in `RichTextCtrlTestCase::CutCopyPaste`, and the

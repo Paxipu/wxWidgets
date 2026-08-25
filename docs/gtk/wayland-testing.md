@@ -89,6 +89,24 @@ GTK+3 + Wayland : 0 wxMoveEvent
 GTK+ 3 reports one event in total, but already has it at the first sample,
 before any move is driven -- that is the initial placement.
 
+The same probe also prints what the window believes its position to be, which
+needs no input injection at all and is the clearest form of the result. With the
+compositor moving it to (200,200), then (500,350), then (800,500):
+
+```
+GTK4  : reported_pos=(120,120) at every sample -- what wx asked for, frozen
+GTK+3 : reported_pos=(0,0)     at every sample -- the origin, simply wrong
+```
+
+Neither toolkit ever reports where the window actually is, and GTK+ 3 is the
+worse of the two: GTK4 at least echoes the position that was requested.
+
+This is what makes the docking failure structural. `wxAuiManager` decides where
+a pane lands with `m_frame->ScreenToClient(::wxGetMousePosition())`, and
+`ScreenToClient()` is relative to the frame's screen position -- so on Wayland
+that hit test is computed in a fictional coordinate system under **both**
+toolkits, not just under GTK4.
+
 The reason is below both toolkits and cannot be worked around in either:
 `xdg_surface.configure` carries a **size** and never a position. Wayland does
 not tell a client where it is, deliberately. So anything built on knowing a

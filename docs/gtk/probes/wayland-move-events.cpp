@@ -14,6 +14,9 @@ public:
                       wxSize(240, 160),
                       wxCAPTION | wxRESIZE_BORDER | wxFRAME_TOOL_WINDOW)
     {
+        Bind(wxEVT_LEFT_DOWN, [](wxMouseEvent& e){
+            fprintf(stderr, "  mini LEFT_DOWN client=(%d,%d)\n",
+                    e.GetX(), e.GetY()); fflush(stderr); e.Skip(); });
         Bind(wxEVT_MOVE, &Mini::OnMove, this);
         Bind(wxEVT_MOVING, &Mini::OnMove, this);
     }
@@ -37,9 +40,15 @@ public:
         wxFrame* f = new wxFrame(nullptr, wxID_ANY, "wlmove-main",
                                  wxPoint(0, 0), wxSize(900, 700));
         f->Show();
-        (new Mini(f))->Show();
+        m_mini = new Mini(f);
+        m_mini->Show();
 
-        fprintf(stderr, "ready\n"); fflush(stderr);
+        {
+            const wxRect r = m_mini->GetScreenRect();
+            fprintf(stderr, "ready mini_screen_rect=%d,%d %dx%d\n",
+                    r.x, r.y, r.width, r.height);
+        }
+        fflush(stderr);
 
         // Report periodically so an external driver can see progress, and
         // quit on its own so nothing hangs if injection does nothing.
@@ -47,10 +56,9 @@ public:
         m_timer.Start(500);
         Bind(wxEVT_TIMER, [this](wxTimerEvent&){
             if ( ++m_ticks >= 24 ) { ExitMainLoop(); return; }
-            const wxPoint p = ::wxGetMousePosition();
-            fprintf(stderr, "t%02d moves=%d mouse=(%d,%d) down=%d\n",
-                    m_ticks, gMoves, p.x, p.y,
-                    wxGetMouseState().LeftIsDown());
+            const wxPoint pos = m_mini->GetPosition();
+            fprintf(stderr, "t%02d moves=%d reported_pos=(%d,%d)\n",
+                    m_ticks, gMoves, pos.x, pos.y);
             fflush(stderr);
         });
         return true;
@@ -63,6 +71,7 @@ public:
     }
 private:
     wxTimer m_timer;
+    Mini* m_mini = nullptr;
     int m_ticks = 0;
 };
 wxIMPLEMENT_APP(App);

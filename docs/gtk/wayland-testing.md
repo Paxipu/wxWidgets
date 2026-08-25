@@ -159,6 +159,45 @@ suggested. Driving the dock decision from the motion event wxAUI already
 receives would work; only the pane visually following the cursor is impossible,
 because positioning a toplevel is not something a Wayland client may do.
 
+## wxGetMousePosition() answers in the wrong surface's coordinates
+
+`probes/wayland-mouse-position.cpp` puts the pointer at known places with two
+toplevels of one application on screen, and asks. With the compositor's own
+geometry alongside:
+
+```
+compositor: main at 100,125 404x302
+compositor: pane at 700,475
+
+pointer 250,220 (over main) : wxGetMousePosition = (148, 95)   -> main-relative
+pointer 820,530 (over pane) : wxGetMousePosition = (118, 55)   -> pane-relative
+pointer 250,220 (over main) : wxGetMousePosition = (148, 95)   -> main-relative
+```
+
+820 - 702 = 118 and 530 - 475 = 55, so the second reading is in the **pane's**
+coordinates. The call answers relative to whichever surface the pointer happens
+to be over, which is what `gdk_device_get_surface_at_position()` does and what
+the comment on it in `window.cpp` already says. It is not a screen coordinate.
+
+`ScreenToClient()` cannot repair it: a GTK4 window does not know its own
+position on Wayland, so it subtracts nothing and hands the value straight back.
+
+This is what breaks wxAUI docking there. The dock decision is
+
+```cpp
+wxPoint pt = ::wxGetMousePosition();
+wxPoint client_pt = m_frame->ScreenToClient(pt);
+```
+
+and during a drag the pointer is over the **floating pane**, not over
+`m_frame`. So a pane-relative coordinate is interpreted as a coordinate in the
+main frame, and the hit test decides against a position nobody is pointing at.
+
+Note what is *not* wrong, since two earlier readings of this said otherwise:
+the `wxMoveEvent` does arrive (`wxTopLevelWindowGTK` sends it whenever `m_x`
+or `m_y` change, whether or not the compositor honoured the move), so
+`OnFloatingPaneMoving()` does run. It simply runs on a bad coordinate.
+
 ## Limits
 
 One compositor, one version, headless, software rendering. `xdg_surface`

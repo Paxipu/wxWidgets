@@ -119,6 +119,7 @@ each test in its own process, so one cannot leave state for the next.
 |---|---|
 | `deal` | Clicking the pack deals a card *and draws it*, and a forced full repaint agrees with what the click drew — i.e. the screen matches the game state. |
 | `drag` | A card picked up with the mouse follows the pointer, and returns cleanly when dropped somewhere illegal. This is the path that saves the pixels under the card and reads them back. |
+| `drag_restore` | Every pixel the card is *not* covering is unchanged by a drag. `drag`'s threshold of 200 px answers "did the card appear at all" and cannot see a handful of stray pixels left behind, which is what issue #136 was. Deliberately drags across the dealt rows: restoring green onto green looks perfect whatever the rectangles do, so a drag over empty baize cannot see this class of defect at all. |
 | `resize` | The board is unchanged after the window grows and shrinks again. |
 | `undo` | A right-click undoes the deal, visibly. |
 | `quiet` | The demo prints no assertions and no GTK criticals. |

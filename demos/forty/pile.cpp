@@ -61,21 +61,22 @@ Pile::Pile(int x, int y, int dx, int dy)
 //| at the origin of the pile, shifting each subsequent         |
 //| card by the pile's x and y offsets.                         |
 //+-------------------------------------------------------------+
+// Draw the whole pile, without asking the canvas which part of the window is
+// being repainted.
+//
+// A pile cannot know what it is drawing on. The canvas keeps the board in a
+// bitmap and blits the damaged part of that to the screen, so a card skipped
+// because it lay outside the window's update region would leave a hole in the
+// bitmap that no later paint fills in. The update region is meaningless
+// outside a paint handler anyway, and the game also redraws from its mouse
+// handlers.
 void Pile::Redraw(wxDC& dc )
 {
-    FortyFrame *frame = (FortyFrame*) wxTheApp->GetTopWindow();
-    wxWindow *canvas = nullptr;
-    if (frame)
-    {
-        canvas = frame->GetCanvas();
-    }
-
     if (m_topCard >= 0)
     {
         if (m_dx == 0 && m_dy == 0)
         {
-            if ((canvas) && (canvas->IsExposed(m_x,m_y,(int)(Card::GetScale()*60),(int)(Card::GetScale()*200))))
-                m_cards[m_topCard]->Draw(dc, m_x, m_y);
+            m_cards[m_topCard]->Draw(dc, m_x, m_y);
         }
         else
         {
@@ -83,17 +84,15 @@ void Pile::Redraw(wxDC& dc )
             int y = m_y;
             for (int i = 0; i <= m_topCard; i++)
             {
-                if ((canvas) && (canvas->IsExposed(x,y,(int)(Card::GetScale()*60),(int)(Card::GetScale()*200))))
-                    m_cards[i]->Draw(dc, x, y);
-                              x += (int)Card::GetScale()*m_dx;
-                              y += (int)Card::GetScale()*m_dy;
+                m_cards[i]->Draw(dc, x, y);
+                x += (int)Card::GetScale()*m_dx;
+                y += (int)Card::GetScale()*m_dy;
             }
         }
     }
     else
     {
-        if ((canvas) && (canvas->IsExposed(m_x,m_y,(int)(Card::GetScale()*60),(int)(Card::GetScale()*200))))
-            Card::DrawNullCard(dc, m_x, m_y);
+        Card::DrawNullCard(dc, m_x, m_y);
     }
 }
 

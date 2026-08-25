@@ -126,6 +126,39 @@ relative to our own surface *is* something Wayland delivers -- just not while
 `gdk_toplevel_begin_move()` has handed the pointer to the compositor for the
 duration of the drag.
 
+## What a captured drag can and cannot do
+
+`probes/wayland-capture-motion.cpp` checks the two halves of what
+`wxAuiManager` does when dragging a pane: it captures the mouse on the main
+frame, and moves the floating frame from the motion events it then receives.
+Driven with `wldrag` under sway, and with the compositor asked where the window
+really is rather than asking wx:
+
+```
+dragging motions delivered to the captured window : 4
+compositor: pane at 538,437 204x152   (before the drag)
+compositor: pane at 538,437 204x152   (after wx called Move() on every motion)
+wx's own GetPosition()                : exactly the coordinates it asked for
+```
+
+Two things follow, and they point in opposite directions.
+
+`Move()` on a toplevel does nothing on Wayland **and reports success**: the
+position wx hands back is the one it was asked for, so an application cannot
+discover that the move did not happen. That is the whole of the visible
+symptom -- a floating pane that will not follow the pointer.
+
+But the pointer itself arrives perfectly well. A window holding a capture is
+delivered motion throughout the drag, which means the information
+`wxAuiManager::OnFloatingPaneMoving()` needs is present. What breaks the chain
+is that wxAUI asks for it indirectly: it calls `Move()` and then acts on the
+`wxMoveEvent` that would follow, and on Wayland that event never comes.
+
+So docking is **not** unreachable here, which an earlier reading of this
+suggested. Driving the dock decision from the motion event wxAUI already
+receives would work; only the pane visually following the cursor is impossible,
+because positioning a toplevel is not something a Wayland client may do.
+
 ## Limits
 
 One compositor, one version, headless, software rendering. `xdg_surface`

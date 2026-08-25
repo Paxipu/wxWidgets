@@ -99,3 +99,33 @@ unconditionally. This is why `window.cpp` claims exactly when wx handles the
 press — that reproduces GTK3's TRUE/FALSE semantics — and why CAPTURE is not
 used instead, since it would restore the release at the cost of wx no longer
 being able to prevent a native control from acting at all.
+
+## `forty-gui-tests.py` — an application-level regression check
+
+The odd one out: not a GTK probe but a test that drives the built
+`demos/forty` binary under a private Xvfb with real XTEST input and decides
+whether it worked by looking at the pixels. It exists because the demo's
+drawing *is* the thing that broke in issue #84, and because "does clicking
+do anything" cannot be answered from a unit test.
+
+```
+LD_LIBRARY_PATH=... python3 forty-gui-tests.py path/to/build/demos/forty/forty
+```
+
+Needs `Xvfb`, `xdotool`, `scrot`, and Python with Pillow and NumPy. It runs
+each test in its own process, so one cannot leave state for the next.
+
+| Test | What it asserts |
+|---|---|
+| `deal` | Clicking the pack deals a card *and draws it*, and a forced full repaint agrees with what the click drew — i.e. the screen matches the game state. |
+| `drag` | A card picked up with the mouse follows the pointer, and returns cleanly when dropped somewhere illegal. This is the path that saves the pixels under the card and reads them back. |
+| `resize` | The board is unchanged after the window grows and shrinks again. |
+| `undo` | A right-click undoes the deal, visibly. |
+| `quiet` | The demo prints no assertions and no GTK criticals. |
+
+The useful trick in it, if you need to script a modal dialog on a bare Xvfb:
+there is no window manager, so the input focus stays at `PointerRoot` and
+keystrokes go to whatever window the pointer is over. Parking the pointer on
+the dialog's text field before typing is what makes it work; without that the
+keys go to the root window and vanish, which reads exactly like "wx will not
+dismiss this dialog".

@@ -5021,3 +5021,31 @@ expected, so the scrollbar tracking in `window.cpp` -- which clears the global
 `g_blockEventsOnScroll` from that handler -- is not affected and needs no
 change. That was checked because it looked like the same bug and would have
 been much worse; it is not.
+
+## Progress update 53: the delayed scroll behind #116
+
+The assertion disabled in progress update 48 was not a font-metric problem.
+GTK4 animates the adjustments changed by
+`gtk_text_view_scroll_mark_onscreen()`. A scroll requested for an earlier
+insertion point could therefore still be running when
+`SetInsertionPoint(0)` was called. If position zero happened to be visible at
+that instant, GTK considered the new scroll request a no-op and let the old
+animation continue, leaving `PositionToCoords(0)` a few pixels above the
+viewport after the call.
+
+This was confirmed by tracing the text view's frame-by-frame adjustment value:
+the insertion mark stayed at buffer offset zero while the previous vertical
+animation continued towards its stale target. On GTK 4.22.4 the failure is no
+longer limited to the full fixture or to `Sans 12`; controlled runs from
+`Sans 9` through `Sans 13` reproduce offsets between three and five pixels.
+
+Before asking GTK to show the new insertion mark, the GTK4 implementation now
+sets each scrolled-window adjustment to its current value. This ends any
+animation left by an earlier request without moving the viewport, after which
+the new mark scroll supersedes it normally. The GTK+ 2 and 3 paths are
+unchanged.
+
+The `PositionToCoords(0)` assertion is enabled again for GTK4. It passes for
+the base, rich and rich2 text controls on X11 and Wayland, including 50
+repeated X11 runs across the five controlled font sizes. The complete GTK+ 3
+and GTK+ 2 `TextCtrlTestCase` fixtures also pass.

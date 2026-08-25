@@ -2349,6 +2349,21 @@ void wxTextCtrl::SetInsertionPoint( long pos )
             m_showPositionDefer = mark;
         else
         {
+#ifdef __WXGTK4__
+            // Stop animations started by an earlier scroll request. If the
+            // new mark is currently on screen, GTK won't change the adjustment
+            // and the old animation would otherwise keep moving away from it.
+            GtkScrolledWindow* const scrolled = GTK_SCROLLED_WINDOW(m_widget);
+            GtkAdjustment* const hadjustment =
+                gtk_scrolled_window_get_hadjustment(scrolled);
+            gtk_adjustment_set_value(hadjustment,
+                                     gtk_adjustment_get_value(hadjustment));
+            GtkAdjustment* const vadjustment =
+                gtk_scrolled_window_get_vadjustment(scrolled);
+            gtk_adjustment_set_value(vadjustment,
+                                     gtk_adjustment_get_value(vadjustment));
+#endif // __WXGTK4__
+
             gtk_text_view_scroll_mark_onscreen(GTK_TEXT_VIEW(m_text), mark);
             if (m_afterLayoutId)
                 m_showPositionDefer = mark;

@@ -98,6 +98,18 @@ static gboolean wx_popup_place_again(void* data)
     return G_SOURCE_REMOVE;
 }
 
+// An autohiding popover is closed by GTK itself when a click lands outside
+// it, without wx being asked. Left alone, IsShown() would go on claiming the
+// popup is on screen after it has gone.
+static void wx_popup_closed(GtkPopover*, wxPopupWindow* win)
+{
+    // wxPopupTransientWindow connects its own handler, which is not "after"
+    // and so has already run and dismissed the popup the way its owner
+    // expects; there is then nothing left here to correct.
+    if ( win->IsShown() )
+        win->Show(false);
+}
+
 static void wx_popup_mapped(GtkWidget*, wxPopupWindow* win)
 {
     // The inset is only measurable once the popover has been laid out, which
@@ -179,7 +191,32 @@ bool wxPopupWindow::Create( wxWindow *parent, int style )
 
     // wx popups are placed and dismissed by wx itself; an autohiding popover
     // would take a grab and close itself behind wx's back.
-    gtk_popover_set_autohide( GTK_POPOVER(m_widget), FALSE );
+    //
+    // A popup which says it contains controls is the exception, because a
+    // popover which does not autohide is not given the pointer at all once
+    // GTK has processed a motion event over the parent window: the press goes
+    // to the widget underneath instead. probes/gtk4-popover-input.c measures
+    // that in plain GTK, and it is the ordinary case rather than a corner one,
+    // since a popup appears under a pointer which is already in the window.
+    //
+    // wxPU_CONTAINS_CONTROLS already means "make the controls in here work, at
+    // a price"; under GTK4 the price is the grab, and with it GTK closing the
+    // popup when the user clicks outside, which wx_popup_closed() above keeps
+    // wx in step with. wxPopupTransientWindow asks for the same mode for
+    // itself, and for the same reason, see popupcmn.cpp.
+    //
+    // Set once here rather than switched on and off around Show(): toggling it
+    // costs eleven further test cases in test_gui, in wxTreeCtrl and keyboard
+    // handling, which is what a grab left half-released looks like.
+    const bool containsControls = (style & wxPU_CONTAINS_CONTROLS) != 0;
+
+    gtk_popover_set_autohide( GTK_POPOVER(m_widget), containsControls );
+
+    if ( containsControls )
+    {
+        g_signal_connect_after( m_widget, "closed",
+                                G_CALLBACK(wx_popup_closed), this );
+    }
 
     // With a zero-height pointing rectangle this puts the popover's top edge
     // at the requested y, see DoSetSize().

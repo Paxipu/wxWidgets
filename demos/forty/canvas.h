@@ -41,6 +41,17 @@ public:
     wxDECLARE_EVENT_TABLE();
 
 private:
+    // Make sure the backing store exists, matches the client size and holds a
+    // current picture of the board; returns false if it cannot be created, in
+    // which case there is nothing to draw on and the caller does nothing. See
+    // the comment on it in canvas.cpp for why the game does not draw straight
+    // to the screen.
+    bool PrepareBackingStore();
+
+    // Drop the drawn board, so that the next paint redraws it from the game.
+    // Use whenever something changes the board as a whole.
+    void InvalidateBackingStore();
+
     wxFont* m_font;
     Game* m_game;
     ScoreFile* m_scoreFile;
@@ -51,6 +62,14 @@ private:
     wxString m_player;
     PlayerSelectionDialog* m_playerDialog;
     bool m_leftBtnDown;
+
+    // The board as drawn so far, and the client size it was drawn for. That
+    // size is remembered rather than asked of the bitmap, so that rounding in
+    // the conversion to physical pixels cannot make the store look stale on
+    // every single paint.
+    wxBitmap m_backingStore;
+    wxSize m_backingStoreSize;
+    bool m_backingStoreValid;
 };
 
 #endif

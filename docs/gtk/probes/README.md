@@ -40,6 +40,7 @@ gcc -o ref gtk3-reference-values.c $(pkg-config --cflags --libs gtk+-3.0) \
 | `gtk4-style-resolution-probe.c` | Does ancestry affect style resolution (i.e. must scratch hierarchies really be parented)? Do state flags and CSS classes still apply? |
 | `gtk4-widget-lifecycle-probe.c` | Widget ownership/floating-reference behaviour, which nodes exist on an empty vs populated widget, and whether `gtk_widget_measure()` replaces the removed `min-width` query. |
 | `gtk4-stylecontext-lifecycle.c` | Does the rewritten class's create/destroy cycle leak or emit GTK criticals? (Runs 500 cycles; children attached with `gtk_widget_set_parent()` are *not* freed with the parent, so this is easy to get wrong.) |
+| `x11-focus-watch.c` | Where is the X input focus, where is the pointer, and does anyone hold a grab? Asked from outside a running test, which is the only way to tell "no input arrives" apart from "input arrives somewhere else". Builds with `-lX11`, no GTK. See `../x11-input-debugging.md`. |
 | `gtk4-popover-input.c` | Is a `GtkPopover` given the pointer when the pointer was already inside its parent window before the popover appeared? (No, unless it autohides -- and a `wxPopupWindow` is a popover under GTK4. Needs `xdotool`. See issue #138.) |
 | `gtk3-reference-values.c` + `gtk4-comparison-values.c` | Differential check: does the GTK4 real-widget approach return the same values as the GTK3 synthetic-path approach for the same logical query? |
 

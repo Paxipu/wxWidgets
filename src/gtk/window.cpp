@@ -3023,6 +3023,13 @@ wxGTKImpl::WindowLeaveCallback(GtkWidget* WXUNUSED_UNLESS_DEBUG(widget),
 
 #ifdef __WXGTK4__
 
+// Defined further down, next to the button state it reads: are any mouse
+// buttons currently held? Declared with the same linkage as the definition,
+// which sits inside the extern "C" block with the button handlers.
+extern "C" {
+static bool wxGTKAnyButtonDown();
+}
+
 namespace wxGTKImpl
 {
 
@@ -3033,7 +3040,21 @@ namespace wxGTKImpl
 static bool SendEnterLeaveEvents(wxWindowGTK* win, GdkEvent* gdk_event,
                                  double x, double y)
 {
-    if ( g_windowUnderMouse )
+    // While a mouse button is held the pointer belongs to whatever it was
+    // pressed on, and crossing a window boundary is not something the
+    // application should hear about: dragging past a control must not look
+    // like entering it. X11 enforced that by delivering crossing events only
+    // to the window holding the implicit grab, and GTK3 dropped the rest by
+    // testing GdkEventCrossing::mode. GTK4 has neither -- the controllers fire
+    // as usual and the event they carry is null here -- so the button state,
+    // which is tracked for wxGetMouseState() anyway, stands in for it.
+    //
+    // The bookkeeping below is still updated, so that releasing the button
+    // over a different window does not then produce a leave for a window the
+    // pointer left long ago.
+    const bool quiet = wxGTKAnyButtonDown();
+
+    if ( g_windowUnderMouse && !quiet )
     {
         // We must not have got the leave event for the previous window, so
         // generate it now -- better late than never.
@@ -3045,6 +3066,9 @@ static bool SendEnterLeaveEvents(wxWindowGTK* win, GdkEvent* gdk_event,
 
     g_windowUnderMouse = win;
 
+    if ( quiet )
+        return false;
+
     wxMouseEvent event( wxEVT_ENTER_WINDOW );
     InitMouseEvent(win, event, gdk_event, x, y);
 
@@ -3052,6 +3076,52 @@ static bool SendEnterLeaveEvents(wxWindowGTK* win, GdkEvent* gdk_event,
         SendSetCursorEvent(win, event.m_x, event.m_y);
 
     return win->GTKProcessEvent(event);
+}
+
+// Is a child of this window, which has a client area of its own and so gets
+// its own motion events, under the pointer at (x, y) in win's coordinates?
+//
+// This exists only under GTK4. GTK3 gave every wxWindow with a client area its
+// own GdkWindow, so a motion over a child never reached the parent at all.
+// GTK4 has no per-widget windows: the same motion is delivered to the event
+// controller of every widget on the way up, so the parent sees motions which
+// happen over its children.
+static wxWindowGTK* ChildWithOwnWindowUnder(wxWindowGTK* win, double x, double y)
+{
+    if ( !win->m_wxwindow )
+        return nullptr;
+
+    wxCoord xx = wxRound(x);
+    wxCoord yy = wxRound(y);
+
+    wxPizza* const pizza = WX_PIZZA(win->m_wxwindow);
+    xx += pizza->m_scroll_x;
+    yy += pizza->m_scroll_y;
+
+    for ( wxWindowList::compatibility_iterator node = win->GetChildren().GetFirst();
+          node;
+          node = node->GetNext() )
+    {
+        wxWindow* const child = static_cast<wxWindow*>(node->GetData());
+
+        // Only children with a client area of their own are relevant: those
+        // are exactly the ones whose own controller will be called as well.
+        // A native control without one is found by FindWindowForMouseEvent()
+        // instead, which is how it worked under GTK3 too.
+        if ( !child->m_wxwindow || !child->IsShown() )
+            continue;
+
+        if ( !win->IsClientAreaChild(child) )
+            continue;
+
+        if ( xx >= child->m_x && xx < child->m_x + child->m_width &&
+             yy >= child->m_y && yy < child->m_y + child->m_height )
+        {
+            return child;
+        }
+    }
+
+    return nullptr;
 }
 
 // Is the pointer, at (x, y) in widget coordinates, actually over this widget?
@@ -3134,6 +3204,11 @@ wxGTKImpl::WindowLeaveCallback(wxWindowGTK* win, GdkEvent* gdk_event)
     if ( win == g_windowUnderMouse )
         g_windowUnderMouse = nullptr;
 
+    // Same rule as in SendEnterLeaveEvents(): no crossing reaches the
+    // application while a button is held.
+    if ( wxGTKAnyButtonDown() )
+        return false;
+
     // GtkEventControllerMotion::leave carries no coordinates, unlike GTK3's
     // GdkEventCrossing. Recover them from the event where possible so the
     // wxMouseEvent still reports where the pointer left; GetEventPosition()
@@ -3157,6 +3232,20 @@ wxGTKImpl::WindowMotionCallback(wxWindowGTK* win, GdkEvent* gdk_event,
     // the same native event is not seen by several wxWindows.
 
     if ( AreGTKEventsBlocked() )
+        return false;
+
+    // The same motion is delivered to every ancestor's controller under GTK4,
+    // and each delivery goes on to decide which window the pointer is in. A
+    // parent would answer "me", the child would answer "me" on its own
+    // delivery, and the two would send each other a leave and themselves an
+    // enter on every single motion event -- which is what made the panel in
+    // EnterLeaveEvents count two enters and two leaves for one move.
+    //
+    // Let the innermost window deal with it. The child has a controller of its
+    // own and is called too, so nothing is lost by dropping the redundant
+    // delivery here. A window holding the capture is exempt: it is supposed to
+    // get everything, wherever the pointer is.
+    if ( !g_captureWindow && ChildWithOwnWindowUnder(win, x, y) )
         return false;
 
     SetLastMouseEvent setLastMouse(gdk_event);
@@ -3428,6 +3517,11 @@ static GdkModifierType gs_buttonState = GdkModifierType(0);
 static constexpr GdkModifierType wxGTK_ALL_BUTTONS_MASK =
     GdkModifierType(GDK_BUTTON1_MASK | GDK_BUTTON2_MASK | GDK_BUTTON3_MASK |
                     GDK_BUTTON4_MASK | GDK_BUTTON5_MASK);
+
+static bool wxGTKAnyButtonDown()
+{
+    return (gs_buttonState & wxGTK_ALL_BUTTONS_MASK) != 0;
+}
 
 static GdkModifierType wxGTKButtonMaskFor(int button)
 {

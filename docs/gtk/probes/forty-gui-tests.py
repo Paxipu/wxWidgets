@@ -10,6 +10,10 @@ and its drawing is the thing under test, so pixels are the only honest oracle.
   drag     a card picked up with the mouse must follow it across the board
            (this is the path that saves the pixels under the card and reads
            them back again, which is what GTK4 cannot do on a screen DC)
+  drag_restore
+           every pixel the card is *not* covering must be unchanged by a
+           drag -- the strict counterpart of `drag`, which only asks whether
+           the card appeared at all
   resize   the board must survive the window changing size
   undo     a right-click must undo the deal, visibly
   quiet    the demo must not print assertions or GTK criticals
@@ -44,6 +48,25 @@ EMPTY_SPOT = (300, 300)
 # A card is 50x70 = 3500 px, so a real change is thousands of pixels; this only
 # has to be above capture noise.
 CHANGE_THRESHOLD = 200
+
+# Two captures of the same board in the same state must be the same picture,
+# so this is capture noise only, not a defect budget. Kept above zero because
+# the caret and focus rectangles can differ by a pixel or two between grabs.
+RESTORE_TOLERANCE = 8
+
+# Where test_drag_restore takes the card, in canvas coordinates, and how far
+# it moves per step.
+#
+# Deliberately over the dealt rows rather than over empty baize: restoring
+# green onto green looks perfect whatever the rectangles do, so a drag across
+# the felt cannot see this defect at all. The background has to have detail in
+# it for a mis-restored pixel to be a visible pixel.
+DRAG_A = (200, 175)
+DRAG_B = (500, 60)
+# A real mouse moves a few pixels at a time, and it is the small deltas that
+# the drag code treats specially, so creep rather than jump.
+DRAG_STEP = 3
+DRAG_SETTLE = 0.02
 
 
 def run(cmd, **kw):
@@ -385,6 +408,89 @@ def test_drag(s):
                   f"target) and went home cleanly on an illegal drop")
 
 
+def test_drag_restore(s):
+    """Dragging a card must leave every pixel it is not covering untouched.
+
+    The loose threshold in test_drag answers "did the card appear at all",
+    which is a different question from "was the background put back exactly".
+    A card is 3500 px, so a few stray pixels left behind vanish under that
+    threshold while being plainly visible to a human -- see issue #136.
+
+    Comparing whole boards would conflate residue with the card being in a
+    different place, so this masks out the two rectangles that are allowed to
+    differ -- where the card came from, and where it is now -- and requires
+    the rest of the board to be identical to the capture taken before the
+    drag started. Anything left over is background the incremental
+    save/restore path in Game::MouseMove() failed to put back.
+    """
+    before = s.board("restore-1-before.png")
+
+    start = s.root(BASE0_TOP[0] + CARD_W // 2, BASE0_TOP[1] + CARD_H // 2)
+
+    s.xdo("mousemove", "--sync", *map(str, start))
+    settle(0.4)
+    s.xdo("mousedown", "1")
+    settle(0.4)
+
+    pointer = [start]
+
+    def creep(to):
+        frm = pointer[0]
+        dx, dy = to[0] - frm[0], to[1] - frm[1]
+        steps = max(abs(dx), abs(dy)) // DRAG_STEP or 1
+        for i in range(1, steps + 1):
+            s.xdo("mousemove", "--sync",
+                  str(frm[0] + dx * i // steps), str(frm[1] + dy * i // steps))
+            settle(DRAG_SETTLE)
+        pointer[0] = to
+        settle(0.3)
+
+    a, b = s.root(*DRAG_A), s.root(*DRAG_B)
+
+    # Game::MouseMove() has a separate branch per sign combination of dx and
+    # dy, so walk a circuit that takes all four, including the pure horizontal
+    # and vertical steps where one delta is zero.
+    for leg in (a,
+                (b[0], a[1]),          # right, dy == 0
+                b,                     # down,  dx == 0
+                (a[0], b[1]),          # left,  dy == 0
+                (a[0], a[1] + 40),     # up,    dx == 0
+                (b[0], a[1] + 40),     # right and up
+                (a[0] + 30, b[1]),     # left and down
+                b,                     # right and down
+                a):                    # left and up
+        creep(leg)
+
+    during = s.board("restore-2-during.png")
+    s.xdo("mouseup", "1")
+    settle(1.0)
+
+    # The two rectangles allowed to differ, in board-capture coordinates: the
+    # pile the card was lifted off, and wherever the card is being held now.
+    # Generous margins, so this cannot pass by hiding the defect.
+    ox, oy = s.origin
+    margin = 12
+
+    def mask_out(m, cx, cy):
+        x0 = max(0, cx - CARD_W - margin)
+        y0 = max(0, cy - CARD_H - margin)
+        m[y0:cy + CARD_H + margin, x0:cx + CARD_W + margin] = False
+
+    diff = np.any(before != during, axis=-1)
+    mask_out(diff, ox + BASE0_TOP[0] + CARD_W // 2, oy + BASE0_TOP[1] + CARD_H // 2)
+    mask_out(diff, ox + DRAG_A[0], oy + DRAG_A[1])
+
+    residue = int(np.count_nonzero(diff))
+    if residue > RESTORE_TOLERANCE:
+        ys, xs = np.nonzero(diff)
+        where = (f"x[{xs.min()}..{xs.max()}] y[{ys.min()}..{ys.max()}]")
+        return False, (f"{residue} pixels of the board changed outside the "
+                       f"card and the pile it came from, at {where} -- the "
+                       f"incremental restore is leaving pixels behind")
+    return True, (f"the board outside the card is untouched by the drag "
+                  f"({residue} pixels differ)")
+
+
 def test_resize(s):
     """The board survives the window being resized."""
     g = s.geometry()
@@ -449,6 +555,7 @@ def test_quiet(s):
 TESTS = [
     ("deal", test_deal),
     ("drag", test_drag),
+    ("drag_restore", test_drag_restore),
     ("resize", test_resize),
     ("undo", test_undo),
     ("quiet", test_quiet),

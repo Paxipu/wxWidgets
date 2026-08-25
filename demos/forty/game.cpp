@@ -653,68 +653,28 @@ void Game::MouseMove(wxDC& dc, int mx, int my)
         int dx = mx + m_xOffset - m_xPos;
         int dy = my + m_yOffset - m_yPos;
 
-        if (abs(dx) >= CardWidth || abs(dy) >= CardHeight)
-        {
-            // Restore the area under the card
-            dc.Blit(m_xPos, m_yPos, CardWidth, CardHeight,
+        // Put back everything the card was covering, which leaves the board
+        // with no card drawn on it anywhere, and only then read the pixels
+        // under where the card is going. Doing it in that order means the
+        // saved background is always what is really underneath, whether or
+        // not the old and new positions overlap.
+        //
+        // This used to move the saved background around instead, with a
+        // branch per sign combination of dx and dy, to avoid copying the
+        // whole card twice per mouse move. That was worth doing on the
+        // hardware this demo was written for and is not worth doing now -- a
+        // card is 50x70, so this is 7000 pixels per motion event -- and it
+        // did not work: dragging a card across the dealt rows left parts of
+        // the background it had passed over painted with what had been under
+        // the card when the drag started. Every direction with a negative
+        // component was affected, and so was a diagonal drag; only the two
+        // purely rightward and downward cases came back clean.
+        dc.Blit(m_xPos, m_yPos, CardWidth, CardHeight,
                &memoryDC, 0, 0, wxCOPY);
 
-            // Copy the area under the card in the new position
-            memoryDC.Blit(0, 0, CardWidth, CardHeight,
+        memoryDC.Blit(0, 0, CardWidth, CardHeight,
                &dc, m_xPos + dx, m_yPos + dy, wxCOPY);
-        }
-        else if (dx >= 0)
-        {
-            // dx >= 0
-            dc.Blit(m_xPos, m_yPos, dx, CardHeight, &memoryDC, 0, 0, wxCOPY);
-            if (dy >= 0)
-            {
-                // dy >= 0
-                dc.Blit(m_xPos + dx, m_yPos, CardWidth - dx, dy, &memoryDC, dx, 0, wxCOPY);
-                memoryDC.Blit(0, 0, CardWidth - dx, CardHeight - dy,
-                       &memoryDC, dx, dy, wxCOPY);
-                memoryDC.Blit(0, CardHeight - dy, CardWidth - dx, dy,
-                       &dc, m_xPos + dx, m_yPos + CardHeight, wxCOPY);
-            }
-            else
-            {
-                // dy < 0
-                dc.Blit(m_xPos + dx, m_yPos + dy + CardHeight, CardWidth - dx, -dy,
-                       &memoryDC, dx, CardHeight + dy, wxCOPY);
-                memoryDC.Blit(0, -dy, CardWidth - dx, CardHeight + dy,
-                       &memoryDC, dx, 0, wxCOPY);
-                memoryDC.Blit(0, 0, CardWidth - dx, -dy,
-                       &dc, m_xPos + dx, m_yPos + dy, wxCOPY);
-            }
-            memoryDC.Blit(CardWidth - dx, 0, dx, CardHeight,
-                   &dc, m_xPos + CardWidth, m_yPos + dy, wxCOPY);
-        }
-        else
-        {
-            // dx < 0
-            dc.Blit(m_xPos + CardWidth + dx, m_yPos, -dx, CardHeight,
-                   &memoryDC, CardWidth + dx, 0, wxCOPY);
-            if (dy >= 0)
-            {
-                dc.Blit(m_xPos, m_yPos, CardWidth + dx, dy, &memoryDC, 0, 0, wxCOPY);
-                memoryDC.Blit(-dx, 0, CardWidth + dx, CardHeight - dy,
-                       &memoryDC, 0, dy, wxCOPY);
-                memoryDC.Blit(-dx, CardHeight - dy, CardWidth + dx, dy,
-                       &dc, m_xPos, m_yPos + CardHeight, wxCOPY);
-            }
-            else
-            {
-                // dy < 0
-                dc.Blit(m_xPos, m_yPos + CardHeight + dy, CardWidth + dx, -dy,
-                       &memoryDC, 0, CardHeight + dy, wxCOPY);
-                memoryDC.Blit(-dx, -dy, CardWidth + dx, CardHeight + dy,
-                       &memoryDC, 0, 0, wxCOPY);
-                memoryDC.Blit(-dx, 0, CardWidth + dx, -dy,
-                       &dc, m_xPos, m_yPos + dy, wxCOPY);
-            }
-            memoryDC.Blit(0, 0, -dx, CardHeight,
-                   &dc, m_xPos + dx, m_yPos + dy, wxCOPY);
-        }
+
         m_xPos += dx;
         m_yPos += dy;
 

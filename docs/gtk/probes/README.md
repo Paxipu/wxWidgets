@@ -158,3 +158,7 @@ still happens, so it is not a timing window. The file's header comment lists
 the hypotheses this ruled out by measurement — pointer parking, popup
 placement, and double-click delivery to a plain `wxPopupWindow` — so they do
 not have to be re-derived.
+
+It also records the answer, which is issue #138: the click never reaches the
+popup, because a `GtkPopover` which does not autohide is not given the pointer
+once GTK has processed a motion event over the parent window.

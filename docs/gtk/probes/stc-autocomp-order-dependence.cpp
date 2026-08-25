@@ -37,10 +37,14 @@
 //     move. A plain wxPopupWindow, with and without wxPU_CONTAINS_CONTROLS,
 //     reports down=1 up=2 dclick=1 in both cases.
 //
-// What is left is the path from the double click to
-// wxSTCListBox::OnDClick(): wxVListBox only emits wxEVT_LISTBOX_DCLICK when
-// the double-clicked row is already the current one, and otherwise treats the
-// event as a plain click.
+// The answer, found after this probe was written and recorded here so the file
+// does not go on pointing at a dead end: the click never reaches the popup at
+// all. Tracing wxVListBox::OnLeftDown() shows the list receives nothing, while
+// a handler on the wxStyledTextCtrl receives the press instead. Under GTK4 a
+// wxPopupWindow is a GtkPopover, and a popover which does not autohide stops
+// being given the pointer once GTK has processed a motion event over the
+// parent window -- which is what the "move" row above does. See issue #138,
+// probes/gtk4-popover-input.c, which measures that in plain GTK, and the fix.
 
 #include <wx/wx.h>
 #include <wx/stc/stc.h>

@@ -130,3 +130,36 @@ keystrokes go to whatever window the pointer is over. Parking the pointer on
 the dialog's text field before typing is what makes it work; without that the
 keys go to the root window and vanish, which reads exactly like "wx will not
 dismiss this dialog".
+
+## `stc-autocomp-order-dependence.cpp` — why the GUI suite stops at case 278
+
+Also not a GTK probe but a wx one, and the reason it is worth keeping: under
+GTK4 the suite's `wxStyledTextCtrl::AutoComp` passes when run alone, fails
+when anything ran before it, and the failure aborts the process — so 255 of
+`test_gui`'s 533 cases are never measured. Every one of the nine other
+failures known on this branch sits *after* that abort, which is why finding
+what poisons this one test matters more than its own two assertions.
+
+```
+g++ -o probe stc-autocomp-order-dependence.cpp \
+    $(path/to/wx-config --cxxflags --libs stc,core,base)
+for m in none button move click; do PROBE_PRE=$m xvfb-run -a ./probe; done
+```
+
+| `PROBE_PRE` | What runs before the popup is shown | Result |
+|---|---|---|
+| `none` | nothing | `text="ability"` — as the test expects |
+| `button` | a control is created and destroyed | `text="ability"` |
+| `move` | ... and `wxUIActionSimulator::MouseMove()` once | `text=""` |
+| `click` | ... and a simulated click, as the button tests do | `text=""` |
+
+So one simulated pointer move is the whole trigger, and nothing recovers
+from it: in the full suite 176 further cases run in between and the failure
+still happens, so it is not a timing window. The file's header comment lists
+the hypotheses this ruled out by measurement — pointer parking, popup
+placement, and double-click delivery to a plain `wxPopupWindow` — so they do
+not have to be re-derived.
+
+It also records the answer, which is issue #138: the click never reaches the
+popup, because a `GtkPopover` which does not autohide is not given the pointer
+once GTK has processed a motion event over the parent window.

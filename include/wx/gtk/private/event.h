@@ -38,6 +38,13 @@ namespace wxGTKImpl
 
 #ifdef __WXGTK4__
 
+// Return where the pointer is, relative to the surface the widget is on.
+//
+// Defined in src/gtk/window.cpp rather than here because asking for this
+// safely means guarding against a surface whose underlying window is already
+// gone, and that guard is windowing-system specific.
+bool GetPointerPosition(GtkWidget* widget, double* x, double* y);
+
 // Return the position, relative to the surface, at which the given event
 // happened.
 //
@@ -59,20 +66,8 @@ inline bool GetEventPosition(GdkEvent* gdk_event,
     if ( gdk_event && gdk_event_get_position(gdk_event, x, y) )
         return true;
 
-    if ( widget )
-    {
-        if ( GtkNative* const native = gtk_widget_get_native(widget) )
-        {
-            GdkSurface* const surface = gtk_native_get_surface(native);
-            GdkDevice* const pointer = gdk_seat_get_pointer(
-                gdk_display_get_default_seat(gtk_widget_get_display(widget)));
-
-            if ( surface && pointer &&
-                    gdk_surface_get_device_position(surface, pointer,
-                                                    x, y, nullptr) )
-                return true;
-        }
-    }
+    if ( widget && GetPointerPosition(widget, x, y) )
+        return true;
 
     *x =
     *y = 0;

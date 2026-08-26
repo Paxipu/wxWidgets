@@ -198,6 +198,45 @@ the `wxMoveEvent` does arrive (`wxTopLevelWindowGTK` sends it whenever `m_x`
 or `m_y` change, whether or not the compositor honoured the move), so
 `OnFloatingPaneMoving()` does run. It simply runs on a bad coordinate.
 
+## Move() does nothing to a toplevel, and wx does not notice
+
+`probes/wayland-toplevel-move.sh` asks a wxFrame to move to three positions in
+turn and asks the compositor where it actually is:
+
+```
+on screen, before the moves:   (478,412) 324x202
+on screen, after the moves:    (478,412) 324x202
+after the compositor moved it: (900,725) 324x202
+-- what wx believed --
+EVENT  wxEVT_MOVE says (400,300)
+MOVE   asked for (400,300) -- wx said (50,50) before, (400,300) after
+EVENT  wxEVT_MOVE says (700,120)
+MOVE   asked for (700,120) -- wx said (400,300) before, (700,120) after
+EVENT  wxEVT_MOVE says (150,600)
+MOVE   asked for (150,600) -- wx said (700,120) before, (150,600) after
+```
+
+Three moves, and the window never left the spot the compositor put it in. The
+last line is the control: sway moved that same window on request, so it was
+movable throughout and "nothing moved" is not a dead harness. The X11 leg of
+the same script is the other control -- there the X server confirms the window
+really is at (150,600), so the probe can see a move when one happens.
+
+`wx_gtk_window_move()` says as much in its own body: it goes through
+`XMoveWindow()` on X11 and does nothing anywhere else, because there is no
+Wayland request to position a toplevel. What the probe adds is the second half,
+which is not obvious from reading the code: `GetPosition()` afterwards returns
+the position that was *asked for*, and a `wxMoveEvent` is sent carrying it. wx
+reports a move that did not happen.
+
+This is the whole of the first half of the docking bug. wxAUI drags a floating
+pane by calling `Move()` on its frame once per motion event
+(`wxAuiManager::OnMotion`, the `actionDragFloatingPane` branch), so under
+Wayland the pane stays wherever the compositor first placed it -- which, for a
+newly mapped toplevel, is usually the middle of the screen. It is also why the
+cached `m_x`/`m_y` that `ScreenToClient()` subtracts are meaningless, so the
+two halves of the bug are one cause seen twice.
+
 ## Confirmed away from this machine
 
 Everything above is headless sway. The two user-visible consequences have since

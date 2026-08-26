@@ -166,3 +166,23 @@ not have to be re-derived.
 It also records the answer, which is issue #138: the click never reaches the
 popup, because a `GtkPopover` which does not autohide is not given the pointer
 once GTK has processed a motion event over the parent window.
+
+## `wayland-toplevel-move.cpp` — can a toplevel be moved at all?
+
+Run it through its driver, which supplies the controls:
+
+```
+./wayland-toplevel-move.sh /path/to/wx-build
+```
+
+The probe asks a `wxFrame` to move to three positions in turn and prints what
+`GetPosition()` says and what `wxEVT_MOVE` carries. On its own that measures
+nothing, because wx is free to believe whatever it likes; the script therefore
+runs it twice and adds an outside witness each time. Under X11 the X server is
+asked where the window is, which shows a move is detectable at all. Under
+headless sway the compositor is asked, and is then told to move that same
+window itself -- if it could not, the run says nothing about `Move()` and the
+numbers should be thrown away.
+
+The answer is in `docs/gtk/wayland-testing.md`: three moves, no movement, and
+wx reporting all three as having happened. It is the first half of issue #134.

@@ -257,6 +257,16 @@ for two reasons: it is evidence the readings generalise, and it settles that
 wxAUI docking under Wayland is a wxWidgets defect rather than anything GTK4
 introduced.
 
+The other half of that comparison has since been taken on the same desktop:
+under the X11 backend, docking and undocking both work and the pane keeps
+the pointer when it is undocked. That is the control the Wayland readings
+needed. Every mechanism blamed here is one that X11 supplies and Wayland
+does not -- a client can position its own toplevel through XMoveWindow,
+which is what `wx_gtk_window_move()` calls, and `wxGetMousePosition()`
+answers in real screen coordinates, so `ScreenToClient()` has something
+true to subtract. Both failures need Wayland to happen, which is what a
+diagnosis resting on Wayland-specific behaviour has to predict.
+
 ## Limits
 
 One compositor, one version, headless, software rendering. `xdg_surface`

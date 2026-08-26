@@ -219,6 +219,23 @@ the ibus input method module, with not one wx frame in the cycle.
 `gtk4-widget-factory` segfaulted identically on that machine, which is what
 settled it.
 
+The bottom of that stack is worth keeping, because it shows how little the
+application had to do to trigger it:
+
+```
+main -> wxEntry -> MyApp::OnInit -> MyFrame::MyFrame
+     -> wxTextCtrl::Create
+     -> gtk_text_view_new_with_buffer()
+     -> g_object_new -> [ nine frame GTK/ibus cycle, ~7900 times ]
+```
+
+Constructing a `GtkTextView` was enough. The reported cause of this shape is
+an ibus GTK4 module built against a different GTK4 than the one installed --
+it announces itself with "class size for type 'IBusIMContext' is smaller than
+the parent type's 'GtkIMContext' class size" before dying -- so reinstalling
+the module against the current GTK fixes it. Setting `GTK_IM_MODULE` to
+`gtk-im-context-simple` sidesteps it meanwhile.
+
 The general lesson is worth more than the instance: a crash reported
 against a port is not evidence about the port until something without the
 port in it has been shown to survive. Any X11 crash from a machine whose

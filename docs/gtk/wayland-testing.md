@@ -182,7 +182,13 @@ the comment on it in `window.cpp` already says. It is not a screen coordinate.
 `ScreenToClient()` cannot repair it: a GTK4 window does not know its own
 position on Wayland, so it subtracts nothing and hands the value straight back.
 
-This is what breaks wxAUI docking there. The dock decision is
+This was believed to be what breaks wxAUI docking there, and it is not:
+a fix built on it changed nothing on a real Wayland desktop, and the
+docking round trip in `probes/aui-dock-roundtrip.sh` passes on headless
+sway with and without that fix alike. The reading below stands as a
+reading -- the coordinates really are surface-relative -- but the causal
+claim attached to it was wrong, and what does break docking is still
+unknown. The dock decision is
 
 ```cpp
 wxPoint pt = ::wxGetMousePosition();

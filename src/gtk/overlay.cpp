@@ -108,7 +108,13 @@ wxOverlayImpl::~wxOverlayImpl()
     if (m_overlay)
     {
 #ifdef __WXGTK4__
-        gtk_widget_unparent(m_overlay);
+        if (GtkWidget* const parent = gtk_widget_get_parent(m_overlay))
+        {
+            if (WX_IS_PIZZA(parent))
+                WX_PIZZA(parent)->remove(m_overlay);
+            else
+                gtk_widget_unparent(m_overlay);
+        }
 #else
         gtk_widget_destroy(m_overlay);
 #endif

@@ -26,6 +26,7 @@
 #include "wx/caret.h"
 #include "wx/cshelp.h"
 #include "wx/dcclient.h"
+#include "wx/overlay.h"
 #include "wx/timer.h"
 #include "wx/tooltip.h"
 #include "wx/wupdlock.h"
@@ -37,6 +38,7 @@
     #include "wx/popupwin.h"
     #include "wx/scrolwin.h"
     #include "wx/gtk/private/wrapgtk.h"
+    #include "wx/gtk/private/win_gtk.h"
 #endif // __WXGTK4__
 
 class WindowTestCase
@@ -261,6 +263,36 @@ TEST_CASE_METHOD(WindowTestCase, "Window::Mouse", "[window]")
 }
 
 #ifdef __WXGTK4__
+TEST_CASE_METHOD(WindowTestCase, "Window::DestroyOverlayRemovesNativeChild",
+                 "[window][overlay]")
+{
+    m_window->SetSize(200, 150);
+    m_window->Show();
+    wxYield();
+
+    wxPizza* const pizza = WX_PIZZA(m_window->GetConnectWidget());
+    const unsigned int initialChildCount = g_list_length(pizza->m_children);
+
+    unsigned int state = 0x28;
+    for (int i = 0; i < 32; ++i)
+    {
+        state = state * 1664525u + 1013904223u;
+        m_window->SetSize(100 + state % 200, 100 + (state >> 16) % 150);
+
+        {
+            wxOverlay overlay;
+            wxClientDC dc(m_window);
+            {
+                wxDCOverlay overlayDC(overlay, &dc);
+            }
+
+            REQUIRE( g_list_length(pizza->m_children) == initialChildCount + 1 );
+        }
+
+        CHECK( g_list_length(pizza->m_children) == initialChildCount );
+    }
+}
+
 TEST_CASE_METHOD(WindowTestCase, "Window::MoveVisibleCaret",
                  "[window][caret]")
 {

@@ -411,6 +411,21 @@ static void target_drag_data_received( GtkWidget *WXUNUSED(widget),
 // wxDropTarget
 //----------------------------------------------------------------------------
 
+wxDropTarget::~wxDropTarget()
+{
+#ifdef __WXGTK4__
+    if ( m_dropController )
+    {
+        // The controller can outlive us while an asynchronous transfer holds
+        // a reference to it. Never leave its non-owning C++ pointer dangling.
+        g_object_set_data(G_OBJECT(m_dropController), "wx-drop-target", nullptr);
+        g_object_remove_weak_pointer(
+            G_OBJECT(m_dropController),
+            reinterpret_cast<gpointer*>(&m_dropController));
+    }
+#endif // __WXGTK4__
+}
+
 #ifdef __WXGTK4__
 
 // ============================================================================
@@ -424,12 +439,11 @@ static void target_drag_data_received( GtkWidget *WXUNUSED(widget),
 // a GdkDrag on the sending side, and the data has to be read asynchronously
 // rather than arriving attached to the drop.
 //
-// That asynchrony is the interesting part, exactly as it was for the
-// clipboard: wxDropTarget::GetData() is synchronous, so it drives the read
-// with a nested main loop. The same caveat applies -- the stream must be
-// drained with g_output_stream_splice_async(), never the blocking version,
-// which deadlocks against a locally owned source. See
-// docs/gtk/probes/gtk4-clipboard.c.
+// That asynchrony is the interesting part: the "drop" handler must start the
+// read and return before GTK can deliver its result. The stream is drained
+// with g_output_stream_splice_async(), and only then is the synchronous wx
+// OnData() callback invoked with the received bytes made available to
+// GetData().
 
 extern wxDataFormat::NativeFormat
 wxGTKGetAltWaylandFormat(wxDataFormat::NativeFormat format);
@@ -462,34 +476,113 @@ static GdkDragAction ConvertToGTK(wxDragResult result)
 namespace
 {
 
-// One synchronous read of a drop, over a nested loop. Mirrors ReadFormatSync()
-// in clipbrd.cpp; kept separate because GdkDrop and GdkClipboard share no
-// common base for reading.
-struct DropRead
+// The drop target a controller belongs to.
+wxDropTarget* TargetFromController(GtkEventController* controller)
 {
-    GMainLoop* loop = nullptr;
+    return static_cast<wxDropTarget*>(
+        g_object_get_data(G_OBJECT(controller), "wx-drop-target"));
+}
+
+const char wxDropDataKey[] = "wx-drop-data";
+
+// Keep everything needed by the GDK read callbacks alive independently of
+// both the widget and its wxDropTarget. The controller's non-owning pointer is
+// cleared when the target is unregistered, so it is safe to check from the
+// completion callback even if application code destroyed the target while a
+// transfer was pending.
+struct PendingDrop
+{
+    PendingDrop(GtkDropTargetAsync* target, GdkDrop* drop,
+                const char* mime, int x, int y, wxDragResult suggested)
+        : controller(GTK_EVENT_CONTROLLER(g_object_ref(target))),
+          drop(GDK_DROP(g_object_ref(drop))),
+          mime(g_strdup(mime)),
+          x(x),
+          y(y),
+          suggested(suggested)
+    {
+        mimes[0] = this->mime;
+        mimes[1] = nullptr;
+    }
+
+    ~PendingDrop()
+    {
+        if ( out )
+            g_object_unref(out);
+
+        g_free(mime);
+        g_object_unref(controller);
+        g_object_unref(drop);
+    }
+
+    GtkEventController* const controller;
+    GdkDrop* const drop;
+    char* const mime;
+    const char* mimes[2];
+    const int x;
+    const int y;
+    const wxDragResult suggested;
     GOutputStream* out = nullptr;
-    GBytes* bytes = nullptr;
 };
+
+void CompletePendingDrop(PendingDrop* pending, GBytes* bytes)
+{
+    wxDragResult result = wxDragNone;
+    if ( bytes )
+    {
+        if ( wxDropTarget* const dt =
+                TargetFromController(pending->controller) )
+        {
+            // GBytes remains owned by this function for the entire OnData()
+            // call; GetData() only copies from it.
+            g_object_set_data(G_OBJECT(pending->drop), wxDropDataKey, bytes);
+            dt->GTKSetDrop(pending->drop);
+            result = dt->OnData(pending->x, pending->y, pending->suggested);
+
+            g_object_set_data(G_OBJECT(pending->drop), wxDropDataKey, nullptr);
+
+            // OnData() is application code and may destroy the target.
+            if ( TargetFromController(pending->controller) == dt )
+                dt->GTKSetDrop(nullptr);
+        }
+    }
+
+    gdk_drop_finish(pending->drop,
+                    result != wxDragNone
+                        ? ConvertToGTK(pending->suggested)
+                        : GdkDragAction(0));
+
+    if ( bytes )
+        g_bytes_unref(bytes);
+
+    delete pending;
+}
 
 extern "C" {
 
 void wx_drop_spliced(GObject* src, GAsyncResult* res, gpointer user_data)
 {
-    DropRead* const read = static_cast<DropRead*>(user_data);
+    PendingDrop* const pending = static_cast<PendingDrop*>(user_data);
 
-    if ( g_output_stream_splice_finish(G_OUTPUT_STREAM(src), res, nullptr) >= 0 )
+    GError* error = nullptr;
+    GBytes* bytes = nullptr;
+    if ( g_output_stream_splice_finish(G_OUTPUT_STREAM(src), res, &error) >= 0 )
     {
-        read->bytes = g_memory_output_stream_steal_as_bytes(
-                        G_MEMORY_OUTPUT_STREAM(src));
+        bytes = g_memory_output_stream_steal_as_bytes(
+                    G_MEMORY_OUTPUT_STREAM(src));
+    }
+    else if ( error )
+    {
+        wxLogTrace(TRACE_DND, "drop stream read failed: %s", error->message);
+        g_error_free(error);
     }
 
-    g_main_loop_quit(read->loop);
+    CompletePendingDrop(pending, bytes);
 }
 
 void wx_drop_read_done(GObject* src, GAsyncResult* res, gpointer user_data)
 {
-    DropRead* const read = static_cast<DropRead*>(user_data);
+    PendingDrop* const pending = static_cast<PendingDrop*>(user_data);
 
     GError* error = nullptr;
     GInputStream* const stream =
@@ -503,47 +596,21 @@ void wx_drop_read_done(GObject* src, GAsyncResult* res, gpointer user_data)
             g_error_free(error);
         }
 
-        g_main_loop_quit(read->loop);
+        CompletePendingDrop(pending, nullptr);
         return;
     }
 
-    read->out = g_memory_output_stream_new_resizable();
-    g_output_stream_splice_async(read->out, stream,
+    pending->out = g_memory_output_stream_new_resizable();
+    g_output_stream_splice_async(pending->out, stream,
                                  GOutputStreamSpliceFlags(
                                     G_OUTPUT_STREAM_SPLICE_CLOSE_SOURCE |
                                     G_OUTPUT_STREAM_SPLICE_CLOSE_TARGET),
                                  G_PRIORITY_DEFAULT, nullptr,
-                                 wx_drop_spliced, read);
+                                 wx_drop_spliced, pending);
     g_object_unref(stream);
 }
 
 } // extern "C"
-
-GBytes* ReadDropSync(GdkDrop* drop, const char* mime)
-{
-    const char* mimes[2] = { mime, nullptr };
-
-    DropRead read;
-    read.loop = g_main_loop_new(nullptr, FALSE);
-
-    gdk_drop_read_async(drop, mimes, G_PRIORITY_DEFAULT, nullptr,
-                        wx_drop_read_done, &read);
-
-    g_main_loop_run(read.loop);
-    g_main_loop_unref(read.loop);
-
-    if ( read.out )
-        g_object_unref(read.out);
-
-    return read.bytes;
-}
-
-// The drop target a controller belongs to.
-wxDropTarget* TargetFromController(GtkEventController* controller)
-{
-    return static_cast<wxDropTarget*>(
-        g_object_get_data(G_OBJECT(controller), "wx-drop-target"));
-}
 
 } // anonymous namespace
 
@@ -624,16 +691,25 @@ wx_drop_perform(GtkDropTargetAsync* target, GdkDrop* drop,
 
     const wxDragResult suggested = dt->GTKFigureOutSuggestedAction();
 
+    const wxDataFormat::NativeFormat mime = dt->GTKGetMatchingPair();
     bool ok = false;
-    if ( dt->GTKGetMatchingPair() && dt->OnDrop(int(x), int(y)) )
+    if ( mime && dt->OnDrop(int(x), int(y)) )
     {
-        // OnData() calls GetData(), which reads the drop synchronously.
-        ok = dt->OnData(int(x), int(y), suggested) != wxDragNone;
+        // GtkDropTargetAsync requires the handler to return before completing
+        // the data transfer. Keep the MIME array in PendingDrop too because
+        // gdk_drop_read_async() uses it after this function has returned.
+        PendingDrop* const pending =
+            new PendingDrop(target, drop, mime, int(x), int(y), suggested);
+        gdk_drop_read_async(drop, pending->mimes, G_PRIORITY_DEFAULT, nullptr,
+                            wx_drop_read_done, pending);
+        ok = true;
     }
 
-    gdk_drop_finish(drop, ok ? ConvertToGTK(suggested) : GdkDragAction(0));
-
-    dt->GTKSetDrop(nullptr);
+    if ( !ok )
+    {
+        gdk_drop_finish(drop, GdkDragAction(0));
+        dt->GTKSetDrop(nullptr);
+    }
 
     return ok;
 }
@@ -645,6 +721,7 @@ wxDropTarget::wxDropTarget( wxDataObject *data )
 {
     m_firstMotion = true;
     m_drop = nullptr;
+    m_dropController = nullptr;
     m_dragWidget = nullptr;
 }
 
@@ -744,18 +821,15 @@ bool wxDropTarget::GetData()
     if (!mime)
         return false;
 
-    GBytes* const bytes = ReadDropSync(m_drop, mime);
+    GBytes* const bytes = static_cast<GBytes*>(
+        g_object_get_data(G_OBJECT(m_drop), wxDropDataKey));
     if (!bytes)
         return false;
 
     gsize size = 0;
     gconstpointer const data = g_bytes_get_data(bytes, &size);
 
-    const bool ok = m_dataObject->SetData(wxDataFormat(mime), size, data);
-
-    g_bytes_unref(bytes);
-
-    return ok;
+    return m_dataObject->SetData(wxDataFormat(mime), size, data);
 }
 
 void wxDropTarget::GtkUnregisterWidget( GtkWidget *widget )
@@ -766,6 +840,18 @@ void wxDropTarget::GtkUnregisterWidget( GtkWidget *widget )
             static_cast<GtkEventController*>(
                 g_object_get_data(G_OBJECT(widget), "wx-drop-controller")) )
     {
+        // A pending asynchronous drop keeps the controller alive, so clear
+        // its non-owning C++ pointer before detaching it from the widget.
+        g_object_set_data(G_OBJECT(controller), "wx-drop-target", nullptr);
+
+        if ( m_dropController == controller )
+        {
+            g_object_remove_weak_pointer(
+                G_OBJECT(controller),
+                reinterpret_cast<gpointer*>(&m_dropController));
+            m_dropController = nullptr;
+        }
+
         gtk_widget_remove_controller(widget, controller);
         g_object_set_data(G_OBJECT(widget), "wx-drop-controller", nullptr);
     }
@@ -810,6 +896,11 @@ void wxDropTarget::GtkRegisterWidget( GtkWidget *widget )
     GtkDropTargetAsync* const target = gtk_drop_target_async_new(
         formats, GdkDragAction(GDK_ACTION_COPY | GDK_ACTION_MOVE |
                                GDK_ACTION_LINK));
+
+    wxASSERT_MSG(!m_dropController, "drop target is already registered");
+    m_dropController = GTK_EVENT_CONTROLLER(target);
+    g_object_add_weak_pointer(
+        G_OBJECT(target), reinterpret_cast<gpointer*>(&m_dropController));
 
     g_object_set_data(G_OBJECT(target), "wx-drop-target", this);
 

@@ -29,6 +29,7 @@ class WXDLLIMPEXP_CORE wxDropTarget: public wxDropTargetBase
 {
 public:
     wxDropTarget(wxDataObject *dataObject = nullptr );
+    virtual ~wxDropTarget() override;
 
     virtual wxDragResult OnDragOver(wxCoord x, wxCoord y, wxDragResult def) override;
     virtual bool OnDrop(wxCoord x, wxCoord y) override;
@@ -43,9 +44,8 @@ public:
 #ifdef __WXGTK4__
     // GTK4 replaced the drag_* signals, GdkDragContext and GtkSelectionData
     // with a GtkDropTargetAsync controller, a GdkDrop, and an asynchronous
-    // read of the dropped data. A drop therefore no longer arrives with its
-    // data attached: it has to be fetched, which GetData() does synchronously
-    // over a nested main loop, as wxClipboard does.
+    // read of the dropped data. The controller therefore reads it before
+    // calling OnData(), where GetData() copies the already received bytes.
     wxDataFormat::NativeFormat GTKGetMatchingPair(bool quiet = false);
     wxDragResult GTKFigureOutSuggestedAction();
 
@@ -53,6 +53,7 @@ public:
     void GtkUnregisterWidget( GtkWidget *widget );
 
     GdkDrop            *m_drop;
+    GtkEventController *m_dropController;
     GtkWidget          *m_dragWidget;
     bool                m_firstMotion;
 
@@ -148,4 +149,3 @@ private:
 };
 
 #endif // _WX_GTK_DND_H_
-

@@ -617,10 +617,12 @@ wxRendererGTK::DrawDropArrow(wxWindow*,
     wxColour fg;
     sc.Fg(fg, stateTypeToFlags[state]);
 
+    // GdkRGBA holds floats, so divide by a float: 255.0 makes these double
+    // and narrows inside the braces.
     const GdkRGBA rgba =
     {
-        fg.Red() / 255.0, fg.Green() / 255.0, fg.Blue() / 255.0,
-        fg.Alpha() / 255.0
+        fg.Red() / 255.0f, fg.Green() / 255.0f, fg.Blue() / 255.0f,
+        fg.Alpha() / 255.0f
     };
 
     GtkSnapshot* const snapshot = gtk_snapshot_new();

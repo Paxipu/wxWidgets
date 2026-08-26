@@ -237,6 +237,13 @@ newly mapped toplevel, is usually the middle of the screen. It is also why the
 cached `m_x`/`m_y` that `ScreenToClient()` subtracts are meaningless, so the
 two halves of the bug are one cause seen twice.
 
+Nothing can fix that half. `Move()` cannot be made to work, so a pane can only
+be made to follow the pointer by handing the drag to the compositor with
+`gdk_toplevel_begin_move()` -- which takes the pointer away from the client and
+loses docking, the half that actually matters. It is recorded here as a
+limitation rather than a bug: an undocked pane not following the mouse is
+cosmetic, being unable to dock it again is not.
+
 ## Confirmed away from this machine
 
 Everything above is headless sway. The two user-visible consequences have since

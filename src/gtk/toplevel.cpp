@@ -214,8 +214,13 @@ static void wx_gtk_window_move(GtkWindow* window, int x, int y)
 {
 #ifdef GDK_WINDOWING_X11
     GdkSurface* const surface = gtk_native_get_surface(GTK_NATIVE(window));
-    if ( surface && GDK_IS_X11_SURFACE(surface) )
+    if ( wxGTKImpl::CanAskServerAbout(surface) )
     {
+        // The request names the surface's window, so it has to be trapped:
+        // see wx/gtk/private/backend.h. Nothing is read back, so the trap is
+        // simply let go of at the end of the scope.
+        wxGTKImpl::X11ErrorTrap trap(gdk_surface_get_display(surface));
+
         XMoveWindow(GDK_SURFACE_XDISPLAY(surface), GDK_SURFACE_XID(surface),
                     x, y);
         return;
@@ -296,6 +301,13 @@ static void wxgtk_window_set_urgency_hint (GtkWindow *win,
 
         GdkSurface* const surface = wx_gtk_widget_get_surface(widget);
         wxCHECK_RET(surface, "wxgtk_window_set_urgency_hint: not realized");
+
+        // Both requests below name this window, so neither may reach the
+        // server unguarded: see wx/gtk/private/backend.h.
+        if ( !wxGTKImpl::CanAskServerAbout(surface) )
+            return;
+
+        wxGTKImpl::X11ErrorTrap trap(display);
 
         Display* dpy = GDK_DISPLAY_XDISPLAY(display);
         Window xid = gdk_x11_surface_get_xid(surface);
@@ -1227,6 +1239,12 @@ wxGetFrameExtents(GdkWindow* window, wxTopLevelWindow::DecorSize* decorSize)
 #endif
 
 #ifdef __WXGTK4__
+    // The request below names this window: see wx/gtk/private/backend.h.
+    if ( !wxGTKImpl::CanAskServerAbout(window) )
+        return false;
+
+    wxGTKImpl::X11ErrorTrap trap(display);
+
     // GdkAtom, and with it gdk_atom_intern() and the GdkAtom-to-Xatom
     // conversion, are gone under GTK4: X atoms are interned directly now.
     static Atom xproperty =
@@ -1249,6 +1267,16 @@ wxGetFrameExtents(GdkWindow* window, wxTopLevelWindow::DecorSize* decorSize)
         xproperty,
         0, 4, false, XA_CARDINAL,
         &type, &format, &nitems, &bytes_after, data.Out());
+
+#ifdef __WXGTK4__
+    // Popping blocks until the server has answered, so a BadWindow for a
+    // window that went away while this was in flight is caught here.
+    if ( const int xerror = trap.Pop() )
+    {
+        wxLogTrace(TRACE_TLWSIZE, "_NET_FRAME_EXTENTS: X error %d", xerror);
+        return false;
+    }
+#endif
 
     if ( status != Success )
     {
@@ -1754,15 +1782,24 @@ bool wxTopLevelWindowGTK::GTKPollCompositorMove()
 {
 #ifdef GDK_WINDOWING_X11
     GdkSurface* const surface = gtk_native_get_surface(GTK_NATIVE(m_widget));
-    if ( surface && GDK_IS_X11_SURFACE(surface) )
+
+    // This runs on a timer for as long as the window exists, so it is bound to
+    // fire once with a surface that has just gone away. Naming that surface to
+    // the server unguarded would end the process: see
+    // wx/gtk/private/backend.h.
+    if ( wxGTKImpl::CanAskServerAbout(surface) )
     {
         Display* const xdisplay = GDK_SURFACE_XDISPLAY(surface);
         Window child;
         int rootX = 0, rootY = 0;
 
-        if ( XTranslateCoordinates(xdisplay, GDK_SURFACE_XID(surface),
-                                   DefaultRootWindow(xdisplay),
-                                   0, 0, &rootX, &rootY, &child) )
+        wxGTKImpl::X11ErrorTrap trap(gdk_surface_get_display(surface));
+
+        const Bool ok = XTranslateCoordinates(xdisplay, GDK_SURFACE_XID(surface),
+                                              DefaultRootWindow(xdisplay),
+                                              0, 0, &rootX, &rootY, &child);
+
+        if ( trap.Pop() == 0 && ok )
         {
             if ( m_x != rootX || m_y != rootY )
             {

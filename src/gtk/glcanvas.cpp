@@ -235,7 +235,9 @@ unsigned long wxGLCanvas::GetXWindow() const
     // don't have one of their own any more.
     auto* const window = GTKGetDrawingWindow();
 #ifdef __WXGTK4__
-    return window ? GDK_SURFACE_XID(window) : 0;
+    // Handing out the XID of a surface GDK has seen destroyed only moves the
+    // BadWindow along to whoever uses it: see wx/gtk/private/backend.h.
+    return wxGTKImpl::CanAskServerAbout(window) ? GDK_SURFACE_XID(window) : 0;
 #else
     return window ? GDK_WINDOW_XID(window) : 0;
 #endif

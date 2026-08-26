@@ -349,9 +349,8 @@ bool GetPointerPosition(GtkWidget* widget, double* x, double* y)
     // gtk_native_get_surface() keeps returning the surface of a toplevel being
     // torn down, and GTK goes on synthesizing crossing events for it, so this
     // is reached with a surface that is already destroyed. Asking such a
-    // surface for anything is at best useless and, under X11, fatal: see
-    // below.
-    if ( !surface || gdk_surface_is_destroyed(surface) )
+    // surface where the pointer is killed wxMaxima on shutdown, see #113.
+    if ( !surface )
         return false;
 
     GdkDisplay* const display = gtk_widget_get_display(widget);
@@ -360,33 +359,25 @@ bool GetPointerPosition(GtkWidget* widget, double* x, double* y)
     if ( !pointer )
         return false;
 
-#ifdef GDK_WINDOWING_X11
-    if ( GDK_IS_X11_SURFACE(surface) )
+    if ( IsX11(display) )
     {
-        // The query goes to the X server as XIQueryPointer on the surface's
-        // window. The check above doesn't make that safe on its own: X is
-        // asynchronous, so the window can be destroyed between the check and
-        // the request reaching the server, and the server then answers
-        // BadWindow, on which GDK's error handler exits the process. This is
-        // exactly how an application closing a window with the pointer inside
-        // it died on shutdown, see #113. Trapping the error turns an unknown
-        // pointer position into a harmless "don't know", which is all the
-        // caller needs. The same hazard is handled the same way in
-        // wxWindowGTK::GTKGetOrigin().
-        wxGCC_WARNING_SUPPRESS(deprecated-declarations)
-        gdk_x11_display_error_trap_push(display);
+        if ( !CanAskServerAbout(surface) )
+            return false;
+
+        // The query goes to the server as XIQueryPointer on the surface's
+        // window, so it has to be trapped: not knowing where the pointer is
+        // costs the caller nothing, being killed for asking costs it
+        // everything.
+        X11ErrorTrap trap(display);
 
         const bool ok = gdk_surface_get_device_position(surface, pointer,
                                                         x, y, nullptr) != 0;
 
-        // Popping syncs, so the error, if there was one, is caught here rather
-        // than arriving later, outside the trap, where it would be fatal.
-        const int xerror = gdk_x11_display_error_trap_pop(display);
-        wxGCC_WARNING_RESTORE(deprecated-declarations)
-
-        return xerror == 0 && ok;
+        return trap.Pop() == 0 && ok;
     }
-#endif // GDK_WINDOWING_X11
+
+    if ( gdk_surface_is_destroyed(surface) )
+        return false;
 
     return gdk_surface_get_device_position(surface, pointer, x, y, nullptr) != 0;
 }
@@ -731,6 +722,74 @@ bool wxGTKImpl::IsX11(void* instance)
         is = IsBackend(instance, "GdkX11");
     return bool(is);
 }
+
+#ifdef __WXGTK4__
+
+// See the declarations in wx/gtk/private/backend.h.
+
+bool wxGTKImpl::CanAskServerAbout(void* surface)
+{
+#ifdef GDK_WINDOWING_X11
+    if ( !surface )
+        return false;
+
+    // GDK_IS_X11_SURFACE() is a type check, not a liveness one: it stays true
+    // for a surface whose X window has already been destroyed.
+    GdkSurface* const s = static_cast<GdkSurface*>(surface);
+
+    return GDK_IS_X11_SURFACE(s) && !gdk_surface_is_destroyed(s);
+#else // !GDK_WINDOWING_X11
+    wxUnusedVar(surface);
+
+    return false;
+#endif // GDK_WINDOWING_X11/!GDK_WINDOWING_X11
+}
+
+wxGTKImpl::X11ErrorTrap::X11ErrorTrap(void* display)
+    : m_display(display)
+{
+#ifdef GDK_WINDOWING_X11
+    if ( m_display )
+    {
+        wxGCC_WARNING_SUPPRESS(deprecated-declarations)
+        gdk_x11_display_error_trap_push(static_cast<GdkDisplay*>(m_display));
+        wxGCC_WARNING_RESTORE(deprecated-declarations)
+    }
+#endif // GDK_WINDOWING_X11
+}
+
+int wxGTKImpl::X11ErrorTrap::Pop()
+{
+#ifdef GDK_WINDOWING_X11
+    if ( m_display )
+    {
+        GdkDisplay* const display = static_cast<GdkDisplay*>(m_display);
+        m_display = nullptr;
+
+        wxGCC_WARNING_SUPPRESS(deprecated-declarations)
+        return gdk_x11_display_error_trap_pop(display);
+        wxGCC_WARNING_RESTORE(deprecated-declarations)
+    }
+#endif // GDK_WINDOWING_X11
+
+    return 0;
+}
+
+wxGTKImpl::X11ErrorTrap::~X11ErrorTrap()
+{
+#ifdef GDK_WINDOWING_X11
+    if ( m_display )
+    {
+        wxGCC_WARNING_SUPPRESS(deprecated-declarations)
+        gdk_x11_display_error_trap_pop_ignored(
+            static_cast<GdkDisplay*>(m_display));
+        wxGCC_WARNING_RESTORE(deprecated-declarations)
+    }
+#endif // GDK_WINDOWING_X11
+}
+
+#endif // __WXGTK4__
+
 #endif // __WXGTK3__
 
 //-----------------------------------------------------------------------------
@@ -6511,33 +6570,23 @@ static void wxGTKGetOriginInRoot(GtkWidget* widget, int* org_x, int* org_y)
     // leaving them to disagree with wxTopLevelWindow::GetPosition().
     GdkSurface* const surface = gtk_native_get_surface(GTK_NATIVE(root));
 
-    // GDK_IS_X11_SURFACE() is a type check, not a liveness one: it stays true
-    // for a surface whose X window has already been destroyed, and
-    // GDK_SURFACE_XID() then hands the server a stale XID. The server answers
-    // BadWindow, and GDK's error handler exits the process -- which is not a
-    // theoretical risk, it killed test_gui halfway through the suite. See #85.
-    if ( surface && GDK_IS_X11_SURFACE(surface) &&
-            !gdk_surface_is_destroyed(surface) )
+    // Naming a surface to the server is only safe behind both of these, see
+    // wx/gtk/private/backend.h. Getting it wrong here killed test_gui halfway
+    // through the suite once, see #85.
+    if ( wxGTKImpl::CanAskServerAbout(surface) )
     {
         Display* const dpy = GDK_SURFACE_XDISPLAY(surface);
         int rx = 0,
             ry = 0;
         Window unused;
 
-        // The check above still leaves a window: X is asynchronous, so the
-        // surface can be destroyed between asking and the request reaching the
-        // server. Trapping the error is what actually makes this safe -- the
-        // check merely avoids the common case of trapping one every time.
-        GdkDisplay* const display = gdk_surface_get_display(surface);
-        gdk_x11_display_error_trap_push(display);
+        wxGTKImpl::X11ErrorTrap trap(gdk_surface_get_display(surface));
 
         const Bool ok = XTranslateCoordinates(dpy, GDK_SURFACE_XID(surface),
                                               DefaultRootWindow(dpy),
                                               0, 0, &rx, &ry, &unused);
 
-        // Sync so that the error, if any, is caught by the pop below rather
-        // than arriving later, outside the trap, where it would be fatal.
-        if ( gdk_x11_display_error_trap_pop(display) == 0 && ok )
+        if ( trap.Pop() == 0 && ok )
         {
             *org_x += rx;
             *org_y += ry;

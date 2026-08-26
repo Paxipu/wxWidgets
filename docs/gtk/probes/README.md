@@ -187,3 +187,36 @@ numbers should be thrown away.
 
 The answer is in `docs/gtk/wayland-testing.md`: three moves, no movement, and
 wx reporting all three as having happened. It is the first half of issue #134.
+
+## `crash-capture.sh` — what to collect when a sample crashes elsewhere
+
+Some crashes only happen on a real desktop: a running session bus, a desktop
+portal answering, a GTK newer than CI's. This collects enough to act on one
+without an interactive debugger, which on a crashing GTK app is worse than
+useless -- the app dies holding an X server grab, gdb stops at the signal and
+never releases it, and the whole desktop stops accepting input, gdb's own
+window included. It looks exactly like gdb hanging. `gdb -batch` runs to the
+crash, prints, and exits, so the grab never outlives the process.
+
+It also runs the app once with `GTK_THEME` set. That is not cosmetic:
+`wxSystemSettingsModule::OnInit()` only talks to the desktop portal when
+`GTK_THEME` is unset, so setting it skips the colour-scheme code that
+otherwise runs at startup in every GUI app. Crash in one and not the other
+narrows it to that path in a single run.
+
+## Checking whether a build contains a given fix
+
+`nm | grep` for a function name only works if the function survives to have a
+name. A `static` helper does not: at `-O2` it is inlined into its callers and
+no symbol is emitted, so `nm` finds nothing whether the fix is present or not.
+Measured on `wxAuiGetDragClientPosition()` -- symbol present at `-O0`, absent
+at `-O2`, same source both times.
+
+Check the source and the build's freshness instead, which does not care how
+the compiler chose to emit anything:
+
+```sh
+git log --oneline -1
+grep -c wxAuiGetDragClientPosition ../src/aui/framemanager.cpp
+find . -name '*framemanager.o' -newer ../src/aui/framemanager.cpp
+```

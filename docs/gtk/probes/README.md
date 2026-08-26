@@ -210,6 +210,17 @@ Where a crash dumps core, `coredumpctl info` prints a stack trace on its
 own and the script prefers it: nothing has to be run again, and no debugger
 has to resolve symbols before you can read anything.
 
+Two later additions came from the crash it was written for, which turned
+out to be a runaway recursion between GTK and the ibus input method module
+with no wx frame anywhere in the cycle. An input method module loads into
+every GTK application on the machine, runs before any of wx's code does,
+and no CI covers it, so the script runs the application once with
+`GTK_IM_MODULE=gtk-im-context-simple`. And it runs a stock GTK4
+application, because without that control the whole exercise establishes
+only that something crashed on a machine wx happened to be running on --
+if `gtk4-widget-factory` dies the same way, the fault is in the
+installation and a day spent reading wx is a day wasted.
+
 ## Checking whether a build contains a given fix
 
 `nm | grep` for a function name only works if the function survives to have a

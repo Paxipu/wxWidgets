@@ -2096,8 +2096,14 @@ void wxTextCtrl::WriteText( const wxString &text )
 
     // Disable max length check, it shouldn't prevent the program itself from
     // making the text as long as it wants.
+    //
+    // A paste is the exception: under GTK4 it is done by reading the clipboard
+    // and writing the text from here rather than by GTK, so it arrives through
+    // this function -- but it is the user's input and the limit applies to it,
+    // as it does under every other toolkit. See Paste().
     const auto maxlenOrig = m_maxlen;
-    m_maxlen = 0;
+    if ( !m_pasting )
+        m_maxlen = 0;
     wxON_BLOCK_EXIT_SET( m_maxlen, maxlenOrig );
 
     if ( text.empty() )
@@ -2717,7 +2723,12 @@ void wxTextCtrl::Paste()
 #ifdef __WXGTK4__
     // Multiline or not, the paste has to be done synchronously under GTK4:
     // see wxTextEntry::Paste(). WriteText() is virtual, so the base class
-    // version inserts the text into the GtkTextView here.
+    // version inserts the text into the GtkTextView here -- and WriteText()
+    // would waive the maximum length, which is right for the program writing
+    // text and wrong for the user pasting it.
+    m_pasting = true;
+    wxON_BLOCK_EXIT_SET( m_pasting, false );
+
     wxTextEntry::Paste();
 #else
     if ( IsMultiLine() )

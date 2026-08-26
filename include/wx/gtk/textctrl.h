@@ -245,6 +245,10 @@ private:
     // Length set by SetMaxLength() or 0 if there is no limit.
     int m_maxlen = 0;
 
+    // True while Paste() is inserting the clipboard contents, which is the one
+    // case where WriteText() must not waive the limit above.
+    bool m_pasting = false;
+
     // Our text buffer. Convenient, and holds the buffer while using
     // a dummy one when frozen
     GtkTextBuffer *m_buffer;

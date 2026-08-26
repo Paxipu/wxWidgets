@@ -335,6 +335,7 @@ static inline GdkSurface* wx_gtk_widget_get_surface(GtkWidget* widget)
 // Returned string must be freed with g_free(), as the GTK3 function's was.
 static inline char* wx_gtk_file_chooser_get_filename(GtkFileChooser* chooser)
 {
+    wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     GFile* const file = gtk_file_chooser_get_file(chooser);
     if ( !file )
         return nullptr;
@@ -343,6 +344,7 @@ static inline char* wx_gtk_file_chooser_get_filename(GtkFileChooser* chooser)
     g_object_unref(file);
 
     return path;
+    wxGCC_WARNING_RESTORE(deprecated-declarations)
 }
 #define gtk_file_chooser_get_filename(c) \
             wx_gtk_file_chooser_get_filename(c)
@@ -350,11 +352,13 @@ static inline char* wx_gtk_file_chooser_get_filename(GtkFileChooser* chooser)
 static inline gboolean
 wx_gtk_file_chooser_set_filename(GtkFileChooser* chooser, const char* name)
 {
+    wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     GFile* const file = g_file_new_for_path(name);
     const gboolean ok = gtk_file_chooser_set_file(chooser, file, nullptr);
     g_object_unref(file);
 
     return ok;
+    wxGCC_WARNING_RESTORE(deprecated-declarations)
 }
 #define gtk_file_chooser_set_filename(c, n) \
             wx_gtk_file_chooser_set_filename(c, n)
@@ -370,21 +374,27 @@ wx_gtk_file_chooser_set_filename(GtkFileChooser* chooser, const char* name)
 static inline GFile*
 wx_gtk_fc_get_current_folder_file(GtkFileChooser* chooser)
 {
+    wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     return gtk_file_chooser_get_current_folder(chooser);
+    wxGCC_WARNING_RESTORE(deprecated-declarations)
 }
 
 static inline gboolean
 wx_gtk_fc_set_current_folder_file(GtkFileChooser* chooser, GFile* file,
                                   GError** error)
 {
+    wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     return gtk_file_chooser_set_current_folder(chooser, file, error);
+    wxGCC_WARNING_RESTORE(deprecated-declarations)
 }
 
 static inline gboolean
 wx_gtk_fc_add_shortcut_folder_file(GtkFileChooser* chooser, GFile* file,
                                    GError** error)
 {
+    wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     return gtk_file_chooser_add_shortcut_folder(chooser, file, error);
+    wxGCC_WARNING_RESTORE(deprecated-declarations)
 }
 
 // The GTK3 spelling returns a newly allocated path, to be freed with g_free().
@@ -425,6 +435,7 @@ wx_gtk_file_chooser_set_current_folder(GtkFileChooser* chooser, GFile* file,
 // g_slist_free_full(list, g_free).
 static inline GSList* wx_gtk_file_chooser_get_filenames(GtkFileChooser* chooser)
 {
+    wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     GSList* list = nullptr;
 
     GListModel* const files = gtk_file_chooser_get_files(chooser);
@@ -442,6 +453,7 @@ static inline GSList* wx_gtk_file_chooser_get_filenames(GtkFileChooser* chooser)
     }
 
     return list;
+    wxGCC_WARNING_RESTORE(deprecated-declarations)
 }
 #define gtk_file_chooser_get_filenames(c) \
             wx_gtk_file_chooser_get_filenames(c)
@@ -450,6 +462,7 @@ static inline GSList* wx_gtk_file_chooser_get_filenames(GtkFileChooser* chooser)
 // list has to be freed, with g_slist_free().
 static inline GSList* wx_gtk_file_chooser_list_filters(GtkFileChooser* chooser)
 {
+    wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     GSList* list = nullptr;
 
     GListModel* const filters = gtk_file_chooser_get_filters(chooser);
@@ -467,6 +480,7 @@ static inline GSList* wx_gtk_file_chooser_list_filters(GtkFileChooser* chooser)
     }
 
     return list;
+    wxGCC_WARNING_RESTORE(deprecated-declarations)
 }
 #define gtk_file_chooser_list_filters(c) \
             wx_gtk_file_chooser_list_filters(c)
@@ -619,40 +633,48 @@ static inline void
 gtk_style_context_get_color(GtkStyleContext* sc, GtkStateFlags state,
                             GdkRGBA* out)
 {
+    wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     gtk_style_context_save(sc);
     gtk_style_context_set_state(sc, state);
     gtk_style_context_get_color(sc, out);
     gtk_style_context_restore(sc);
+    wxGCC_WARNING_RESTORE(deprecated-declarations)
 }
 
 static inline void
 gtk_style_context_get_border(GtkStyleContext* sc, GtkStateFlags state,
                              GtkBorder* out)
 {
+    wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     gtk_style_context_save(sc);
     gtk_style_context_set_state(sc, state);
     gtk_style_context_get_border(sc, out);
     gtk_style_context_restore(sc);
+    wxGCC_WARNING_RESTORE(deprecated-declarations)
 }
 
 static inline void
 gtk_style_context_get_padding(GtkStyleContext* sc, GtkStateFlags state,
                               GtkBorder* out)
 {
+    wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     gtk_style_context_save(sc);
     gtk_style_context_set_state(sc, state);
     gtk_style_context_get_padding(sc, out);
     gtk_style_context_restore(sc);
+    wxGCC_WARNING_RESTORE(deprecated-declarations)
 }
 
 static inline void
 gtk_style_context_get_margin(GtkStyleContext* sc, GtkStateFlags state,
                              GtkBorder* out)
 {
+    wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     gtk_style_context_save(sc);
     gtk_style_context_set_state(sc, state);
     gtk_style_context_get_margin(sc, out);
     gtk_style_context_restore(sc);
+    wxGCC_WARNING_RESTORE(deprecated-declarations)
 }
 
 typedef enum

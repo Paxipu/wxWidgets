@@ -335,6 +335,64 @@ bool SetWindowUnderMouse(wxWindowGTK* win)
 template <typename EventType>
 gboolean SendEnterLeaveEvents(wxWindowGTK* win, EventType* gdk_event);
 
+#ifdef __WXGTK4__
+
+// See the declaration in wx/gtk/private/event.h.
+bool GetPointerPosition(GtkWidget* widget, double* x, double* y)
+{
+    GtkNative* const native = gtk_widget_get_native(widget);
+    if ( !native )
+        return false;
+
+    GdkSurface* const surface = gtk_native_get_surface(native);
+
+    // gtk_native_get_surface() keeps returning the surface of a toplevel being
+    // torn down, and GTK goes on synthesizing crossing events for it, so this
+    // is reached with a surface that is already destroyed. Asking such a
+    // surface for anything is at best useless and, under X11, fatal: see
+    // below.
+    if ( !surface || gdk_surface_is_destroyed(surface) )
+        return false;
+
+    GdkDisplay* const display = gtk_widget_get_display(widget);
+    GdkDevice* const pointer =
+        gdk_seat_get_pointer(gdk_display_get_default_seat(display));
+    if ( !pointer )
+        return false;
+
+#ifdef GDK_WINDOWING_X11
+    if ( GDK_IS_X11_SURFACE(surface) )
+    {
+        // The query goes to the X server as XIQueryPointer on the surface's
+        // window. The check above doesn't make that safe on its own: X is
+        // asynchronous, so the window can be destroyed between the check and
+        // the request reaching the server, and the server then answers
+        // BadWindow, on which GDK's error handler exits the process. This is
+        // exactly how an application closing a window with the pointer inside
+        // it died on shutdown, see #113. Trapping the error turns an unknown
+        // pointer position into a harmless "don't know", which is all the
+        // caller needs. The same hazard is handled the same way in
+        // wxWindowGTK::GTKGetOrigin().
+        wxGCC_WARNING_SUPPRESS(deprecated-declarations)
+        gdk_x11_display_error_trap_push(display);
+
+        const bool ok = gdk_surface_get_device_position(surface, pointer,
+                                                        x, y, nullptr) != 0;
+
+        // Popping syncs, so the error, if there was one, is caught here rather
+        // than arriving later, outside the trap, where it would be fatal.
+        const int xerror = gdk_x11_display_error_trap_pop(display);
+        wxGCC_WARNING_RESTORE(deprecated-declarations)
+
+        return xerror == 0 && ok;
+    }
+#endif // GDK_WINDOWING_X11
+
+    return gdk_surface_get_device_position(surface, pointer, x, y, nullptr) != 0;
+}
+
+#endif // __WXGTK4__
+
 } // namespace wxGTKImpl
 
 #ifdef wxHAS_XKB

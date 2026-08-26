@@ -5049,3 +5049,110 @@ The `PositionToCoords(0)` assertion is enabled again for GTK4. It passes for
 the base, rich and rich2 text controls on X11 and Wayland, including 50
 repeated X11 runs across the five controlled font sizes. The complete GTK+ 3
 and GTK+ 2 `TextCtrlTestCase` fixtures also pass.
+
+## Progress update 54: the CI job now measures what the other jobs measure
+
+Update 52 established that the wxGTK 4 job's `--disable-uiactionsim` was
+hiding failures and that the reason the flag was added had gone stale. This
+update removes it, and records what changed in what the job actually
+measures, since "the job is green" means nothing without that.
+
+### What the flag was removing
+
+Counted from `--list-tests` rather than from a run, so that a suite aborting
+part way cannot distort it:
+
+| build | `wxUSE_UIACTIONSIMULATOR` | test cases |
+| --- | --- | --- |
+| `../configure --with-gtk=4` | 1 | 534 |
+| `../configure --with-gtk=4 --disable-uiactionsim` | 0 | 510 |
+
+Twenty-four cases, and the set difference is exactly the input-driven ones:
+
+```
+Button::Click                     wxDVC::KeyEvents
+Button::Disabled                  wxTextCtrl::KeyEventsWhenFocused
+EnterLeaveEvents                  wxTextValidator::IsValid
+KeyboardEventTestCase             wxTextValidator::TransferFromWindow
+ListCtrl::ColumnClick             wxTextValidator::TransferToWindow
+ListCtrl::ColumnDrag              wxTreeCtrl::CollapseExpandEvents
+SpinCtrlDouble::Arrows            wxTreeCtrl::ItemClick
+SpinCtrlDouble::Increment         wxTreeCtrl::KeyDown
+SpinCtrlDouble::Wrap              wxTreeCtrl::KeyNavigation
+ValNum::Interactive               wxTreeCtrl::LabelEdit
+wxUIActionSimulator is            wxTreeCtrl::Menu
+  unavailable under Wayland       wxTreeCtrl::SelectItemMultiInteractive
+                                  wxTreeCtrl::SelectionChange
+```
+
+The case count understates the loss, which is worth knowing before quoting
+it. `#if wxUSE_UIACTIONSIMULATOR` also guards *sections inside* cases that
+stay in the list either way -- `MenuTestCase`, `SliderTestCase`,
+`HtmlWindowTestCase`, `EventPropagationTestCase`, `RadioButton::Click` and
+`wxStyledTextCtrl::AutoComp` all appear in both builds' `--list-tests`
+output. That is why several of the failures update 52 found are in cases the
+24-case difference does not contain: the assertion counts below are the
+measure that captures both.
+
+### Before and after, measured
+
+Full suite, `~[.]`, `wxUSE_XVFB=1`, out-of-tree builds with the test data
+copied in (an in-tree build, which is what CI does, has it already).
+
+Isolating the flag first -- same configure line on both sides, only
+`--disable-uiactionsim` differing:
+
+| `../configure --with-gtk=4` plus | test cases | assertions | result |
+| --- | --- | --- | --- |
+| `--disable-uiactionsim` | 510 | 47033 | all passed |
+| nothing | 534 | 47731 | 528 passed, 6 failed (25 assertions) |
+
+**698 assertions** were being compiled out, not the ~24 cases' worth the case
+count suggests. The six that fail:
+
+```
+EnterLeaveEvents            KeyboardEventTestCase
+EventPropagationTestCase    MenuTestCase
+HtmlWindowTestCase          ValNum::Interactive
+```
+
+Three of those -- `EventPropagationTestCase`, `HtmlWindowTestCase` and
+`MenuTestCase` -- are *not* in the 24-case list above. They ran in the old
+configuration too, and passed, because the parts of them that synthesise
+input were compiled out of the case rather than the case out of the suite.
+That is the section-level guarding made concrete, and it is why the old job
+could report "all tests passed" about cases that do not pass.
+
+All six are tracked in #82.
+
+### That the change builds is verified, not assumed
+
+The exact configure line the job now runs, built out-of-tree here:
+
+```
+../configure --with-gtk=4 --enable-accessibility
+   -> #define wxUSE_UIACTIONSIMULATOR 1
+      #define wxUSE_ACCESSIBILITY 1
+   make: 0 errors, make -C tests test_gui: 0 errors
+```
+
+and run: 534 test cases, 47930 assertions, the same 6 failures. Accessibility
+therefore contributes 199 assertions and no test cases, and does not change
+the failing set -- which is why the flag could be isolated in a pair of builds
+without it. `wxUSE_ACCESSIBILITY` and `wxUSE_UIACTIONSIMULATOR` had never been
+on together before, since the flag was added at the same time accessibility
+was; they build together. `src/unix/uiactionx11.cpp`, the file whose deferral
+was the original reason for the flag, is compiled again.
+
+Only the one matrix entry changed: parsing `ci.yml` before and after and
+comparing the entries shows a single differing key on the wxGTK 4 job,
+the other ten entries identical, and `continue-on-error` untouched --
+which is what keeps the six red cases from blocking anyone.
+
+### Why now rather than once #82 is green
+
+The job cannot block CI (`continue-on-error: ${{ matrix.gtk_version == 4 }}`),
+so the only thing the flag bought was a green tick. A job that measures less
+than it appears to is worse than a job with known red tests in it: the wxGTK
+2 and 3 jobs run these cases, and a GTK4 number that is not comparable with
+theirs is not a number anyone can use.

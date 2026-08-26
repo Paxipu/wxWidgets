@@ -97,7 +97,17 @@ jobs:
           - name: Ubuntu 24.04 wxGTK 4 - WIP port
             runner: ubuntu-24.04
             gtk_version: 4
-            configure_flags: --disable-uiactionsim --enable-accessibility
+            # Input simulation is deliberately *not* disabled here, although
+            # it was until #126. wxUIActionSimulator's X11 backend has had a
+            # working GTK4 branch since progress update 39, and leaving the
+            # flag on compiled out every test that synthesises input -- so the
+            # job reported "all tests passed" while measuring a suite two dozen
+            # cases smaller than the one the wxGTK 2 and 3 jobs run. The cases
+            # it now runs include some that still fail; those are tracked in
+            # #82, and continue-on-error below keeps them from blocking CI.
+            # A job that measures less than it appears to is worse than a job
+            # with known red tests in it.
+            configure_flags: --enable-accessibility
             # Still true: the port emits deprecation warnings, tracked in #78.
             allow_warnings: true
             use_xvfb: true

@@ -269,6 +269,48 @@ gboolean GetPreferDark(wxGTKImpl::ColorScheme colorScheme)
     return FALSE;
 }
 
+#ifdef __WXGTK4__
+
+// Values of GtkInterfaceColorScheme, available since GTK 4.20. Keep them
+// locally to allow building wxWidgets with older GTK headers while still
+// using the new property when running with a newer GTK version.
+enum
+{
+    wxGTK_INTERFACE_COLOR_SCHEME_UNSUPPORTED = 0,
+    wxGTK_INTERFACE_COLOR_SCHEME_DEFAULT,
+    wxGTK_INTERFACE_COLOR_SCHEME_DARK,
+    wxGTK_INTERFACE_COLOR_SCHEME_LIGHT
+};
+
+#if GTK_CHECK_VERSION(4,20,0)
+static_assert(wxGTK_INTERFACE_COLOR_SCHEME_UNSUPPORTED ==
+              static_cast<int>(GTK_INTERFACE_COLOR_SCHEME_UNSUPPORTED));
+static_assert(wxGTK_INTERFACE_COLOR_SCHEME_DEFAULT ==
+              static_cast<int>(GTK_INTERFACE_COLOR_SCHEME_DEFAULT));
+static_assert(wxGTK_INTERFACE_COLOR_SCHEME_DARK ==
+              static_cast<int>(GTK_INTERFACE_COLOR_SCHEME_DARK));
+static_assert(wxGTK_INTERFACE_COLOR_SCHEME_LIGHT ==
+              static_cast<int>(GTK_INTERFACE_COLOR_SCHEME_LIGHT));
+#endif
+
+// Return true if GTK supports setting the interface color scheme and put its
+// current value in colorScheme. GTK exposes the property even when the desktop
+// doesn't support color schemes, in which case the legacy property is still
+// needed.
+bool GetInterfaceColorScheme(GtkSettings* settings, gint& colorScheme)
+{
+    constexpr const char* property = "gtk-interface-color-scheme";
+
+    if ( !g_object_class_find_property(G_OBJECT_GET_CLASS(settings), property) )
+        return false;
+
+    g_object_get(settings, property, &colorScheme, nullptr);
+
+    return colorScheme != wxGTK_INTERFACE_COLOR_SCHEME_UNSUPPORTED;
+}
+
+#endif // __WXGTK4__
+
 // UpdateColorScheme() should normally be used instead of this function to
 // avoid changing the preferences unnecessarily and update any
 // appearance-dependent cached settings, but it's enough to call this one on
@@ -278,8 +320,22 @@ void UpdatePreferDark(gboolean preferDark)
     wxLogTrace(TRACE_DARKMODE, "Turning dark mode preference %s",
                preferDark ? "on" : "off");
 
-    g_object_set(gtk_settings_get_default(),
-        "gtk-application-prefer-dark-theme", preferDark, nullptr);
+    GtkSettings* const settings = gtk_settings_get_default();
+
+#ifdef __WXGTK4__
+    gint colorScheme;
+    if ( GetInterfaceColorScheme(settings, colorScheme) )
+    {
+        g_object_set(settings, "gtk-interface-color-scheme",
+            preferDark ? wxGTK_INTERFACE_COLOR_SCHEME_DARK
+                       : wxGTK_INTERFACE_COLOR_SCHEME_LIGHT,
+            nullptr);
+        return;
+    }
+#endif // __WXGTK4__
+
+    g_object_set(settings, "gtk-application-prefer-dark-theme",
+        preferDark, nullptr);
 }
 
 void DoUpdateColorScheme(wxGTKImpl::ColorScheme colorScheme)
@@ -294,9 +350,21 @@ void DoUpdateColorScheme(wxGTKImpl::ColorScheme colorScheme)
 
     wxGlibPtr<char> themeName;
     gboolean preferDarkPrev = FALSE;
-    g_object_get(settings,
-        "gtk-theme-name", themeName.Out(),
-        "gtk-application-prefer-dark-theme", &preferDarkPrev, nullptr);
+    g_object_get(settings, "gtk-theme-name", themeName.Out(), nullptr);
+
+#ifdef __WXGTK4__
+    gint currentColorScheme;
+    if ( GetInterfaceColorScheme(settings, currentColorScheme) )
+    {
+        preferDarkPrev =
+            currentColorScheme == wxGTK_INTERFACE_COLOR_SCHEME_DARK;
+    }
+    else
+#endif // __WXGTK4__
+    {
+        g_object_get(settings, "gtk-application-prefer-dark-theme",
+            &preferDarkPrev, nullptr);
+    }
 
     // This is not supposed to happen neither, but don't crash if it does.
     if (!themeName)
@@ -1881,8 +1949,8 @@ bool wxSystemSettingsModule::OnInit()
     // (https://docs.flatpak.org/en/latest/portal-api-reference.html), which
     // has the advantage of allowing the setting to be accessed from within a
     // virtualized environment such as Flatpak. Since the setting does not
-    // change the theme, we propagate it to the GtkSettings
-    // 'gtk-application-prefer-dark-theme' property to get a dark theme.
+    // change the theme, we propagate it to the corresponding GtkSettings
+    // application preference to get a dark theme.
 
     // If this is not a GUI app
     if (!g_type_class_peek(GTK_TYPE_WIDGET))

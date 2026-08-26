@@ -741,7 +741,28 @@ void wxPizza::size_allocate_child(
     GtkWidget* child, int x, int y, int width, int height, int parent_width)
 {
     if (width <= 0 || height <= 0)
+    {
+#ifdef __WXGTK4__
+        // Returning without allocating leaves GTK4 believing the child still
+        // needs one, while gtk_widget_get_width() goes on reporting whatever
+        // it was given last time. pizza_snapshot() then sees a child with a
+        // size and draws it, and GTK warns "Trying to snapshot ... without a
+        // current allocation" for every frame the child stays that way -- all
+        // 37 of the ones left after b7e4c4d are this, a wxAUI pane wx has
+        // sized to zero width but GTK still thinks is 3x27.
+        //
+        // Give it the size wx actually asked for. GTK then knows the child is
+        // laid out, its reported size is the truth, and the guard in
+        // pizza_snapshot() skips it like any other empty child.
+        GtkAllocation empty;
+        empty.x = x - m_scroll_x;
+        empty.y = y - m_scroll_y;
+        empty.width = 0;
+        empty.height = 0;
+        gtk_widget_size_allocate(child, &empty, -1);
+#endif // __WXGTK4__
         return;
+    }
 
     GtkAllocation child_alloc;
     // note that child positions do not take border into account, they need to

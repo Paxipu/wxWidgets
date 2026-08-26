@@ -44,6 +44,7 @@ gcc -o ref gtk3-reference-values.c $(pkg-config --cflags --libs gtk+-3.0) \
 | `gtk4-popover-input.c` | Is a `GtkPopover` given the pointer when the pointer was already inside its parent window before the popover appeared? (No, unless it autohides -- and a `wxPopupWindow` is a popover under GTK4. Needs `xdotool`. See issue #138.) |
 | `gtk3-dnd-file-source.c` | Does repeated X11 file DnD from a legacy GTK3 source leave GTK4's drop state valid? (It caught the re-entrant `GtkDropTargetAsync::drop` handling in issue #144.) |
 | `gtk4-destroyed-surface-pointer.c` | What happens when the pointer position of a surface whose X window is already gone is asked for? (The process dies with `BadWindow`; `gdk_surface_is_destroyed()` does not know yet, so only an X error trap makes the query safe. That is issue #113.) |
+| `gtk4-print-portal-route.c` | Does `gtk_print_operation_run()` show a dialog in our own process or hand the job to `xdg-desktop-portal`, and does it come back? (GTK 4.22 takes the portal route outside a sandbox, where a present-but-silent portal blocks with no timeout; a *missing* portal is handled fine. That is issue #161. See `../gtk4-printing.md`.) |
 | `gtk3-reference-values.c` + `gtk4-comparison-values.c` | Differential check: does the GTK4 real-widget approach return the same values as the GTK3 synthetic-path approach for the same logical query? |
 
 ## Reading the differential check

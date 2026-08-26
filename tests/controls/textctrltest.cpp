@@ -1806,4 +1806,56 @@ TEST_CASE("wxTextCtrl::RichWithHint", "[wxTextCtrl][hint][rich]")
 
 #endif // wxUSE_RICHEDIT
 
+#if wxUSE_UIACTIONSIMULATOR
+
+TEST_CASE("wxTextCtrl::KeyEventsWhenFocused", "[wxTextCtrl][key][event]")
+{
+    // A focused text control has to see the key events for the text typed
+    // into it. Both control kinds are exercised because they are different
+    // native widgets on GTK and separate control paths on other platforms.
+    long style = 0;
+
+    SECTION("Single line")
+    {
+        style = 0;
+    }
+
+    SECTION("Multi line")
+    {
+        style = wxTE_MULTILINE;
+    }
+
+    auto text = std::make_unique<wxTextCtrl>
+                (
+                    wxTheApp->GetTopWindow(), wxID_ANY, "",
+                    wxDefaultPosition, wxSize(200, 100), style
+                );
+
+    text->SetFocus();
+
+    // Simulated input is delivered asynchronously, so discard anything still
+    // queued by an earlier test before installing the event counters.
+    YieldForAWhile();
+    REQUIRE( text->HasFocus() );
+
+    EventCounter keyDown(text.get(), wxEVT_KEY_DOWN);
+    EventCounter keyUp(text.get(), wxEVT_KEY_UP);
+    EventCounter charEvents(text.get(), wxEVT_CHAR);
+
+    wxUIActionSimulator sim;
+
+    if ( !sim.KeyDown('a') )
+        return;
+
+    sim.KeyUp('a');
+    YieldForAWhile();
+
+    CHECK( keyDown.GetCount() == 1 );
+    CHECK( charEvents.GetCount() == 1 );
+    CHECK( keyUp.GetCount() == 1 );
+    CHECK( text->GetValue() == "a" );
+}
+
+#endif // wxUSE_UIACTIONSIMULATOR
+
 #endif //wxUSE_TEXTCTRL

@@ -198,6 +198,19 @@ the `wxMoveEvent` does arrive (`wxTopLevelWindowGTK` sends it whenever `m_x`
 or `m_y` change, whether or not the compositor honoured the move), so
 `OnFloatingPaneMoving()` does run. It simply runs on a bad coordinate.
 
+## Confirmed away from this machine
+
+Everything above is headless sway. The two user-visible consequences have since
+been reproduced on a real Wayland desktop with a real mouse, on **wxGTK 3**,
+with none of the port's changes present: a floating pane loses the pointer when
+undocked, and cannot be docked again.
+
+So the measurements here predicted behaviour on a compositor they were not
+taken on, and on a toolkit this port does not touch. That is worth recording
+for two reasons: it is evidence the readings generalise, and it settles that
+wxAUI docking under Wayland is a wxWidgets defect rather than anything GTK4
+introduced.
+
 ## Limits
 
 One compositor, one version, headless, software rendering. `xdg_surface`

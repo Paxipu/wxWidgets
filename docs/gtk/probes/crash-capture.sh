@@ -30,6 +30,37 @@ scheme=$(gsettings get org.gnome.desktop.interface color-scheme 2>/dev/null)
 echo "colour scheme   = ${scheme:-?}"
 
 echo
+echo "== control: does a GTK application with no wx in it survive? =="
+# Ask this before anything else. If GTK's own demo dies the same way, the
+# fault is in the GTK installation and every reading below it is about that,
+# not about wx. This is not hypothetical: the first crash this script was
+# written for turned out to be a recursion between GTK and the ibus input
+# method module, and gtk4-widget-factory crashed identically.
+control=
+for c in gtk4-widget-factory gtk4-demo; do
+    command -v $c >/dev/null && { control=$c; break; }
+done
+if [ -z "$control" ]; then
+    echo "neither gtk4-widget-factory nor gtk4-demo installed -- no control"
+else
+    $control >/tmp/crash-control.log 2>&1 &
+    pid=$!
+    sleep 5
+    if kill -0 $pid 2>/dev/null; then
+        echo "$control survived 5s -- a plain GTK app is fine here"
+        kill $pid 2>/dev/null
+    else
+        wait $pid; rc=$?
+        if [ $rc -gt 128 ]; then
+            echo "$control ALSO died on $(kill -l $((rc-128)))"
+            echo "=> this is the GTK installation, not wx. Stop here."
+        else
+            echo "$control exited $rc"
+        fi
+    fi
+fi
+
+echo
 echo "== does it crash at all? =="
 "$APP" >/tmp/crash-plain.log 2>&1 &
 pid=$!

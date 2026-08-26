@@ -210,6 +210,21 @@ Where a crash dumps core, `coredumpctl info` prints a stack trace on its
 own and the script prefers it: nothing has to be run again, and no debugger
 has to resolve symbols before you can read anything.
 
+Before any of that it runs `gtk4-widget-factory`, which contains no wx at
+all. That is the control, and it is first because it can end the
+investigation outright. The crash it was written for looked like ours --
+several samples dying at startup on X11, on a machine the port had never
+run on -- and the backtrace turned out to be a recursion between GTK and
+the ibus input method module, with not one wx frame in the cycle.
+`gtk4-widget-factory` segfaulted identically on that machine, which is what
+settled it.
+
+The general lesson is worth more than the instance: a crash reported
+against a port is not evidence about the port until something without the
+port in it has been shown to survive. Any X11 crash from a machine whose
+GTK is broken this way says nothing about wx, however many wx samples
+reproduce it.
+
 Two later additions came from the crash it was written for, which turned
 out to be a runaway recursion between GTK and the ibus input method module
 with no wx frame anywhere in the cycle. An input method module loads into

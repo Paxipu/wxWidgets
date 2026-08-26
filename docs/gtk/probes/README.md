@@ -234,7 +234,13 @@ an ibus GTK4 module built against a different GTK4 than the one installed --
 it announces itself with "class size for type 'IBusIMContext' is smaller than
 the parent type's 'GtkIMContext' class size" before dying -- so reinstalling
 the module against the current GTK fixes it. Setting `GTK_IM_MODULE` to
-`gtk-im-context-simple` sidesteps it meanwhile.
+`gtk-im-context-simple` sidesteps it meanwhile -- confirmed on the affected
+machine, where it stopped the crash outright.
+
+Three readings agree, which is what makes this reportable rather than a
+guess: the cycle contains no wx frame, a GTK application containing no wx
+crashes identically, and replacing the input method module fixes it without
+changing a line of wx.
 
 The general lesson is worth more than the instance: a crash reported
 against a port is not evidence about the port until something without the

@@ -202,7 +202,13 @@ It also runs the app once with `GTK_THEME` set. That is not cosmetic:
 `wxSystemSettingsModule::OnInit()` only talks to the desktop portal when
 `GTK_THEME` is unset, so setting it skips the colour-scheme code that
 otherwise runs at startup in every GUI app. Crash in one and not the other
-narrows it to that path in a single run.
+narrows it to that path in a single run. On the first crash it was used
+for, it crashed both ways, which ruled that path out -- a discriminator
+earns its place by excluding as readily as by confirming.
+
+Where a crash dumps core, `coredumpctl info` prints a stack trace on its
+own and the script prefers it: nothing has to be run again, and no debugger
+has to resolve symbols before you can read anything.
 
 ## Checking whether a build contains a given fix
 

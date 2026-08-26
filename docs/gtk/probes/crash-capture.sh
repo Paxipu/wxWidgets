@@ -4,11 +4,18 @@
 #
 #   crash-capture.sh ./samples/combo/combo
 #
-# gdb is used only in batch mode. An interactive gdb on a crashing GTK app
-# tends to look like a hang: the app dies holding an X server grab, gdb
-# stops at the signal, the grab is never released, and the whole desktop
-# stops responding to input -- including gdb's own window. Batch mode runs
-# to the crash, prints, and exits, so the grab never outlives the process.
+# gdb is run with debuginfod turned off, and in batch mode.
+#
+# debuginfod is the usual reason gdb looks like it has hung on a GTK
+# application: it fetches debug info over the network for each shared
+# library as symbols load, a GTK app loads a great many of them, and an
+# unreachable or slow server costs a timeout on every single one. Turning
+# it off loses nothing here, since distribution debug info would not
+# describe your own build of wx anyway.
+#
+# It needs -iex rather than -ex, because the setting has to be in place
+# before the program file is loaded, which is when the fetching starts.
+# Clearing DEBUGINFOD_URLS covers gdb builds that read it directly.
 
 APP=${1:?usage: $0 /path/to/sample}
 
@@ -62,8 +69,17 @@ fi
 
 echo
 echo "== backtrace =="
-if command -v gdb >/dev/null; then
-    gdb -batch -ex run -ex 'bt full' -ex 'info sharedlibrary' \
+# If the crash dumped core, the core has the whole story and nothing has to
+# be reproduced under a debugger to get at it. coredumpctl prints a stack
+# trace by itself, so try that before running anything again.
+if command -v coredumpctl >/dev/null &&
+   coredumpctl info >/dev/null 2>&1; then
+    coredumpctl info | tail -40
+elif command -v gdb >/dev/null; then
+    DEBUGINFOD_URLS= DEBUGINFOD_TIMEOUT=1 \
+    gdb -batch \
+        -iex 'set debuginfod enabled off' \
+        -ex run -ex 'bt full' -ex 'info sharedlibrary' \
         --args "$APP" 2>&1 | tail -60
 else
     echo "no gdb; try: ulimit -c unlimited && $APP, then coredumpctl gdb"

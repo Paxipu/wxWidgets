@@ -124,10 +124,29 @@ bool wxOverlayImpl::IsOk()
 void wxOverlayImpl::Init(wxDC* dc, int x, int y, int width, int height)
 {
     wxWindow* const win = dc->GetWindow();
+    if (!win)
+    {
+        // A wxDC with no window of its own -- a wxScreenDC, in practice -- is
+        // not a programming error here. wxGenericDragImage uses one for "drag
+        // across the whole screen", a documented wx feature, and it reaches
+        // this function through the ordinary wxDCOverlay path.
+        //
+        // There is nothing to be done with it under GTK4: drawing happens
+        // inside a widget's snapshot, and outside one there is no screen to
+        // draw on -- which is why wxScreenDCImpl says it "leaves the drawing
+        // to go nowhere". Asserting turned that missing feature into a debug
+        // alert in the middle of a drag, which reads as a crash. See #97.
+        //
+        // Leave the overlay uninitialised instead, and in particular leave
+        // m_cr null: that is what makes the rest of this class skip its work
+        // rather than run it on a widget which was never created.
+        return;
+    }
+
     if (wxGraphicsContext* gc = dc->GetGraphicsContext())
         m_cr = static_cast<cairo_t*>(gc->GetNativeContext());
 
-    wxCHECK_RET(win && m_cr, "invalid dc for wxOverlay");
+    wxCHECK_RET(m_cr, "invalid dc for wxOverlay");
 
     m_target = win->GetConnectWidget();
 
@@ -248,7 +267,8 @@ void wxOverlayImpl::EndDrawing(wxDC* dc)
         cairo_surface_destroy(m_surface);
         m_surface = surface;
     }
-    gtk_widget_queue_draw(m_overlay);
+    if (m_overlay)
+        gtk_widget_queue_draw(m_overlay);
 }
 
 void wxOverlayImpl::Clear(wxDC*)

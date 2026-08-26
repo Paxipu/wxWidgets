@@ -15,15 +15,22 @@
  *
  *   - whether gdk_surface_is_destroyed() already knows (it does not: GDK only
  *     learns about it when it processes the DestroyNotify, so that check alone
- *     cannot make the query safe), and
- *   - whether an X error trap around the query keeps the process alive.
+ *     cannot make the query safe),
+ *   - whether an X error trap around the query keeps the process alive, and
+ *   - whether the cheap pop, gdk_x11_display_error_trap_pop_ignored(), also
+ *     covers a request that expects no reply, whose error therefore only
+ *     arrives after the trap has been popped. It has to, because trapping a
+ *     window move or a property change with the blocking pop would put a
+ *     round trip to the server into every one of them.
  *
  * Build:
  *   gcc -o gtk4-destroyed-surface-pointer gtk4-destroyed-surface-pointer.c \
  *       $(pkg-config --cflags --libs gtk4 x11)
  *
- * Run (needs an X11 display; PROBE_TRAP=1 turns the error trap on):
- *   PROBE_TRAP=1 ./gtk4-destroyed-surface-pointer
+ * Run (needs an X11 display):
+ *   ./gtk4-destroyed-surface-pointer                 # untrapped, expect death
+ *   PROBE_TRAP=1 ./gtk4-destroyed-surface-pointer    # blocking pop
+ *   PROBE_IGNORED=1 ./gtk4-destroyed-surface-pointer # cheap pop, no reply
  */
 
 #include <gtk/gtk.h>
@@ -68,12 +75,42 @@ probe(gpointer data)
     GdkDevice *pointer =
         gdk_seat_get_pointer(gdk_display_get_default_seat(display));
 
+    /* Check the value, not just the presence: an empty string is "set". */
     const char *trapVar = getenv("PROBE_TRAP");
     const int   trap    = trapVar && atoi(trapVar);
 
+    const char *ignVar  = getenv("PROBE_IGNORED");
+    const int   ignored = ignVar && atoi(ignVar);
+
     double x = 0, y = 0;
 
-    if (trap)
+    if (ignored)
+    {
+        /* A request with no reply: its error cannot come back while we wait,
+         * because we do not wait -- it arrives after the trap is already
+         * popped. XSync() below reads it and hands it to the error handler,
+         * so if the cheap pop did not cover it, this dies.
+         *
+         * Note that the main loop is deliberately not run here: GDK does its
+         * own untrapped XGetGeometry() on the surface, which would die for
+         * reasons that have nothing to do with the question being asked. */
+        if (trap)
+        {
+            gdk_x11_display_error_trap_push(display);
+            XMoveWindow(dpy, xid, 10, 10);
+            gdk_x11_display_error_trap_pop_ignored(display);
+        }
+        else
+        {
+            XMoveWindow(dpy, xid, 10, 10);
+        }
+
+        XSync(dpy, False);
+
+        printf("no-reply request, %s: survived\n",
+               trap ? "cheap pop" : "untrapped");
+    }
+    else if (trap)
     {
         gdk_x11_display_error_trap_push(display);
         gdk_surface_get_device_position(surface, pointer, &x, &y, NULL);

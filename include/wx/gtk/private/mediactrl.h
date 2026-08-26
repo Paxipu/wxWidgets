@@ -45,6 +45,11 @@ inline gpointer wxGtkGetIdFromWidget(GtkWidget* widget)
 #ifdef GDK_WINDOWING_X11
     if (wxGTKImpl::IsX11(surface))
     {
+        // Same as in wxGLCanvas::GetXWindow(): a stale XID handed to the media
+        // backend would have it name a window the server no longer knows.
+        if (!wxGTKImpl::CanAskServerAbout(surface))
+            return (gpointer)nullptr;
+
         return (gpointer)GDK_SURFACE_XID(surface);
     }
 #endif

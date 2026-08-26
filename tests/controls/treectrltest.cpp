@@ -305,9 +305,14 @@ TEST_CASE_METHOD(TreeCtrlTestCase, "wxTreeCtrl::CollapseExpandEvents", "[treectr
     CHECK(expanded.GetCount() == 1);
 
 #ifdef __WXGTK__
-    // Don't even know the reason why, but GTK has to sleep
-    // no less than 1200 for the test case to succeed.
-    wxMilliSleep(1200);
+    // The two double clicks must not run into one another, and waiting for
+    // that needs the event loop to keep running: GTK ends a click sequence
+    // from a timeout, which never fires while wxMilliSleep() blocks. Under
+    // GTK4 the four presses then arrive as a single sequence counted 1, 2, 3,
+    // 4, and only the second of them is ever reported as a double click, so
+    // the collapse never happens. Yielding for the same interval instead lets
+    // the sequence end, which is what the sleep was always meant to achieve.
+    YieldForAWhile(1200);
 #endif
 
     sim.MouseDblClick();

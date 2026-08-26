@@ -169,8 +169,32 @@ wx_focus_event_hook(GSignalInvocationHint*, unsigned, const GValue* param_values
 
 #endif // __WXGTK4__/!__WXGTK4__
 
+#ifdef __WXGTK4__
+
+// Non-zero while a wxGTKIdleSuppressor exists; see the class's comment.
+static int gs_idleSuppressCount = 0;
+
+wxGTKIdleSuppressor::wxGTKIdleSuppressor()
+{
+    gs_idleSuppressCount++;
+}
+
+wxGTKIdleSuppressor::~wxGTKIdleSuppressor()
+{
+    gs_idleSuppressCount--;
+}
+
+#endif // __WXGTK4__
+
 bool wxApp::DoIdle()
 {
+#ifdef __WXGTK4__
+    // Keep the source, so that the idle processing skipped here happens as
+    // soon as the suppressor goes away.
+    if ( gs_idleSuppressCount > 0 )
+        return true;
+#endif
+
     guint id_save;
     {
         // Allow another idle source to be added while this one is busy.

@@ -7973,6 +7973,12 @@ void wxWindowGTK::Update()
 
             gdk_frame_clock_request_phase(clock, GDK_FRAME_CLOCK_PHASE_PAINT);
 
+            // The loop below dispatches whatever source is ready, and wx's
+            // idle source is one of them: leaving it enabled lets a repaint
+            // delete the windows queued with Destroy(), one of which can be
+            // an ancestor -- or the owner -- of whoever called Update().
+            wxGTKIdleSuppressor suppressIdle;
+
             while ( gdk_frame_clock_get_frame_counter(clock) == frame &&
                     g_get_monotonic_time() < deadline )
             {

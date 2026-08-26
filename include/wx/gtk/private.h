@@ -162,6 +162,23 @@ WXDLLIMPEXP_CORE void wxGTKAppNotifyWindowActivated(bool active);
 WXDLLIMPEXP_CORE GtkWidget* wxGTKCreateTopLevelWindow();
 WXDLLIMPEXP_CORE bool wxGTKSetWindowShape(GtkWidget* widget,
                                           const cairo_region_t* region);
+
+// Suppresses wx idle processing -- idle events, and with them the deletion of
+// the windows queued by Destroy() -- for as long as an object of this class
+// exists.
+//
+// Hold one around any loop that runs the main loop to make GTK4 do something
+// synchronously. Such a loop dispatches whatever source happens to be ready,
+// wxApp's idle source included, and that one deletes windows: without this a
+// repaint can free the very window whose method is on the stack above it.
+class WXDLLIMPEXP_CORE wxGTKIdleSuppressor
+{
+public:
+    wxGTKIdleSuppressor();
+    ~wxGTKIdleSuppressor();
+
+    wxDECLARE_NO_COPY_CLASS(wxGTKIdleSuppressor);
+};
 #endif // __WXGTK4__
 
 namespace wxGTKPrivate

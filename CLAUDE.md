@@ -42,6 +42,16 @@ A test asking both "did anything happen?" and "was it exact?" with a single
 tolerance will answer the first and silently ignore the second. A card is 3500
 pixels; a botched restore is five. See #136.
 
+## Never cherry-pick with -x for upstream
+
+`git cherry-pick -x` appends "(cherry picked from commit ...)" naming a commit
+in this fork, which upstream cannot resolve and has no use for. It reached
+eight of the nine pull requests in the first batch, and a maintainer asked us
+to stop and then had to strip the line by hand while merging.
+
+Lift commits for upstream with a plain `git cherry-pick`, and read the message
+before pushing.
+
 ## House style worth remembering
 
 * 80 columns.

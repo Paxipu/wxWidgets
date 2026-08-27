@@ -299,3 +299,16 @@ git log --oneline -1
 grep -c wxAuiGetDragClientPosition ../src/aui/framemanager.cpp
 find . -name '*framemanager.o' -newer ../src/aui/framemanager.cpp
 ```
+
+## `sway-up.sh` — a compositor that is actually there
+
+Prints the socket of a live headless sway, starting one if none answers.
+Sway exits on its own often enough here that a run which "failed" has to be
+checked against whether the compositor was still up, and a stale socket file
+left behind by a dead one answers nothing while looking exactly like a live
+one. Every Wayland probe should get its `SWAYSOCK` from this rather than from
+`ls -t`.
+
+```sh
+export SWAYSOCK=$(docs/gtk/probes/sway-up.sh)
+```

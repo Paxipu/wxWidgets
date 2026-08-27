@@ -312,3 +312,44 @@ one. Every Wayland probe should get its `SWAYSOCK` from this rather than from
 ```sh
 export SWAYSOCK=$(docs/gtk/probes/sway-up.sh)
 ```
+
+## `aui-redock-floating.sh` — the reproduction for #167
+
+```
+$ aui-redock-floating.sh x11
+  RESULT PASS the floating pane docked again
+  dock logic ran 137 times
+
+$ aui-redock-floating.sh wayland
+  pane was dragged 60,85 -> 262,597
+  RESULT FAIL ended up floating, not docked
+  dock logic ran 0 times
+```
+
+Same code, same drag, opposite outcomes, and both controls hold: the Wayland
+line shows the window really did move, so the drag happened, and the X11 leg
+passes, so the test can succeed.
+
+Two things about the drag are load-bearing, and every scripted attempt at this
+bug before finding the first of them was measuring nothing at all.
+
+**Three pixels at a time.** `wxAuiFloatingFrame::OnMoveEvent()` discards any
+move larger than that outright:
+
+```cpp
+if ((abs(winRect.x - m_lastRect.x) > 3) ||
+    (abs(winRect.y - m_lastRect.y) > 3))
+    return;
+```
+
+A drag that jumps in tens of pixels has *every* event thrown away, reaches no
+dock logic, and reports a failure that belongs to the harness. A person's hand
+produces a continuous stream of small moves and never notices this.
+
+**Finish about fifteen pixels from the edge**, because that is where the dock
+zone is. Dropping sixty pixels in leaves the pane floating on X11 too, which
+looks exactly like the bug and is not.
+
+The pane is floated through the manager rather than by dragging
+(`AUIDOCK_START_FLOATING`), so a failure here cannot be a failed undock
+wearing a re-dock's clothes.

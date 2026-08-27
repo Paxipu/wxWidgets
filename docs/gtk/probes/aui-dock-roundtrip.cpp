@@ -162,12 +162,21 @@ public:
             const bool docked = !m_f->Floating();
             const bool moved = m_f->Direction() != m_startDir;
 
-            fprintf(stderr, "CHECK moved-dock=%d docked=%d floated=%d\n",
-                    moved ? 1 : 0, docked ? 1 : 0, m_everFloated ? 1 : 0);
+            // Started floating, the question is whether it docked at all;
+            // started docked, whether it reached a different dock. Asking the
+            // second of a pane that began floating fails a run that did
+            // exactly what was wanted.
+            const bool startedFloating =
+                wxGetEnv("AUIDOCK_START_FLOATING", nullptr) != 0;
+            const bool ok = docked && (startedFloating || moved);
+
+            fprintf(stderr, "CHECK docked=%d moved-dock=%d floated=%d\n",
+                    docked ? 1 : 0, moved ? 1 : 0, m_everFloated ? 1 : 0);
             fprintf(stderr, "RESULT %s\n",
-                    (moved && docked)
-                        ? "PASS the pane docked where it was dropped"
-                        : docked
+                    ok ? (startedFloating
+                            ? "PASS the floating pane docked again"
+                            : "PASS the pane docked where it was dropped")
+                       : docked
                             ? "FAIL never left its original dock"
                             : "FAIL ended up floating, not docked");
             fflush(stderr);

@@ -75,9 +75,6 @@ jobs:
   build:
     runs-on: ${{ matrix.runner }}
     name: ${{ matrix.name }}
-    # GTK4 is a work in progress (see docs/gtk/gtk4-status.md) and is not
-    # expected to build cleanly yet; don't let it block the rest of CI.
-    continue-on-error: ${{ matrix.gtk_version == 4 }}
     container:
       image: ${{ matrix.container }}
       # We need to make container privileged just to allow writing to
@@ -103,10 +100,10 @@ jobs:
             # flag on compiled out every test that synthesises input -- so the
             # job reported "all tests passed" while measuring a suite two dozen
             # cases smaller than the one the wxGTK 2 and 3 jobs run. The cases
-            # it now runs include some that still fail; those are tracked in
-            # #82, and continue-on-error below keeps them from blocking CI.
-            # A job that measures less than it appears to is worse than a job
-            # with known red tests in it.
+            # it now runs included some that failed when this was written;
+            # those were #82 and are fixed, so the suite is green here and the
+            # job blocks like every other one. A job that measures less than it
+            # appears to is worse than a job with known red tests in it.
             configure_flags: --enable-accessibility
             # Still true: the port emits deprecation warnings, tracked in #78.
             allow_warnings: true
@@ -115,12 +112,13 @@ jobs:
             # the whole suite, so this job no longer restricts itself to the
             # console tests -- it builds and tests what every other job does.
             #
-            # continue-on-error is still set for gtk_version == 4 below,
-            # deliberately: this has never run in CI before (every workflow was
-            # filtered to master), so nobody knows yet how it behaves on a
-            # runner rather than on a developer's machine. Once it has been
-            # green for a while, that should go and this should block like the
-            # rest.
+            # It also blocks like every other job now. continue-on-error was
+            # set here while nobody knew how the port behaved on a runner
+            # rather than on a developer's machine, to be removed "once it has
+            # been green for a while". It has: six consecutive green runs
+            # across two days, both suites complete, since #126 stopped the job
+            # compiling the input tests out and #82 fixed what that exposed.
+            # Nothing protects a green that cannot fail.
           - name: Ubuntu 26.04 wxGTK UTF-8
             runner: ubuntu-26.04
             configure_flags: --enable-utf8 --enable-utf8only --enable-monolithic

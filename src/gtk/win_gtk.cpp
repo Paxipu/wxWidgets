@@ -139,9 +139,9 @@ static void pizza_size_allocate(GtkWidget* widget, int width, int WXUNUSED(heigh
     int w = width - border.left - border.right;
     if (w < 0) w = 0;
 
-    // See the KNOWN GAP comment in pizza_realize(): BORDER_STYLES
-    // decoration rendering needs a real redesign under GTK4, since the
-    // GdkWindow-repositioning trick this used to rely on doesn't apply.
+    // See the KNOWN GAP comment in pizza_realize(): BORDER_STYLES decoration
+    // rendering needs a real redesign under GTK4. It rests on repositioning a
+    // GdkWindow of its own, and GTK4 gives a widget no window to reposition.
 
     // adjust child positions
     for (const GList* p = pizza->m_children; p; p = p->next)

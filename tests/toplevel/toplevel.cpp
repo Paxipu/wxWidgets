@@ -132,7 +132,7 @@ TEST_CASE("wxTopLevel::ShowEvent", "[tlw][show][event]")
 // wxMDIParentFrame::OnInternalIdle() then found a hidden parent menu bar with
 // no child menu bar visible, took that for the state it has to correct, showed
 // the bar again and called Attach() on a bar that was still attached. That
-// asserted and undid the full screen switch in one go. See #74.
+// asserted and undid the full screen switch in one go.
 //
 // Whether the bar object itself is hidden is a port detail rather than part of
 // the contract: wxGTK hides it, while wxMSW detaches the menu from the window

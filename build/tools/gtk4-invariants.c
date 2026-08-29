@@ -1528,7 +1528,7 @@ static void test_destroyed_surface_still_typed(void)
      * its own: it is a type check, and a type does not stop being itself when
      * the X window behind it is destroyed. GDK_SURFACE_XID() then hands the
      * server a stale XID, the server answers BadWindow, and GDK's error
-     * handler exits the process. See issue #85. */
+     * handler exits the process. */
     check(stillX11,
           "a destroyed surface still passes GDK_IS_X11_SURFACE()",
           "GDK now clears the type on destroy, so the extra guard in "

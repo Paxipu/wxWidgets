@@ -15,8 +15,8 @@ namespace wxGTKImpl
     // Naming a window the X server does not know is not a recoverable error:
     // the server answers BadWindow and GDK's error handler ends the process.
     // That is not hypothetical -- it killed test_gui halfway through the suite
-    // (#85) and it killed wxMaxima on shutdown (#113) -- and the two calls
-    // below are what every request naming a surface has to go through.
+    // and it killed wxMaxima on shutdown -- and the two calls below are what
+    // every request naming a surface has to go through.
 
     // Can the X server still be asked about this surface? False for a surface
     // of another backend and for one GDK has seen destroyed.

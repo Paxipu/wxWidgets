@@ -1022,8 +1022,8 @@ void wxTopLevelWindowGTK::GTKHandleRealized()
 #endif
     }
 
-    // Note that the resize grip workaround which used to be here is gone: the
-    // grip itself was removed in GTK+ 3.14 already and GTK4 has no trace of it.
+    // The resize grip below is GTK+ 3 only: the grip was removed in GTK+ 3.14
+    // and GTK4 has no trace of it, hence the guard rather than a shim.
 #if defined(__WXGTK3__) && !defined(__WXGTK4__)
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     if (gtk_window_get_has_resize_grip(GTK_WINDOW(m_widget)))

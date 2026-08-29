@@ -75,19 +75,11 @@ void wxCaretBase::SetBlinkTime(int milliseconds)
 {
     gs_blinkTime = milliseconds;
 
-    // This used to be followed by a block passing the blink time on to
-    // GtkSettings, so that GTK's own text cursors would blink in step with
-    // wxCaret. It never ran: its guard was misspelled "_WXGTK__" with a single
-    // leading underscore, which nothing defines, and it could not have
-    // compiled if it had -- it misspelt its own parameter and called
-    // gtk_settings_set_long_property(), which no longer exists under GTK3 or
-    // GTK4. Removing it cannot change behaviour, for the same reason.
-    //
-    // Doing it for real is possible -- g_object_set() on "gtk-cursor-blink"
-    // and "gtk-cursor-blink-time" -- but it would reach past wxCaret into
-    // every native widget in the process, and GtkSettings is per display, so
-    // it is a decision about what this function is allowed to affect rather
-    // than a repair. See #101.
+    // Deliberately wxCaret-only: passing the blink time on to GtkSettings
+    // ("gtk-cursor-blink", "gtk-cursor-blink-time") would reach past wxCaret
+    // into every native widget in the process, and GtkSettings is per display.
+    // That is a decision about what this function is allowed to affect rather
+    // than something missing.
 }
 
 // ----------------------------------------------------------------------------

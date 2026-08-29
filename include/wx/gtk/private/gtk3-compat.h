@@ -10,12 +10,12 @@
 #ifndef _WX_GTK_PRIVATE_COMPAT3_H_
 #define _WX_GTK_PRIVATE_COMPAT3_H_
 
-// The gtk_check_version() shim that used to live here has moved to wrapgtk.h,
-// so that it reaches every file that can call gtk_check_version() rather than
-// only those that include this header. It is how GTKApplyWidgetStyle() came to
-// emit a Pango font description as CSS, which GTK4's parser rejects, so no
-// wxWindow's font was being applied at all -- a call site gets that wrong by
-// not being adapted, which is exactly what an opt-in header cannot catch.
+// The gtk_check_version() shim lives in wrapgtk.h rather than here, so that it
+// reaches every file that can call gtk_check_version() instead of only those
+// that include this header. An opt-in header cannot catch a call site that was
+// never adapted: GTKApplyWidgetStyle() emitting a Pango font description as
+// CSS, which GTK4's parser rejects, meant no wxWindow's font was applied at
+// all, and nothing pointed at it.
 #include "wx/gtk/private/wrapgtk.h"
 
 #ifdef __WXGTK4__

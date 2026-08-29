@@ -141,7 +141,7 @@ void wxOverlayImpl::Init(wxDC* dc, int x, int y, int width, int height)
         // inside a widget's snapshot, and outside one there is no screen to
         // draw on -- which is why wxScreenDCImpl says it "leaves the drawing
         // to go nowhere". Asserting turned that missing feature into a debug
-        // alert in the middle of a drag, which reads as a crash. See #97.
+        // alert in the middle of a drag, which reads as a crash.
         //
         // Leave the overlay uninitialised instead, and in particular leave
         // m_cr null: that is what makes the rest of this class skip its work

@@ -349,7 +349,7 @@ bool GetPointerPosition(GtkWidget* widget, double* x, double* y)
     // gtk_native_get_surface() keeps returning the surface of a toplevel being
     // torn down, and GTK goes on synthesizing crossing events for it, so this
     // is reached with a surface that is already destroyed. Asking such a
-    // surface where the pointer is killed wxMaxima on shutdown, see #113.
+    // surface where the pointer is killed wxMaxima on shutdown.
     if ( !surface )
         return false;
 
@@ -6572,7 +6572,7 @@ static void wxGTKGetOriginInRoot(GtkWidget* widget, int* org_x, int* org_y)
 
     // Naming a surface to the server is only safe behind both of these, see
     // wx/gtk/private/backend.h. Getting it wrong here killed test_gui halfway
-    // through the suite once, see #85.
+    // through the suite once.
     if ( wxGTKImpl::CanAskServerAbout(surface) )
     {
         Display* const dpy = GDK_SURFACE_XDISPLAY(surface);

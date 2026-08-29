@@ -372,17 +372,15 @@ bool wxPopupTransientWindow::Show( bool show )
     }
     else
     {
-        // Turning autohide off here, while the popover is still up, is what
-        // this used to do, and it is the wrong way round: GTK takes its grab
-        // when an autohiding popover is shown and gives it back when that
-        // popover is popped down. Clearing the flag first means the popdown
-        // never happens as far as GTK is concerned, so the grab is never
-        // returned, and from then on GTK routes keyboard input to a popover
-        // that is no longer there. See #82.
+        // Ask GTK to close the popover, and leave the autohide flag alone.
         //
-        // Ask GTK to close it instead, and leave autohide alone -- which is
-        // also what src/gtk/popupwin.cpp says about this flag: set it once,
-        // rather than switching it on and off around Show().
+        // GTK takes its grab when an autohiding popover is shown and gives it
+        // back when that popover is popped down, so the flag has to still be
+        // set at popdown. Clearing it while the popover is up means no popdown
+        // happens as far as GTK is concerned: the grab is never returned, and
+        // from then on GTK routes keyboard input to a popover that is not
+        // there any more. src/gtk/popupwin.cpp says the same about this flag --
+        // set it once, rather than switching it on and off around Show().
         //
         // "closed" means "the user dismissed this", so block the handler for
         // the one emission caused here; otherwise every programmatic

@@ -865,9 +865,9 @@ TEST_CASE_METHOD(WindowTestCase, "Window::RefreshRectUpdateRegion", "[window]")
 #ifdef __WXGTK4__
 
 // A window given a size has to report that size back, whatever GTK would
-// rather draw. This pins #125: a clamp in wxPizza::size_allocate_child(),
-// added for #95, quietly replaced any size below the child's minimum with that
-// minimum -- and since the size_allocate handler reads wx's own m_width and
+// rather draw. Without this, a clamp in wxPizza::size_allocate_child() that
+// keeps a child at least its GTK minimum quietly replaced any smaller size
+// with that minimum -- and since the size_allocate handler reads wx's own
 // m_height back out of the allocation, GetSize() then reported the
 // replacement. An application placing siblings by hand got overlapping
 // controls under GTK4 and not under GTK+ 2 or GTK+ 3, which both report the

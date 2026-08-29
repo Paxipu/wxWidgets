@@ -3505,8 +3505,8 @@ wxGraphicsContext * wxCairoRenderer::CreateContextFromImage(wxImage& image)
 wxGraphicsContext * wxCairoRenderer::CreateMeasuringContext()
 {
 #ifdef __WXGTK4__
-    // The root window this used to measure against is gone, but measuring
-    // never needed a real target in the first place: any surface will do.
+    // GTK4 has no root window to measure against, and measuring never needed
+    // a real target in the first place: any surface will do.
     cairo_surface_t* const surface =
         cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
     cairo_t* const cr = cairo_create(surface);

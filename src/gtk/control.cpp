@@ -403,16 +403,16 @@ wxSize wxControl::GTKGetEntryMargins(GtkEntry* entry) const
 
 #ifdef __WXGTK3__
     GtkStyleContext* sc = gtk_widget_get_style_context(GTK_WIDGET(entry));
-    GtkStateFlags    state = gtk_style_context_get_state(sc);
 
     GtkBorder padding, border;
 #ifdef __WXGTK4__
     // gtk_style_context_get_padding()/get_border() dropped the separate
-    // GtkStateFlags parameter under GTK4 -- both always query the
-    // context's current state, which "state" above already is.
+    // GtkStateFlags parameter under GTK4 -- both always query the context's
+    // current state, so there is nothing to pass and nothing to read it into.
     gtk_style_context_get_padding(sc, &padding);
     gtk_style_context_get_border(sc, &border);
 #else
+    const GtkStateFlags state = gtk_style_context_get_state(sc);
     gtk_style_context_get_padding(sc, state, &padding);
     gtk_style_context_get_border(sc, state, &border);
 #endif

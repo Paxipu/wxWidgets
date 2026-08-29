@@ -249,6 +249,9 @@ void wxFileButton::SetInitialDirectory(const wxString& dir)
 //-----------------------------------------------------------------------------
 
 extern "C" {
+#ifndef __WXGTK4__
+// Both callers -- the "file_set" signal and selection_changed() below -- are
+// on the GtkFileChooserButton path that GTK4 removed.
 static void file_set(GtkFileChooser* widget, wxDirButton* p)
 {
     // NB: it's important to use gtk_file_chooser_get_filename instead of
@@ -276,6 +279,7 @@ static void file_set(GtkFileChooser* widget, wxDirButton* p)
     wxFileDirPickerEvent event(wxEVT_DIRPICKER_CHANGED, p, p->GetId(), p->GetPath());
     p->HandleWindowEvent(event);
 }
+#endif // !__WXGTK4__
 }
 
 //-----------------------------------------------------------------------------
@@ -283,6 +287,10 @@ static void file_set(GtkFileChooser* widget, wxDirButton* p)
 //-----------------------------------------------------------------------------
 
 extern "C" {
+#ifndef __WXGTK4__
+// Connected only on the GtkFileChooserButton path, which GTK4 removed; there
+// the button is a GtkButton driving a GtkFileDialog and reports through
+// file_set() alone.
 static void selection_changed(GtkFileChooser* chooser, wxDirButton* win)
 {
     wxGtkString filename(gtk_file_chooser_get_filename(chooser));
@@ -292,6 +300,7 @@ static void selection_changed(GtkFileChooser* chooser, wxDirButton* win)
     else if (!win->m_bIgnoreNextChange)
         file_set(chooser, win);
 }
+#endif // !__WXGTK4__
 }
 
 //-----------------------------------------------------------------------------

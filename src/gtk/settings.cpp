@@ -50,9 +50,13 @@ static int gs_scrollWidth;
 static GtkWidget* gs_tlw_parent;
 
 // This is a GtkContainer* under GTK2/3 and a GtkWidget* (of a GtkFixed)
-// under GTK4, where GtkContainer doesn't exist any more; callers that need
-// to add a child to it should use ContainerWidgetAddChild() below instead
-// of gtk_container_add() directly so they work under both.
+// under GTK4, where GtkContainer doesn't exist any more.
+//
+// ContainerWidgetAddChild() exists so that a caller needing to add a child
+// works under both, but only the GTK2/3 side has one: every GTK4 metric here
+// measures a throw-away widget instead of parenting one. It is therefore
+// defined only where it is called -- add the GTK4 half back together with the
+// first GTK4 caller, rather than leaving it to be reported as unused.
 #ifdef __WXGTK4__
 static GtkWidget* ContainerWidget()
 {
@@ -65,11 +69,6 @@ static GtkWidget* ContainerWidget()
         gtk_window_set_child(GTK_WINDOW(gs_tlw_parent), s_widget);
     }
     return s_widget;
-}
-
-static void ContainerWidgetAddChild(GtkWidget* child)
-{
-    gtk_fixed_put(GTK_FIXED(ContainerWidget()), child, 0, 0);
 }
 #else
 static GtkContainer* ContainerWidget()
@@ -91,6 +90,9 @@ static void ContainerWidgetAddChild(GtkWidget* child)
 }
 #endif // __WXGTK4__/!__WXGTK4__
 
+#ifndef __WXGTK4__
+// Used only by the pre-GTK4 scrollbar metrics below, which query the widget's
+// style; GTK4 measures a throw-away scrollbar instead and never calls this.
 static GtkWidget* ScrollBarWidget()
 {
     static GtkWidget* s_widget;
@@ -105,6 +107,7 @@ static GtkWidget* ScrollBarWidget()
     }
     return s_widget;
 }
+#endif // !__WXGTK4__
 
 #ifndef __WXGTK3__
 

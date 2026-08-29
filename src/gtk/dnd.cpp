@@ -51,6 +51,9 @@ extern int       g_lastButtonNumber;
 // standard icons
 //----------------------------------------------------------------------------
 
+#ifndef __WXGTK4__
+// Only wxDropSource::Init() uses this, and that is compiled out under GTK4,
+// where the drag icon comes from GdkPaintable instead.
 /* Copyright (c) Julian Smart */
 static const char * page_xpm[] = {
 /* columns rows colors chars-per-pixel */
@@ -126,6 +129,7 @@ static const char * page_xpm[] = {
 "                                ",
 "                                "
 };
+#endif // !__WXGTK4__
 
 
 // ============================================================================

@@ -104,3 +104,37 @@ low-risk and could be adapted directly. The design document for the
 window/child model might be useful as a starting point for anyone else
 looking at this, even if the actual implementation here hasn't caught up
 to it yet.
+
+## How this work is attributed
+
+Most of this port was written by Claude Opus 5 driving a build, a test
+suite and a set of probe programs, with @gunterkoenigsmann directing the
+work, reporting the bugs and deciding what gets submitted. That should be
+readable in the history rather than inferred from it, so every commit says
+so in the same way:
+
+```
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+```
+
+One form, on every commit, whether or not the change is large. The history
+before this convention was settled is inconsistent -- 108 of 285 commits
+carried that trailer, 80 also carried a `Claude-Session:` URL, and 177
+carried nothing -- which is the whole reason for writing it down (#177).
+
+Two rules go with it:
+
+**The git author is the person submitting the change.** Whoever submits is
+warranting the code under the wxWindows licence, and that is a human
+decision (see #106, gate 3); a commit whose author field names the model
+has nobody standing behind it. `Co-authored-by:` says the model wrote it
+without making a claim about who is answerable for it.
+
+**No `Claude-Session:` trailers on anything published.** Those URLs point at
+private sessions and resolve for nobody else, so in a permanent public
+history they are dead links. They stay useful in local work; they are
+stripped when a series is cut.
+
+Disclosure does not live only in the trailers. Any series offered upstream
+says in its cover text how it was produced, because a trailer is easy to
+miss and this is not something to let a reviewer discover late.

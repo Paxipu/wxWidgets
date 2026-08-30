@@ -86,8 +86,25 @@ public:
 
     virtual GtkWidget *GetConnectWidget() const override;
 
+#ifdef __WXGTK4__
+    // GTK4 has neither GtkTreeView nor GtkListStore. The list is a GListStore
+    // of wxTreeEntry -- the same item objects as before, since wxTreeEntry is
+    // already a GObject carrying the label and the client data -- presented
+    // through a selection model to a GtkListView.
+    //
+    // m_model is the outermost model, i.e. the one whose positions are the
+    // positions wx talks about. With wxLB_SORT that is a GtkSortListModel
+    // wrapping m_store, so it differs from the store's own order; without it
+    // the two coincide. Every position-based accessor goes through m_model,
+    // never through m_store, for that reason.
+    struct _GtkListView      *m_listview;
+    struct _GListStore       *m_store;
+    struct _GtkSelectionModel*m_selection;
+    struct _GListModel       *m_model;
+#else
     struct _GtkTreeView   *m_treeview;
     struct _GtkListStore  *m_liststore;
+#endif // __WXGTK4__/!__WXGTK4__
 
 #if wxUSE_CHECKLISTBOX
     bool       m_hasCheckBoxes;
@@ -122,11 +139,13 @@ protected:
     virtual void* DoGetItemClientData(unsigned int n) const override;
     virtual int DoListHitTest(const wxPoint& point) const override;
 
+#ifndef __WXGTK4__
     // get the iterator for the given index, returns false if invalid
     bool GTKGetIteratorFor(unsigned pos, _GtkTreeIter *iter) const;
 
     // get the index for the given iterator, return wxNOT_FOUND on failure
     int GTKGetIndexFor(_GtkTreeIter& iter) const;
+#endif // !__WXGTK4__
 
     // common part of DoSetFirstItem() and EnsureVisible()
     void DoScrollToCell(int n, float alignY, float alignX);

@@ -103,6 +103,18 @@ void* wx_tree_entry_get_userdata(wxTreeEntry* entry)
     return entry->userdata;
 }
 
+gboolean wx_tree_entry_get_checked(wxTreeEntry* entry)
+{
+    g_assert(WX_IS_TREE_ENTRY(entry));
+    return entry->checked;
+}
+
+void wx_tree_entry_set_checked(wxTreeEntry* entry, gboolean checked)
+{
+    g_assert(WX_IS_TREE_ENTRY(entry));
+    entry->checked = checked;
+}
+
 void wx_tree_entry_set_label(wxTreeEntry* entry, const char* label)
 {
     g_assert(WX_IS_TREE_ENTRY(entry));

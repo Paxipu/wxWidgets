@@ -201,60 +201,26 @@ static GtkWidget* wxGTKFindChildNode(GtkWidget* widget, const char* name)
     return widget;
 }
 
-// Draw a scratch widget into a cairo context, the way GTK4 wants a widget
-// drawn: snapshot it and run the resulting node through GSK.
+// A note on what does NOT work here, because the newer API looks like the
+// obvious answer and quietly draws nothing.
 //
-// This replaces gtk_render_background()/gtk_render_frame() on a style context,
-// which GTK4 deprecated along with the rest of the GtkStyleContext drawing
-// family. It is not a substitution but a different mechanism, so the two were
-// compared byte for byte before this was written -- see
-// docs/gtk/probes/gtk4-renderer-snapshot.c, which draws a button both ways in
-// four states and finds the results identical.
+// GTK4 deprecates gtk_render_background()/gtk_render_frame() in favour of
+// snapshotting a widget and running the GskRenderNode through
+// gsk_render_node_draw(). That does reproduce them byte for byte -- measured,
+// see docs/gtk/probes/gtk4-renderer-snapshot.c -- but only for a widget whose
+// toplevel has been *mapped*. gtk_widget_snapshot_child() yields nothing for a
+// widget that has merely been realized, and a null node draws nothing at all.
 //
-// Three things the probe established, each of which is wrong by default:
+// wx's scratch widgets live in a container whose window is deliberately never
+// shown (see wxGTKPrivate::GetContainer()), and showing it is not an option:
+// it would flash a window on the user's desktop every time a control part is
+// drawn. So the replacement cannot be used for these, and the deprecated calls
+// below stay until there is a way to rasterise a widget without mapping it.
 //
-//  - the widget has to be allocated to the target rect first, or it snapshots
-//    to its own natural size rather than the one asked for;
-//  - gtk_widget_queue_draw() has to follow the state change. GTK caches a
-//    widget's render node and gtk_widget_snapshot_child() hands back the
-//    cached one, so without this every state draws the normal appearance;
-//  - the node is drawn with no translation of its own. Its bounds start at
-//    negative coordinates because the CSS shadow reaches outside the
-//    allocation, and translating by them shifts the frame by that much.
-//
-// Nothing here runs the main loop, deliberately: this is called from paint
-// handlers, and dispatching events from inside one is the re-entrancy that
-// was taken out of the drop path for #144.
-static void
-wxGTKDrawWidgetSnapshot(GtkWidget* widget,
-                        cairo_t* cr,
-                        const wxRect& rect,
-                        GtkStateFlags state)
-{
-    GtkWidget* const parent = gtk_widget_get_parent(widget);
-    wxCHECK_RET( parent, "scratch widget must be in the scratch container" );
-
-    const GtkAllocation alloc = { 0, 0, rect.width, rect.height };
-    gtk_widget_size_allocate(widget, &alloc, -1);
-
-    gtk_widget_set_state_flags(widget, state, TRUE);
-    gtk_widget_queue_draw(widget);
-
-    GtkSnapshot* const snapshot = gtk_snapshot_new();
-    gtk_widget_snapshot_child(parent, widget, snapshot);
-
-    if ( GskRenderNode* const node = gtk_snapshot_to_node(snapshot) )
-    {
-        cairo_save(cr);
-        cairo_translate(cr, rect.x, rect.y);
-        gsk_render_node_draw(node, cr);
-        cairo_restore(cr);
-
-        gsk_render_node_unref(node);
-    }
-
-    gtk_widget_unset_state_flags(widget, state);
-}
+// This is recorded rather than left to be rediscovered: the substitution
+// compiles, passes the whole test suite and passes CI, because nothing there
+// looks at the pixels wxRendererNative produces. tests/graphics/renderer.cpp
+// does now.
 
 #endif // __WXGTK4__
 
@@ -1032,16 +998,12 @@ wxRendererGTK::DrawPushButton(wxWindow*,
     cairo_t* cr = wxGetGTKDrawable(dc);
     if (cr)
     {
-#ifdef __WXGTK4__
-        wxGTKDrawWidgetSnapshot(button, cr, rect, stateTypeToFlags[state]);
-#else
         GtkStyleContext* sc = gtk_widget_get_style_context(button);
         gtk_style_context_save(sc);
         gtk_style_context_set_state(sc, stateTypeToFlags[state]);
         gtk_render_background(sc, cr, rect.x, rect.y, rect.width, rect.height);
         gtk_render_frame(sc, cr, rect.x, rect.y, rect.width, rect.height);
         gtk_style_context_restore(sc);
-#endif // __WXGTK4__/!__WXGTK4__
     }
 #else
     GdkWindow* gdk_window = wxGetGTKDrawable(dc);
@@ -1208,16 +1170,12 @@ void wxRendererGTK::DrawComboBox(wxWindow* win, wxDC& dc, const wxRect& rect, in
     wx_gtk_widget_set_focusable(combo, (flags & wxCONTROL_CURRENT) != 0);
 
 #ifdef __WXGTK3__
-#ifdef __WXGTK4__
-    wxGTKDrawWidgetSnapshot(combo, drawable, rect, stateTypeToFlags[state]);
-#else
     GtkStyleContext* sc = gtk_widget_get_style_context(combo);
     gtk_style_context_save(sc);
     gtk_style_context_set_state(sc, stateTypeToFlags[state]);
     gtk_render_background(sc, drawable, rect.x, rect.y, rect.width, rect.height);
     gtk_render_frame(sc, drawable, rect.x, rect.y, rect.width, rect.height);
     gtk_style_context_restore(sc);
-#endif // __WXGTK4__/!__WXGTK4__
     wxRect r = rect;
     r.x += r.width - r.height;
     r.width = r.height;

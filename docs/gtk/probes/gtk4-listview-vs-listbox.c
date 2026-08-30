@@ -56,7 +56,7 @@ static void bind(GtkSignalListItemFactory *f, GtkListItem *li, gpointer d)
     gtk_label_set_text(GTK_LABEL(gtk_list_item_get_child(li)), gtk_string_object_get_string(so));
 }
 
-/* wxListBox::DoListHitTest(): welches Element liegt an (x,y)? */
+/* wxListBox::DoListHitTest(): which item is at (x, y)? */
 static int hit_test(double x, double y)
 {
     GtkWidget *w = gtk_widget_pick(g_lv, x, y, (GtkPickFlags)(GTK_PICK_NON_TARGETABLE | GTK_PICK_INSENSITIVE));
@@ -68,7 +68,7 @@ static int hit_test(double x, double y)
                    g_object_get_data(G_OBJECT(p), "li") ? "[LI]" : "");
         printf("\n");
     }
-    /* Vom getroffenen Widget zum GtkListItem hochlaufen. */
+    /* Walk up from the picked widget to its GtkListItem. */
     for (; w && w != g_lv; w = gtk_widget_get_parent(w))
     {
         GtkListItem *li = GTK_LIST_ITEM(g_object_get_data(G_OBJECT(w), "li"));
@@ -93,43 +93,43 @@ static gboolean run(gpointer d)
     gtk_single_selection_set_can_unselect(GTK_SINGLE_SELECTION(sel), TRUE);
     gtk_list_view_set_model(GTK_LIST_VIEW(g_lv), sel);
 
-    printf("PROBE GtkListView gegen wxListBox-Bedarf\n");
+    printf("PROBE GtkListView against what wxListBox needs\n");
 
     guint s = gtk_single_selection_get_selected(GTK_SINGLE_SELECTION(sel));
-    printf("  frisch, autoselect=FALSE     sel=%s\n", s==GTK_INVALID_LIST_POSITION?"INVALID (wie wxListBox)":"gesetzt");
+    printf("  fresh, autoselect=FALSE      sel=%s\n", s==GTK_INVALID_LIST_POSITION?"INVALID (as wxListBox starts)":"set");
 
     gtk_selection_model_select_item(sel, 2, TRUE);
     printf("  select_item(2)               sel=%u\n", gtk_single_selection_get_selected(GTK_SINGLE_SELECTION(sel)));
 
     gtk_selection_model_unselect_item(sel, 2);
     s = gtk_single_selection_get_selected(GTK_SINGLE_SELECTION(sel));
-    printf("  unselect_item(2)             sel=%s\n", s==GTK_INVALID_LIST_POSITION?"INVALID (Abwahl geht)":"GESETZT (Abwahl geht NICHT)");
+    printf("  unselect_item(2)             sel=%s\n", s==GTK_INVALID_LIST_POSITION?"INVALID (deselection works)":"SET (deselection does NOT work)");
 
-    /* Mehrfachauswahl */
+    /* Multiple selection. */
     GtkSelectionModel *msel = GTK_SELECTION_MODEL(
         gtk_multi_selection_new(G_LIST_MODEL(g_object_ref(g_items))));
     gtk_selection_model_select_item(msel, 1, FALSE);
     gtk_selection_model_select_item(msel, 3, FALSE);
     int n=0; for (guint i=0;i<g_list_model_get_n_items(G_LIST_MODEL(msel));i++)
         if (gtk_selection_model_is_selected(msel, i)) n++;
-    printf("  MultiSelection, 2 gewaehlt   n=%d %s\n", n, n==2?"(ok)":"(FEHLER)");
+    printf("  MultiSelection, 2 selected   n=%d %s\n", n, n==2?"(ok)":"(WRONG)");
     g_object_unref(msel);
 
-    /* Trefferpruefung und Geometrie brauchen ein gemapptes Fenster */
+    /* Hit testing and geometry need a mapped window. */
     for (int i=0;i<300 && gtk_widget_get_width(g_lv)==0;i++) g_main_context_iteration(NULL,FALSE);
-    printf("  ListView zugeteilt           %dx%d\n", gtk_widget_get_width(g_lv), gtk_widget_get_height(g_lv));
+    printf("  list view allocated          %dx%d\n", gtk_widget_get_width(g_lv), gtk_widget_get_height(g_lv));
 
-    /* Zeilen entstehen erst, wenn die Ansicht wirklich gezeichnet hat. */
+    /* Rows only appear once the view has actually drawn. */
     for (int round=0; round<10; round++)
     {
-        /* blockierend: sonst tickt die Frame-Clock nicht und nichts wird zugeteilt */
+        /* Blocking: otherwise the frame clock never ticks and nothing is allocated. */
         for (int i=0;i<60;i++) g_main_context_iteration(NULL,TRUE);
         int kids=0;
         for (GtkWidget *c=gtk_widget_get_first_child(g_lv); c; c=gtk_widget_get_next_sibling(c)) kids++;
-        printf("  Runde %d: Zeilen-Widgets=%d\n", round, kids);
+        printf("  round %d: row widgets=%d\n", round, kids);
         graphene_rect_t b; GtkWidget *c0 = gtk_widget_get_first_child(g_lv);
         if (c0 && gtk_widget_compute_bounds(c0, g_lv, &b) && b.size.height > 4)
-        { printf("  Runde %d: Zeilen zugeteilt (%.0fx%.0f)\n", round, b.size.width, b.size.height); break; }
+        { printf("  round %d: rows allocated (%.0fx%.0f)\n", round, b.size.width, b.size.height); break; }
     }
     {
         int i=0;
@@ -137,7 +137,7 @@ static gboolean run(gpointer d)
         {
             graphene_rect_t b;
             const gboolean ok = gtk_widget_compute_bounds(c, g_lv, &b);
-            printf("  Zeile %d: %s bounds=%s %.0f,%.0f %.0fx%.0f  can_target=%d mapped=%d\n",
+            printf("  row %d: %s bounds=%s %.0f,%.0f %.0fx%.0f  can_target=%d mapped=%d\n",
                    i, G_OBJECT_TYPE_NAME(c), ok?"ok":"FEHLT",
                    b.origin.x, b.origin.y, b.size.width, b.size.height,
                    gtk_widget_get_can_target(c), gtk_widget_get_mapped(c));
@@ -147,18 +147,18 @@ static gboolean run(gpointer d)
     int ok = 1;
     for (int i = 0; i < 5; i++)
     {
-        const double y = i * 20 + 10;      /* Mitte der i-ten Zeile */
+        const double y = i * 20 + 10;      /* centre of row i */
         const int h = hit_test(20, y);
         printf("  y=%.0f->%d", y, h);
         if (h != i) ok = 0;
     }
     const int hOut = hit_test(20, 100000);
-    printf("  ausserhalb->%d\n", hOut);
-    printf("  VERDICT HitTest %s\n", (ok && hOut < 0) ? "brauchbar" : "UNBRAUCHBAR");
+    printf("  outside->%d\n", hOut);
+    printf("  VERDICT HitTest %s\n", (ok && hOut < 0) ? "usable" : "UNUSABLE");
 
-    /* Scrollen zu einem Element -- EnsureVisible */
+    /* Scrolling to an item -- EnsureVisible(). */
     gtk_list_view_scroll_to(GTK_LIST_VIEW(g_lv), 40, GTK_LIST_SCROLL_NONE, NULL);
-    printf("  scroll_to(40)                ohne Absturz\n");
+    printf("  scroll_to(40)                did not crash\n");
 
     fflush(stdout); done=1; return G_SOURCE_REMOVE;
 }

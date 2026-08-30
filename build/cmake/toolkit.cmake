@@ -71,15 +71,40 @@ set(wxTOOLKIT_LIBRARY_DIRS)
 set(wxTOOLKIT_VERSION)
 
 if(WXGTK)
+    # Minimum GTK versions.  These have to say the same thing as the versions
+    # configure.ac asks pkg-config for; build/tools/check-gtk-min-versions.py
+    # compares the two files and fails if they drift apart.  An empty value
+    # means "no minimum", which is what configure.ac asks for GTK+ 3.
     if(WXGTK4)
         set(gtk_lib GTK4)
+        # 4.10 is the floor the port actually has: it uses
+        # gtk_snapshot_push_mask() unguarded, and that arrived in 4.10.
+        set(gtk_min_version 4.10)
     elseif(WXGTK3)
         set(gtk_lib GTK3)
+        set(gtk_min_version)
     elseif(WXGTK2)
         set(gtk_lib GTK2)
+        set(gtk_min_version 2.6.0)
     endif()
 
-    find_package(${gtk_lib} REQUIRED)
+    find_package(${gtk_lib} ${gtk_min_version} REQUIRED)
+
+    if(WXGTK4)
+        # Tell GDK which version wx promises to keep working on, so that it
+        # warns about what is deprecated *since* then and not about everything
+        # deprecated at any point.  This does not restrict which API may be
+        # used: that is GDK_VERSION_MAX_ALLOWED, deliberately left at its
+        # default.
+        #
+        # Kept out of wxTOOLKIT_DEFINITIONS on purpose.  Those reach the
+        # installed configuration and so the applications built against it,
+        # and which deprecations an application wants to hear about is its own
+        # decision, not ours -- which is also why configure.ac puts this in
+        # CPPFLAGS rather than in setup.h.
+        list(APPEND wxTOOLKIT_OWN_DEFINITIONS
+             GDK_VERSION_MIN_REQUIRED=GDK_VERSION_4_10)
+    endif()
     list(APPEND wxTOOLKIT_INCLUDE_DIRS ${${gtk_lib}_INCLUDE_DIRS})
     list(APPEND wxTOOLKIT_LIBRARIES ${${gtk_lib}_LIBRARIES})
     list(APPEND wxTOOLKIT_LIBRARY_DIRS ${${gtk_lib}_LIBRARY_DIRS})

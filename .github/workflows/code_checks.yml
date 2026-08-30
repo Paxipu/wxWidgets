@@ -76,6 +76,18 @@ jobs:
                 ':!**/*.xpm'
 
 
+  check-gtk-min-versions:
+    runs-on: ubuntu-latest
+    name: Check GTK Minimum Versions
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check that configure.ac and CMake agree
+        run: |
+            python3 build/tools/check-gtk-min-versions.py
+
   check-mixed-eol:
     runs-on: ubuntu-latest
     name: Check Mixed EOL

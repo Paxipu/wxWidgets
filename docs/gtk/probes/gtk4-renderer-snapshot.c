@@ -26,6 +26,24 @@
  *     outside the allocation; translating by them moves the frame off by
  *     exactly that much, which looks like a rendering difference and is not.
  *
+ * THE CONSTRAINT THAT MAKES THIS UNUSABLE FOR wxRendererNative, found after
+ * the substitution had already been shipped and reverted again:
+ *
+ *   gtk_widget_snapshot_child() returns NULL unless the widget's toplevel has
+ *   been MAPPED. Realizing it is not enough -- gtk_widget_realize() on the
+ *   root leaves the snapshot null, and a null node draws nothing at all. Only
+ *   gtk_window_present() makes it work, which is why this probe presents its
+ *   window and why that looked like an incidental detail.
+ *
+ *   wx's scratch widgets live in a container whose window is deliberately
+ *   never shown (wxGTKPrivate::GetContainer(): "Never shown, just used to host
+ *   scratch widgets"), and showing it is not an option -- it would flash a
+ *   window on the user's desktop every time a control part is drawn.
+ *
+ *   So this mechanism is correct and reproduces the deprecated drawing exactly,
+ *   and it still cannot replace it here. Run with PROBE_UNMAPPED=1 to see the
+ *   null nodes.
+ *
  * Notably, nothing here has to run the main loop. An earlier version of this
  * probe appeared to need it, which would have been a problem: renderer.cpp is
  * called from paint handlers, and dispatching events from inside one is the

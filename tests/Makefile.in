@@ -179,6 +179,7 @@ TEST_GUI_OBJECTS =  \
 	test_gui_colour.o \
 	test_gui_ellipsization.o \
 	test_gui_measuring.o \
+	test_gui_renderer.o \
 	test_gui_affinematrix.o \
 	test_gui_boundingbox.o \
 	test_gui_clipper.o \
@@ -970,6 +971,9 @@ test_gui_ellipsization.o: $(srcdir)/graphics/ellipsization.cpp $(TEST_GUI_ODEP)
 
 test_gui_measuring.o: $(srcdir)/graphics/measuring.cpp $(TEST_GUI_ODEP)
 	$(CXXC) -c -o $@ $(TEST_GUI_CXXFLAGS) $(srcdir)/graphics/measuring.cpp
+
+test_gui_renderer.o: $(srcdir)/graphics/renderer.cpp $(TEST_GUI_ODEP)
+	$(CXXC) -c -o $@ $(TEST_GUI_CXXFLAGS) $(srcdir)/graphics/renderer.cpp
 
 test_gui_affinematrix.o: $(srcdir)/graphics/affinematrix.cpp $(TEST_GUI_ODEP)
 	$(CXXC) -c -o $@ $(TEST_GUI_CXXFLAGS) $(srcdir)/graphics/affinematrix.cpp

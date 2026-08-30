@@ -2928,7 +2928,12 @@ if test "$wxUSE_GUI" = "yes"; then
                 fi
                 if test -z "$wx_cv_lib_gtk"; then
                     if test "$wxGTK_VERSION" = 4 -o "$wxGTK_VERSION" = any; then
-                        PKG_CHECK_MODULES(GTK, gtk4, wx_cv_lib_gtk=4)
+                        dnl 4.10 is the floor the port actually has: it uses
+                        dnl gtk_snapshot_push_mask() unguarded, for the window
+                        dnl shape support GTK4 otherwise removed, and that
+                        dnl arrived in 4.10. Asking for no version at all, as
+                        dnl this did, promised GTK 4.0 and did not deliver it.
+                        PKG_CHECK_MODULES(GTK, [gtk4 >= 4.10], wx_cv_lib_gtk=4)
                     fi
                 fi
 
@@ -4917,6 +4922,23 @@ if test "$wxUSE_GTK" = 1 ; then
 
     if test "$WXGTK4" = 1 ; then
         AC_DEFINE_UNQUOTED(__WXGTK4__, 1)
+
+        dnl Tell GTK which version we support, which it otherwise has to guess.
+        dnl Left unset, it assumes we target whatever we happen to compile
+        dnl against and reports every deprecation of every release since 4.0 --
+        dnl including ones whose replacement does not exist in the version we
+        dnl require. 4.10 is the floor asked for above.
+        dnl
+        dnl This does not restrict which API may be used: that is
+        dnl GDK_VERSION_MAX_ALLOWED, deliberately left at its default of the
+        dnl version being compiled against, so newer calls behind
+        dnl GTK_CHECK_VERSION() guards stay warning-free.
+        dnl
+        dnl In CPPFLAGS rather than AC_DEFINE, i.e. in wx's own compilation
+        dnl rather than in the installed setup.h, for the same reason as
+        dnl G_DISABLE_CAST_CHECKS below: which deprecations an application
+        dnl wants to hear about is its own decision, not ours.
+        CPPFLAGS="$CPPFLAGS -DGDK_VERSION_MIN_REQUIRED=GDK_VERSION_4_10"
     fi
     if test "$WXGTK3" = 1 ; then
         AC_DEFINE_UNQUOTED(__WXGTK3__, 1)

@@ -19,9 +19,9 @@
 #include "wx/dataview.h"
 #include "wx/uiaction.h"
 
-#ifdef __WXGTK__
-    #include "waitfor.h"
-#endif // __WXGTK__
+// Not under __WXGTK__ any more: the layout tests below wait on every platform,
+// because "has the control laid anything out yet" is not a GTK question.
+#include "waitfor.h"
 
 #include "testableframe.h"
 #include "asserthelper.h"

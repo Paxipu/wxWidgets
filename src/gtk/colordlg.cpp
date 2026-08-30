@@ -20,6 +20,57 @@
 #endif
 
 #include "wx/gtk/private.h"
+#include "wx/modalhook.h"
+
+#ifdef __WXGTK4__
+    #include "wx/gtk/private/dialogasync.h"
+#endif
+
+#ifdef __WXGTK4__
+
+namespace
+{
+
+// Everything the asynchronous callback below needs. It lives on
+// wxColourDialog::ShowModal()'s stack, which outlives the call because that
+// function blocks in Run() until the callback has finished with it.
+struct wxColourChooseContext
+{
+    wxColourData* data;
+    wxGTKDialogAsyncResult* result;
+};
+
+} // anonymous namespace
+
+extern "C" {
+static void
+wxgtk_colour_chosen(GObject* source, GAsyncResult* res, gpointer user_data)
+{
+    wxColourChooseContext* const
+        ctx = static_cast<wxColourChooseContext*>(user_data);
+
+    GError* error = nullptr;
+    GdkRGBA* const rgba = gtk_color_dialog_choose_rgba_finish(
+                            GTK_COLOR_DIALOG(source), res, &error);
+
+    int rc;
+    if ( rgba )
+    {
+        ctx->data->SetColour(wxColour(*rgba));
+        gdk_rgba_free(rgba);
+        rc = wxID_OK;
+    }
+    else
+    {
+        rc = wxGTKDialogAsyncResult::GetCodeForError(error, "Choosing a colour");
+        g_clear_error(&error);
+    }
+
+    ctx->result->Finish(rc);
+}
+}
+
+#else // !__WXGTK4__
 
 extern "C" {
 static void response(GtkDialog*, int response_id, wxColourDialog* win)
@@ -27,6 +78,8 @@ static void response(GtkDialog*, int response_id, wxColourDialog* win)
     win->EndModal(response_id == GTK_RESPONSE_OK ? wxID_OK : wxID_CANCEL);
 }
 }
+
+#endif // __WXGTK4__/!__WXGTK4__
 
 wxIMPLEMENT_DYNAMIC_CLASS(wxColourDialog, wxDialog);
 
@@ -46,9 +99,19 @@ bool wxColourDialog::Create(wxWindow *parent, const wxColourData *data)
 
     wxString title(_("Choose colour"));
 #ifdef __WXGTK4__
-    m_widget = gtk_color_chooser_dialog_new(title.utf8_str(), parentGTK);
-    g_object_ref(m_widget);
-    gtk_color_chooser_set_use_alpha(GTK_COLOR_CHOOSER(m_widget), m_data.GetChooseAlpha());
+    // GtkColorChooserDialog is deprecated since GTK 4.10 and its replacement,
+    // GtkColorDialog, is not a widget at all -- there is nothing here that
+    // could be m_widget. The colour is chosen in ShowModal() instead.
+    //
+    // A plain window is still created, because the rest of wxWindow expects
+    // one: the class already declares itself "not a real wxDialog" and stubs
+    // out DoSetSize() and DoMoveWindow(), and this keeps the remaining
+    // inherited calls -- GetTitle(), IsShown(), the destructor -- working on
+    // something rather than on nullptr. It is never shown.
+    wxUnusedVar(parentGTK);
+    m_widget = gtk_window_new();
+    g_object_ref_sink(m_widget);
+    gtk_window_set_title(GTK_WINDOW(m_widget), title.utf8_str());
 #else
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     m_widget = gtk_color_selection_dialog_new(title.utf8_str());
@@ -73,6 +136,41 @@ bool wxColourDialog::Create(wxWindow *parent, const wxColourData *data)
 
 int wxColourDialog::ShowModal()
 {
+#ifdef __WXGTK4__
+    // Not wxDialog::ShowModal(), so the hook it would have called has to be
+    // called here: wxExpectModal() and the rest of the modal dialog testing
+    // machinery hang off it.
+    WX_HOOK_MODAL_DIALOG();
+
+    GtkColorDialog* const dialog = gtk_color_dialog_new();
+    gtk_color_dialog_set_modal(dialog, TRUE);
+    gtk_color_dialog_set_with_alpha(dialog, m_data.GetChooseAlpha());
+
+    // The title is kept on the placeholder window so that SetTitle() and
+    // GetTitle() keep working; hand it to the controller here.
+    if ( const char* const title = gtk_window_get_title(GTK_WINDOW(m_widget)) )
+        gtk_color_dialog_set_title(dialog, title);
+
+    GtkWindow* const parentGTK = m_parent && m_parent->m_widget
+                                    ? GTK_WINDOW(m_parent->m_widget)
+                                    : nullptr;
+
+    const wxColour& colour = m_data.GetColour();
+
+    wxGTKDialogAsyncResult result;
+    wxColourChooseContext ctx = { &m_data, &result };
+
+    gtk_color_dialog_choose_rgba(dialog, parentGTK,
+                                 colour.IsOk() ? colour.GTKGetRGBA() : nullptr,
+                                 nullptr /* GCancellable */,
+                                 wxgtk_colour_chosen, &ctx);
+
+    const int rc = result.Run();
+
+    g_object_unref(dialog);
+
+    return rc;
+#else // !__WXGTK4__
     ColourDataToDialog();
 
     gulong id = g_signal_connect(m_widget, "response", G_CALLBACK(response), this);
@@ -83,15 +181,17 @@ int wxColourDialog::ShowModal()
         DialogToColourData();
 
     return rc;
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 void wxColourDialog::ColourDataToDialog()
 {
-    const wxColour& color = m_data.GetColour();
 #ifdef __WXGTK4__
-    if (color.IsOk())
-        gtk_color_chooser_set_rgba(GTK_COLOR_CHOOSER(m_widget), color.GTKGetRGBA());
+    // Nothing to copy into: under GTK4 there is no dialog object between
+    // ShowModal() calls, and the colour is handed to the controller there.
 #else
+    const wxColour& color = m_data.GetColour();
+
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     GtkColorSelection* sel = GTK_COLOR_SELECTION(
         gtk_color_selection_dialog_get_color_selection(
@@ -133,9 +233,8 @@ void wxColourDialog::ColourDataToDialog()
 void wxColourDialog::DialogToColourData()
 {
 #ifdef __WXGTK4__
-    GdkRGBA clr;
-    gtk_color_chooser_get_rgba(GTK_COLOR_CHOOSER(m_widget), &clr);
-    m_data.SetColour(clr);
+    // Likewise nothing to copy out of: the callback in ShowModal() writes the
+    // chosen colour straight into m_data.
 #else
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     GtkColorSelection* sel = GTK_COLOR_SELECTION(

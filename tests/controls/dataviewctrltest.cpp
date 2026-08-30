@@ -985,6 +985,90 @@ TEST_CASE_METHOD(MultiColumnsDataViewCtrlTestCase,
     }
 }
 
+// GetTopItem() and GetCountPerPage() answer from the view's own geometry
+// rather than from the model, so neither can be right about a control that
+// never laid anything out.
+TEST_CASE_METHOD(SingleSelectDataViewCtrlTestCase,
+                 "wxDVC::VisibleRange",
+                 "[wxDataViewCtrl][item]")
+{
+    WaitFor("wxDataViewCtrl to lay out its rows", [this]() {
+        return m_dvc->GetItemRect(m_root).height != 0;
+    });
+
+    // m_root is the first row and the control is not scrolled.
+    CHECK( m_dvc->GetTopItem() == m_root );
+
+    WaitFor("wxDataViewCtrl to know its page size", [this]() {
+        return m_dvc->GetCountPerPage() != wxNOT_FOUND;
+    });
+
+    // The fixture's control is 400x200 with four rows in it, so a page holds
+    // more than one row and fewer than a hundred. The point is not the exact
+    // number -- that depends on the theme's row height -- but that the control
+    // has a row height at all and knows how many fit.
+    const int perPage = m_dvc->GetCountPerPage();
+    INFO("rows per page " << perPage);
+    CHECK( perPage > 1 );
+    CHECK( perPage < 100 );
+}
+
+// Sorting is a statement about what order the rows are drawn in, and the only
+// wx API that reports that is where each item lands. wxDataViewListCtrl's
+// RowToItem() deliberately does not: it indexes the store, so it answers the
+// same before and after sorting and could not fail this test.
+TEST_CASE_METHOD(MultiColumnsDataViewCtrlTestCase,
+                 "wxDVC::SortingChangesRowOrder",
+                 "[wxDataViewCtrl][column]")
+{
+    const char* const labels[] = { "ccc", "aaa", "bbb" };
+    for ( const char* label : labels )
+    {
+        wxVector<wxVariant> values;
+        values.push_back(label);
+        values.push_back("x");
+        m_dvc->AppendItem(values);
+    }
+
+    const wxDataViewItem itemC = m_dvc->RowToItem(0);
+    const wxDataViewItem itemA = m_dvc->RowToItem(1);
+    const wxDataViewItem itemB = m_dvc->RowToItem(2);
+    REQUIRE( itemC.IsOk() );
+    REQUIRE( itemA.IsOk() );
+    REQUIRE( itemB.IsOk() );
+
+    WaitFor("wxDataViewCtrl to lay out its rows", [this, itemC]() {
+        return m_dvc->GetItemRect(itemC).height > 0;
+    });
+
+    // Unsorted, they are drawn in the order they were added.
+    CHECK( m_dvc->GetItemRect(itemC).y < m_dvc->GetItemRect(itemA).y );
+    CHECK( m_dvc->GetItemRect(itemA).y < m_dvc->GetItemRect(itemB).y );
+
+    m_firstColumn->SetSortable(true);
+    m_firstColumn->SetSortOrder(true /* ascending */);
+    m_dvc->GetModel()->Resort();
+
+    WaitFor("the sorted order to be laid out", [this, itemA, itemC]() {
+        return m_dvc->GetItemRect(itemA).y < m_dvc->GetItemRect(itemC).y;
+    });
+
+    CHECK( m_dvc->GetItemRect(itemA).y < m_dvc->GetItemRect(itemB).y );
+    CHECK( m_dvc->GetItemRect(itemB).y < m_dvc->GetItemRect(itemC).y );
+    CHECK( m_dvc->GetTopItem() == itemA );
+
+    m_firstColumn->SetSortOrder(false /* descending */);
+    m_dvc->GetModel()->Resort();
+
+    WaitFor("the reversed order to be laid out", [this, itemA, itemC]() {
+        return m_dvc->GetItemRect(itemC).y < m_dvc->GetItemRect(itemA).y;
+    });
+
+    CHECK( m_dvc->GetItemRect(itemC).y < m_dvc->GetItemRect(itemB).y );
+    CHECK( m_dvc->GetItemRect(itemB).y < m_dvc->GetItemRect(itemA).y );
+    CHECK( m_dvc->GetTopItem() == itemC );
+}
+
 #if wxUSE_UIACTIONSIMULATOR
 
 TEST_CASE_METHOD(SingleSelectDataViewCtrlTestCase,

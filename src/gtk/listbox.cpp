@@ -726,6 +726,30 @@ wxListBox::~wxListBox()
             GTKDisconnect(m_selection);
     }
 
+    // The entries can outlive this object. The list view's bound rows and the
+    // selection model hold references to them and release those on a later
+    // main loop pass, by which time wxListBox is gone -- and their destroy
+    // callback takes a wxListBox*, so it went through a dangling one into
+    // HasClientObjectData(). GTK3 never had the problem because
+    // gtk_list_store_clear() releases its rows synchronously.
+    //
+    // So disarm it, and leave the data to Clear() below: it already deletes
+    // the client objects itself, through ResetItemClientObject(), so freeing
+    // them here as well is a double free -- which is what it was, aborting in
+    // ~wxRearrangeList().
+    if (m_store)
+    {
+        GListModel* const model = G_LIST_MODEL(m_store);
+        const guint count = g_list_model_get_n_items(model);
+
+        for (guint i = 0; i < count; i++)
+        {
+            wxGtkObject<GObject> obj(G_OBJECT(g_list_model_get_item(model, i)));
+            wx_tree_entry_set_destroy_func(WX_TREE_ENTRY(obj.get()),
+                                           nullptr, nullptr);
+        }
+    }
+
     Clear();
 
     // Clear() empties the store; these are the references taken in Create().

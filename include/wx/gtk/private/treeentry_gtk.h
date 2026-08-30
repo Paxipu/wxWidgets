@@ -29,6 +29,7 @@ struct _wxTreeEntry
     gchar*  label;                      /* label - always copied by this object except on get */
     gchar*  collate_key;                /* collate key used for string comparisons/sorting */
     gpointer userdata;                  /* untouched userdata */
+    gboolean checked;                   /* wxCheckListBox state; unused elsewhere */
     wxTreeEntryDestroy destroy_func;    /* called upon destruction - use for freeing userdata etc. */
     gpointer destroy_func_data;         /* context passed to destroy_func */
 };
@@ -42,6 +43,12 @@ char* wx_tree_entry_get_collate_key(wxTreeEntry* entry);
 char* wx_tree_entry_get_label(wxTreeEntry* entry);
 
 void* wx_tree_entry_get_userdata(wxTreeEntry* entry);
+
+/* wxCheckListBox keeps its per-item state here rather than in a second model
+   column: GtkListView has no columns, so the item object carries it. */
+gboolean wx_tree_entry_get_checked(wxTreeEntry* entry);
+
+void wx_tree_entry_set_checked(wxTreeEntry* entry, gboolean checked);
 
 void wx_tree_entry_set_label(wxTreeEntry* entry, const char* label);
 

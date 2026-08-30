@@ -156,21 +156,48 @@ real thought rather than mechanical translation:
 - Sorting -- `GtkColumnViewColumn` carries a `GtkSorter`, and the wx model's
   `Compare()` goes into a `GtkCustomSorter`.
 
-## 4. What has to be measured before this is written
+## 4. What had to be measured before this was written
 
-Three things, each of which would produce a plausible wrong answer rather than
-an error if guessed:
+Three things, each of which would have produced a plausible wrong answer
+rather than an error if guessed. All three are now measured, in
+`docs/gtk/probes/gtk4-columnview-cell-mechanics.c`.
 
-1. **`wxDataViewChoiceRenderer` in a cell** -- does the #183 deselection
-   problem apply inside a `GtkColumnView` cell, where there is always a value?
-2. **In-place editing end to end** -- the probe hosted an editable widget in a
-   cell, but did not run wx's editing protocol
-   (`wxEVT_DATAVIEW_ITEM_EDITING_STARTED` / `_DONE`, validation, cancellation)
-   through it.
-3. **Row height with a custom renderer** -- `wxDataViewCtrl::SetRowHeight()`
-   sets a uniform height today. A `GtkDrawingArea` in a cell reports its own
-   minimum, and a cell that asks for more than the uniform height will silently
-   win.
+**1. `wxDataViewChoiceRenderer` in a cell -- no problem.** A `GtkDropDown` can
+be returned to "nothing selected" even with a non-empty model, so the #183
+constraint I had reported does not exist in the form I described it; see
+`gtk4-dropdown-deselection.c`. Inside a cell it would not have mattered anyway,
+because a cell always has a value.
+
+**2. In-place editing -- there is somewhere for the protocol to hang.** A
+`GtkEditableLabel` in a cell reports `notify::editing` on both edges:
+
+```
+found an editable label in a cell: yes
+editing notifications: started=1 done=1
+```
+
+so `wxEVT_DATAVIEW_ITEM_EDITING_STARTED` and `_DONE` have a signal to be
+raised from, and cancellation is the `FALSE` argument to
+`gtk_editable_label_stop_editing()`.
+
+**3. Row height -- this one is a real loss, and it is the finding of the
+three.** `GtkColumnView` has no uniform-height setting: there is no
+`gtk_column_view_set_fixed_height` to answer
+`gtk_tree_view_set_fixed_height_mode`. A cell's height comes from what the
+cell asks for, and a size request is a *minimum*:
+
+```
+its own height: 40 (it asked for 40)
+the row it sits in: 56
+after asking the cell for 12: cell 40, row 56   -- the row did NOT shrink
+```
+
+A cell that wants to be tall makes the row tall, and cannot then be made
+short again. So `wxDataViewCtrl::SetRowHeight()` cannot be implemented by
+constraining the view or one cell: **every renderer has to request exactly the
+wanted height**, and the row can still be taller if the theme's own padding
+says so. That has to be in the migration from the start rather than discovered
+at the end, because it changes what every renderer's `setup` handler does.
 
 ## 5. Staging, and what "done" means at each step
 
@@ -180,7 +207,7 @@ next begins:
 
 | step | gate |
 |---|---|
-| 1. probes for the three questions in §4 | committed under `docs/gtk/probes/` with their measured output |
+| ~~1. probes for the three questions in §4~~ | **done** -- `gtk4-columnview-cell-mechanics.c` and `gtk4-dropdown-deselection.c` |
 | 2. model layer: `GListModel` + `GtkTreeListModel` over the wx model | the control shows rows; #204's `HitTestFindsItems` passes |
 | 3. columns and the non-custom renderers | `HitTestFindsColumns`, `AppendTextColumn` |
 | 4. sorting and selection | `SortingChangesRowOrder`, the five selection tests |

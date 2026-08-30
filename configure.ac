@@ -3180,7 +3180,29 @@ installed, where VER is 2, 3 or 4.
 
         if test "$wxUSE_TASKBARICON" = "yes"; then
             if test "$wxUSE_APPINDICATOR" = "yes"; then
-                if test "$WXGTK3" = 1; then
+                if test "$WXGTK4" = 1; then
+                    dnl WXGTK3 is set for GTK4 too, so this branch has to come
+                    dnl first or the GTK3 one below would claim GTK4 builds.
+                    dnl
+                    dnl There is no GTK4 build of AppIndicator: the only
+                    dnl pkg-config module, ayatana-appindicator3-0.1, is built
+                    dnl against GTK+ 3 and brings libgtk-3 and libdbusmenu-gtk3
+                    dnl with it.  GTK4 aborts any process that contains GTK 2/3
+                    dnl symbols, so an application linked that way dies on
+                    dnl startup with
+                    dnl
+                    dnl   Gtk-ERROR **: GTK 2/3 symbols detected. Using GTK 2/3
+                    dnl   and GTK 4 in the same process is not supported
+                    dnl
+                    dnl and it buys nothing in return, because wxTaskBarIcon is
+                    dnl a stub under GTK4 anyway -- see the __WXGTK4__ branch at
+                    dnl the end of src/gtk/taskbar.cpp, where every method
+                    dnl returns false.
+                    if test "${with_appindicator+set}" = set; then
+                        AC_MSG_WARN([AppIndicator is not usable under GTK4: it exists only as a GTK+ 3 library, and GTK4 refuses to run in a process containing GTK 2/3 symbols])
+                    fi
+                    wxUSE_APPINDICATOR=no
+                elif test "$WXGTK3" = 1; then
                     PKG_CHECK_MODULES(APPINDICATOR,
                         [ayatana-appindicator3-0.1],
                         [

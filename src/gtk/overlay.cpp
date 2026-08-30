@@ -300,7 +300,7 @@ void wxOverlayImpl::Reset()
         gtk_widget_queue_draw(m_overlay);
 #else
     if (m_overlay)
-        gtk_widget_hide(m_overlay);
+        gtk_widget_set_visible(m_overlay, FALSE);
 #endif
 }
 
@@ -341,7 +341,7 @@ void wxOverlayImpl::PositionOverlay(GtkWidget* target)
     }
 
     if (!gtk_widget_get_visible(m_overlay))
-        gtk_widget_show(m_overlay);
+        gtk_widget_set_visible(m_overlay, TRUE);
 }
 
 #else // !__WXGTK4__
@@ -351,7 +351,7 @@ void wxOverlayImpl::PositionOverlay(GtkWidget* tlw)
     int x, y;
     gtk_widget_translate_coordinates(m_target, tlw, m_rect.x, m_rect.y, &x, &y);
     gtk_window_move(GTK_WINDOW(m_overlay), x, y);
-    gtk_widget_show(m_overlay);
+    gtk_widget_set_visible(m_overlay, TRUE);
 }
 
 #endif // __WXGTK4__/!__WXGTK4__

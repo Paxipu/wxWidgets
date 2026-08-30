@@ -1450,7 +1450,7 @@ void wxDropSource::PrepareIcon( int action, GdkDragContext *context )
     {
         widget = gtk_drawing_area_new();
         gtk_widget_set_size_request(widget, icon->GetWidth(), icon->GetHeight());
-        gtk_widget_show(widget);
+        gtk_widget_set_visible(widget, TRUE);
         gtk_drag_set_icon_widget(context, widget, 0, 0);
         // GTK >= 3.20 puts the icon widget in a GTK_WINDOW_POPUP,
         // we need to connect to that widget to get "configure-event"

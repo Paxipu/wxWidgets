@@ -156,7 +156,7 @@ void wxStaticBox::AddChild( wxWindowBase *child )
         // make this window a container of other wxWindows by instancing a wxPizza
         // and packing it into the GtkFrame:
         m_wxwindow = wxPizza::New();
-        gtk_widget_show( m_wxwindow );
+        gtk_widget_set_visible(m_wxwindow, TRUE);
 #ifdef __WXGTK4__
         gtk_frame_set_child( GTK_FRAME(m_widget), m_wxwindow );
 #else

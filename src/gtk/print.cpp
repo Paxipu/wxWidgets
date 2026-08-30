@@ -831,7 +831,7 @@ int wxGtkPageSetupDialog::ShowModal()
     g_object_unref(oldPageSetup);
 
     int result = gtk_dialog_run(GTK_DIALOG(dlg));
-    gtk_widget_hide(dlg);
+    gtk_widget_set_visible(dlg, FALSE);
 
     switch ( result )
     {

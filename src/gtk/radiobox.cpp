@@ -336,13 +336,13 @@ bool wxRadioBox::Create( wxWindow *parent, wxWindowID id, const wxString& title,
     gtk_frame_set_child(GTK_FRAME(m_widget), grid);
 #elif defined(__WXGTK3__)
     GtkWidget* grid = gtk_grid_new();
-    gtk_widget_show(grid);
+    gtk_widget_set_visible(grid, TRUE);
     gtk_container_add(GTK_CONTAINER(m_widget), grid);
 #else
     GtkWidget *table = gtk_table_new( num_of_rows, num_of_cols, FALSE );
     gtk_table_set_col_spacings( GTK_TABLE(table), 1 );
     gtk_table_set_row_spacings( GTK_TABLE(table), 1 );
-    gtk_widget_show( table );
+    gtk_widget_set_visible(table, TRUE);
     gtk_container_add( GTK_CONTAINER(m_widget), table );
 #endif
 
@@ -422,7 +422,7 @@ bool wxRadioBox::Create( wxWindow *parent, wxWindowID id, const wxString& title,
         else
             rbtn = GTK_RADIO_BUTTON( gtk_radio_button_new_with_label( radio_button_group, label.utf8_str() ) );
 
-        gtk_widget_show( GTK_WIDGET(rbtn) );
+        gtk_widget_set_visible(GTK_WIDGET(rbtn), TRUE);
 
         g_signal_connect (rbtn, "key_press_event",
                           G_CALLBACK (gtk_radiobox_keypress_callback), this);
@@ -520,16 +520,16 @@ bool wxRadioBox::Show( bool show )
     }
 
     if ( HasFlag(wxNO_BORDER) )
-        gtk_widget_hide( m_widget );
+        gtk_widget_set_visible(m_widget, FALSE);
 
     for ( const auto& info : m_buttonsInfo )
     {
         GtkWidget *button = GTK_WIDGET( info.button );
 
         if (show)
-            gtk_widget_show( button );
+            gtk_widget_set_visible(button, TRUE);
         else
-            gtk_widget_hide( button );
+            gtk_widget_set_visible(button, FALSE);
     }
 
     return true;
@@ -678,9 +678,9 @@ bool wxRadioBox::Show(unsigned int n, bool show)
     GtkWidget *button = GTK_WIDGET( m_buttonsInfo[n].button );
 
     if (show)
-        gtk_widget_show( button );
+        gtk_widget_set_visible(button, TRUE);
     else
-        gtk_widget_hide( button );
+        gtk_widget_set_visible(button, FALSE);
 
     return true;
 }

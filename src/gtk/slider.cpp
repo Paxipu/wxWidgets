@@ -485,7 +485,7 @@ bool wxSlider::Create(wxWindow *parent,
     if (showMinMaxLabels)
 #endif
     {
-        gtk_widget_show( m_scale );
+        gtk_widget_set_visible(m_scale, TRUE);
 
         m_widget = gtk_box_new(GtkOrientation(isVertical), 0);
     }
@@ -494,10 +494,10 @@ bool wxSlider::Create(wxWindow *parent,
     if (showMinMaxLabels)
     {
         m_minLabel = gtk_label_new(nullptr);
-        gtk_widget_show( m_minLabel );
+        gtk_widget_set_visible(m_minLabel, TRUE);
 
         m_maxLabel = gtk_label_new(nullptr);
-        gtk_widget_show( m_maxLabel );
+        gtk_widget_set_visible(m_maxLabel, TRUE);
 
         gtk_box_pack_start(GTK_BOX(m_widget), m_minLabel, false, false, 0);
         gtk_box_pack_start(GTK_BOX(m_widget), m_scale, true, true, 0);

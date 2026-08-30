@@ -27910,19 +27910,19 @@ fi
                     if test "$wxGTK_VERSION" = 4 -o "$wxGTK_VERSION" = any; then
 
 pkg_failed=no
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for gtk4" >&5
-$as_echo_n "checking for gtk4... " >&6; }
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for gtk4 >= 4.10" >&5
+$as_echo_n "checking for gtk4 >= 4.10... " >&6; }
 
 if test -n "$GTK_CFLAGS"; then
     pkg_cv_GTK_CFLAGS="$GTK_CFLAGS"
  elif test -n "$PKG_CONFIG"; then
     if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"gtk4\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "gtk4") 2>&5
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"gtk4 >= 4.10\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "gtk4 >= 4.10") 2>&5
   ac_status=$?
   $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
   test $ac_status = 0; }; then
-  pkg_cv_GTK_CFLAGS=`$PKG_CONFIG --cflags "gtk4" 2>/dev/null`
+  pkg_cv_GTK_CFLAGS=`$PKG_CONFIG --cflags "gtk4 >= 4.10" 2>/dev/null`
               test "x$?" != "x0" && pkg_failed=yes
 else
   pkg_failed=yes
@@ -27934,12 +27934,12 @@ if test -n "$GTK_LIBS"; then
     pkg_cv_GTK_LIBS="$GTK_LIBS"
  elif test -n "$PKG_CONFIG"; then
     if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"gtk4\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "gtk4") 2>&5
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"gtk4 >= 4.10\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "gtk4 >= 4.10") 2>&5
   ac_status=$?
   $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
   test $ac_status = 0; }; then
-  pkg_cv_GTK_LIBS=`$PKG_CONFIG --libs "gtk4" 2>/dev/null`
+  pkg_cv_GTK_LIBS=`$PKG_CONFIG --libs "gtk4 >= 4.10" 2>/dev/null`
               test "x$?" != "x0" && pkg_failed=yes
 else
   pkg_failed=yes
@@ -27960,14 +27960,14 @@ else
         _pkg_short_errors_supported=no
 fi
         if test $_pkg_short_errors_supported = yes; then
-            GTK_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "gtk4" 2>&1`
+            GTK_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "gtk4 >= 4.10" 2>&1`
         else
-            GTK_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "gtk4" 2>&1`
+            GTK_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "gtk4 >= 4.10" 2>&1`
         fi
     # Put the nasty error message in config.log where it belongs
     echo "$GTK_PKG_ERRORS" >&5
 
-    as_fn_error $? "Package requirements (gtk4) were not met:
+    as_fn_error $? "Package requirements (gtk4 >= 4.10) were not met:
 
 $GTK_PKG_ERRORS
 
@@ -35989,6 +35989,8 @@ _ACEOF
 #define __WXGTK4__ 1
 _ACEOF
 
+
+                                                                                                                                CPPFLAGS="$CPPFLAGS -DGDK_VERSION_MIN_REQUIRED=GDK_VERSION_4_10"
     fi
     if test "$WXGTK3" = 1 ; then
         cat >>confdefs.h <<_ACEOF

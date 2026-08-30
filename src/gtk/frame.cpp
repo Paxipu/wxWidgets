@@ -215,7 +215,7 @@ void wxFrame::AttachMenuBar( wxMenuBar *menuBar )
         // reset size request to allow native sizing to work
         gtk_widget_set_size_request(menuBar->m_widget, -1, -1);
 
-        gtk_widget_show( m_frameMenuBar->m_widget );
+        gtk_widget_set_visible(m_frameMenuBar->m_widget, TRUE);
     }
     // make sure next size_allocate causes a wxSizeEvent
     m_useCachedClientSize = false;
@@ -239,7 +239,7 @@ void wxFrame::SetToolBar(wxToolBar *toolbar)
             if (hbox == m_mainWidget)
             {
                 hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-                gtk_widget_show(hbox);
+                gtk_widget_set_visible(hbox, TRUE);
                 gtk_box_pack_start(GTK_BOX(m_mainWidget), hbox, true, true, 0);
                 g_object_ref(m_wxwindow);
                 wx_gtk_widget_remove_from_parent(m_wxwindow);

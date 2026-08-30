@@ -4600,7 +4600,7 @@ void wxWindowGTK::GTKCreateScrolledWindowWith(GtkWidget* view)
                      G_CALLBACK(gtk_scrollbar_value_changed), this);
     }
 
-    gtk_widget_show( view );
+    gtk_widget_set_visible(view, TRUE);
 }
 
 bool wxWindowGTK::Create( wxWindow *parent,
@@ -5032,7 +5032,7 @@ void wxWindowGTK::PostCreation()
     // unless the window was created initially hidden (i.e. Hide() had been
     // called before Create()), we should show it at GTK+ level as well
     if (m_isShown)
-        gtk_widget_show( m_widget );
+        gtk_widget_set_visible(m_widget, TRUE);
 }
 
 unsigned long
@@ -6329,7 +6329,7 @@ bool wxWindowGTK::GTKShowFromOnIdle()
 #else
             gtk_widget_size_allocate( m_widget, &alloc );
 #endif
-        gtk_widget_show( m_widget );
+        gtk_widget_set_visible(m_widget, TRUE);
         wxShowEvent eventShow(GetId(), true);
         eventShow.SetEventObject(this);
         HandleWindowEvent(eventShow);
@@ -6823,11 +6823,11 @@ bool wxWindowGTK::Show( bool show )
             return true;
         }
 
-        gtk_widget_show(m_widget);
+        gtk_widget_set_visible(m_widget, TRUE);
     }
     else // hide
     {
-        gtk_widget_hide(m_widget);
+        gtk_widget_set_visible(m_widget, FALSE);
     }
 
     wxShowEvent eventShow(GetId(), show);
@@ -7336,7 +7336,7 @@ bool wxWindowGTK::Reparent( wxWindowBase *newParentBase )
         if (gtk_widget_get_visible (newParent->m_widget))
         {
             m_showOnIdle = true;
-            gtk_widget_hide( m_widget );
+            gtk_widget_set_visible(m_widget, FALSE);
         }
         /* insert GTK representation */
         newParent->AddChildGTK(this);

@@ -164,8 +164,8 @@ bool wxCheckBox::Create(wxWindow *parent,
         gtk_box_pack_start(GTK_BOX(m_widget), m_widgetLabel, FALSE, FALSE, 3);
         gtk_box_pack_start(GTK_BOX(m_widget), m_widgetCheckbox, FALSE, FALSE, 3);
 
-        gtk_widget_show( m_widgetLabel );
-        gtk_widget_show( m_widgetCheckbox );
+        gtk_widget_set_visible(m_widgetLabel, TRUE);
+        gtk_widget_set_visible(m_widgetCheckbox, TRUE);
     }
     else
     {
@@ -263,9 +263,9 @@ void wxCheckBox::SetLabel( const wxString& label )
     // If we don't hide the empty label, in some themes a focus rectangle is
     // still drawn around it and this looks out of place.
     if ( label.empty() )
-        gtk_widget_hide(m_widgetLabel);
+        gtk_widget_set_visible(m_widgetLabel, FALSE);
     else
-        gtk_widget_show(m_widgetLabel);
+        gtk_widget_set_visible(m_widgetLabel, TRUE);
 
     // save the label inside m_label in case user calls GetLabel() later
     wxControl::SetLabel(label);

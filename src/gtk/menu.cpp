@@ -478,7 +478,7 @@ void wxMenuBar::Init(size_t n, wxMenu *menus[], const wxString titles[], long st
         m_widget = gtk_handle_box_new();
         wxGCC_WARNING_RESTORE()
         gtk_container_add(GTK_CONTAINER(m_widget), m_menubar);
-        gtk_widget_show(m_menubar);
+        gtk_widget_set_visible(m_menubar, TRUE);
     }
     else
 #endif
@@ -520,7 +520,7 @@ namespace
 void
 EnsureNoGrab(GtkWidget* widget)
 {
-    gtk_widget_hide(widget);
+    gtk_widget_set_visible(widget, FALSE);
     gtk_grab_remove(widget);
 }
 
@@ -752,7 +752,7 @@ void wxMenuBar::GtkAppend(wxMenu* menu, const wxString& title, int pos)
     }
     g_object_ref(menu->m_owner);
 
-    gtk_widget_show( menu->m_owner );
+    gtk_widget_set_visible(menu->m_owner, TRUE);
 
     if (pos == -1)
         gtk_menu_shell_append( GTK_MENU_SHELL(m_menubar), menu->m_owner );
@@ -1377,7 +1377,7 @@ void wxMenuItem::SetupBitmaps(wxWindow *win)
     {
         GtkWidget* image = wxGtkImage::New(win);
         WX_GTK_IMAGE(image)->Set(m_bitmap);
-        gtk_widget_show(image);
+        gtk_widget_set_visible(image, TRUE);
 
         wxGCC_WARNING_SUPPRESS(deprecated-declarations)
         gtk_image_menu_item_set_image(GTK_IMAGE_MENU_ITEM(m_menuItem), image);
@@ -2112,7 +2112,7 @@ void wxMenu::GtkAppend(wxMenuItem* mitem, int pos)
 
     gtk_menu_shell_insert(GTK_MENU_SHELL(m_menu), menuItem, pos);
 
-    gtk_widget_show( menuItem );
+    gtk_widget_set_visible(menuItem, TRUE);
 
     if ( !mitem->IsSeparator() )
     {
@@ -2133,7 +2133,7 @@ void wxMenu::GtkAppend(wxMenuItem* mitem, int pos)
         {
             gtk_menu_item_set_submenu( GTK_MENU_ITEM(menuItem), mitem->GetSubMenu()->m_menu );
 
-            gtk_widget_show( mitem->GetSubMenu()->m_menu );
+            gtk_widget_set_visible(mitem->GetSubMenu()->m_menu, TRUE);
         }
         else
         {

@@ -944,7 +944,7 @@ bool wxTextCtrl::Create( wxWindow *parent,
 
     if (multi_line)
     {
-        gtk_widget_show(m_text);
+        gtk_widget_set_visible(m_text, TRUE);
     }
 
     // We want to be notified about text changes.

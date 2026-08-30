@@ -1631,7 +1631,7 @@ static GtkCellEditable *gtk_wx_cell_renderer_start_editing(
         return nullptr;
 
     wxrenderer->editor_bin = gtk_wx_cell_editor_bin_new(cell->GetEditorCtrl());
-    gtk_widget_show(wxrenderer->editor_bin);
+    gtk_widget_set_visible(wxrenderer->editor_bin, TRUE);
 
     return GTK_CELL_EDITABLE(wxrenderer->editor_bin);
 }
@@ -3693,7 +3693,7 @@ void wxDataViewColumn::Init(wxAlignment align, int flags, int width)
 
     // Create container for icon and label
     GtkWidget* box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 1);
-    gtk_widget_show( box );
+    gtk_widget_set_visible(box, TRUE);
     // gtk_container_set_border_width((GtkContainer*)box, 2);
     m_image = wxGtkImage::New();
     gtk_box_pack_start(GTK_BOX(box), m_image, FALSE, FALSE, 1);
@@ -3757,9 +3757,9 @@ void wxDataViewColumn::SetTitle( const wxString &title )
 {
     gtk_label_set_text( GTK_LABEL(m_label), title.utf8_str() );
     if (title.empty())
-        gtk_widget_hide( m_label );
+        gtk_widget_set_visible(m_label, FALSE);
     else
-        gtk_widget_show( m_label );
+        gtk_widget_set_visible(m_label, TRUE);
 }
 
 wxString wxDataViewColumn::GetTitle() const
@@ -3780,11 +3780,11 @@ void wxDataViewColumn::SetBitmap( const wxBitmapBundle &bitmap )
 #else
         WX_GTK_IMAGE(m_image)->Set(bitmap);
 #endif
-        gtk_widget_show( m_image );
+        gtk_widget_set_visible(m_image, TRUE);
     }
     else
     {
-        gtk_widget_hide( m_image );
+        gtk_widget_set_visible(m_image, FALSE);
     }
 }
 
@@ -5264,7 +5264,7 @@ bool wxDataViewCtrl::Create(wxWindow *parent,
 
     gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (m_widget),
         GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
-    gtk_widget_show (m_treeview);
+    gtk_widget_set_visible(m_treeview, TRUE);
 
     m_parent->DoAddChild( this );
 

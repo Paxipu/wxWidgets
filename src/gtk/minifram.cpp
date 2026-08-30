@@ -547,7 +547,7 @@ bool wxMiniFrame::Create( wxWindow *parent, wxWindowID id, const wxString &title
     // almost works, except that setting the resize cursor has no effect.
     GtkWidget* eventbox = gtk_event_box_new();
     gtk_widget_add_events(eventbox, GDK_POINTER_MOTION_MASK);
-    gtk_widget_show(eventbox);
+    gtk_widget_set_visible(eventbox, TRUE);
 #ifdef __WXGTK3__
     g_object_ref(m_mainWidget);
     gtk_container_remove(GTK_CONTAINER(m_widget), m_mainWidget);
@@ -563,7 +563,7 @@ bool wxMiniFrame::Create( wxWindow *parent, wxWindowID id, const wxString &title
     GtkWidget* alignment = gtk_alignment_new(0, 0, 1, 1);
     gtk_alignment_set_padding(GTK_ALIGNMENT(alignment),
         m_miniTitle + m_miniEdge, m_miniEdge, m_miniEdge, m_miniEdge);
-    gtk_widget_show(alignment);
+    gtk_widget_set_visible(alignment, TRUE);
     // The GtkEventBox and GtkAlignment go between m_widget and m_mainWidget
     gtk_widget_reparent(m_mainWidget, alignment);
     gtk_container_add(GTK_CONTAINER(eventbox), alignment);

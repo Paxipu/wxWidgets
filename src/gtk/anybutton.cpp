@@ -381,7 +381,7 @@ void wxAnyButton::DoSetBitmap(const wxBitmapBundle& bitmap, State which)
                 if (!child)
                 {
                     GtkWidget* image = wxGtkImage::New(this);
-                    gtk_widget_show(image);
+                    gtk_widget_set_visible(image, TRUE);
                     gtk_container_add(GTK_CONTAINER(m_widget), image);
                 }
                 else if (!WX_GTK_IS_IMAGE(child))

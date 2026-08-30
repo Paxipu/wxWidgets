@@ -173,7 +173,7 @@ GtkWidget* wxControl::GTKCreateFrame(const wxString& label)
 {
     const wxString labelGTK = GTKConvertMnemonics(label);
     GtkWidget* labelwidget = gtk_label_new_with_mnemonic(labelGTK.utf8_str());
-    gtk_widget_show(labelwidget); // without this it won't show...
+    gtk_widget_set_visible(labelwidget, TRUE); // without this it won't show...
 
     GtkWidget* framewidget = gtk_frame_new(nullptr);
     gtk_frame_set_label_widget(GTK_FRAME(framewidget), labelwidget);
@@ -382,14 +382,14 @@ wxSize wxControl::GTKGetPreferredSize(GtkWidget* widget) const
     // So workaround this case.
     const bool wasHidden = !gtk_widget_get_visible(widget);
     if ( wasHidden )
-        gtk_widget_show(widget);
+        gtk_widget_set_visible(widget, TRUE);
 
     gtk_widget_set_size_request(widget, -1, -1);
     gtk_widget_get_preferred_size(widget, nullptr, &req);
     gtk_widget_set_size_request(widget, w, h);
 
     if ( wasHidden )
-        gtk_widget_hide(widget);
+        gtk_widget_set_visible(widget, FALSE);
 #else
     GTK_WIDGET_GET_CLASS(widget)->size_request(widget, &req);
 #endif

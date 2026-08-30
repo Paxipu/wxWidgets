@@ -414,7 +414,7 @@ void wxToolBar::AddChildGTK(wxWindowGTK* child)
     gtk_container_add(GTK_CONTAINER(item), child->m_widget);
 #else
     GtkWidget* align = gtk_alignment_new(0.5, 0.5, 0, 0);
-    gtk_widget_show(align);
+    gtk_widget_set_visible(align, TRUE);
     gtk_container_add(GTK_CONTAINER(align), child->m_widget);
     gtk_container_add(GTK_CONTAINER(item), align);
 #endif
@@ -749,7 +749,7 @@ bool wxToolBar::Create( wxWindow *parent,
     wxGCC_WARNING_RESTORE()
 #endif // !__WXGTK4__
     g_object_ref(m_widget);
-    gtk_widget_show(GTK_WIDGET(m_toolbar));
+    gtk_widget_set_visible(GTK_WIDGET(m_toolbar), TRUE);
 
     m_parent->DoAddChild( this );
 
@@ -1133,7 +1133,7 @@ bool wxToolBar::DoInsertTool(size_t pos, wxToolBarToolBase *toolBase)
                 gtk_tool_button_set_icon_widget(
                     GTK_TOOL_BUTTON(tool->m_item), image);
                 tool->SetImage();
-                gtk_widget_show(image);
+                gtk_widget_set_visible(image, TRUE);
             }
             if (!tool->GetLabel().empty())
             {
@@ -1223,7 +1223,7 @@ bool wxToolBar::DoInsertTool(size_t pos, wxToolBarToolBase *toolBase)
             }
             break;
     }
-    gtk_widget_show(GTK_WIDGET(tool->m_item));
+    gtk_widget_set_visible(GTK_WIDGET(tool->m_item), TRUE);
 
     InvalidateBestSize();
 

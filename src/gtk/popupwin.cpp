@@ -256,7 +256,7 @@ bool wxPopupWindow::Create( wxWindow *parent, int style )
                       G_CALLBACK (gtk_dialog_delete_callback), this);
 
     m_wxwindow = wxPizza::New();
-    gtk_widget_show( m_wxwindow );
+    gtk_widget_set_visible(m_wxwindow, TRUE);
 
     gtk_container_add( GTK_CONTAINER(m_widget), m_wxwindow );
 #endif // __WXGTK4__/!__WXGTK4__

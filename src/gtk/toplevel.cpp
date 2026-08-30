@@ -1542,7 +1542,7 @@ bool wxTopLevelWindowGTK::Create( wxWindow *parent,
 
     // m_mainWidget is a GtkVBox, holding the bars and client area (m_wxwindow)
     m_mainWidget = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_widget_show( m_mainWidget );
+    gtk_widget_set_visible(m_mainWidget, TRUE);
     wx_gtk_widget_set_focusable(m_mainWidget, false);
 #ifdef __WXGTK4__
     gtk_window_set_child(GTK_WINDOW(m_widget), m_mainWidget);
@@ -1552,7 +1552,7 @@ bool wxTopLevelWindowGTK::Create( wxWindow *parent,
 
     // m_wxwindow is the client area
     m_wxwindow = wxPizza::New();
-    gtk_widget_show( m_wxwindow );
+    gtk_widget_set_visible(m_wxwindow, TRUE);
     gtk_box_pack_start(GTK_BOX(m_mainWidget), m_wxwindow, true, true, 0);
 
     // we donm't allow the frame to get the focus as otherwise
@@ -2104,7 +2104,7 @@ bool wxTopLevelWindowGTK::Show( bool show )
     if (deferShow)
     {
         // Initial show. If WM supports _NET_REQUEST_FRAME_EXTENTS, defer
-        // calling gtk_widget_show() until _NET_FRAME_EXTENTS property
+        // calling gtk_widget_set_visible(, TRUE) until _NET_FRAME_EXTENTS property
         // notification is received, so correct frame extents are known.
         // This allows resizing m_widget to keep the overall size in sync with
         // what wxWidgets expects it to be without an obvious change in the
@@ -2152,7 +2152,7 @@ bool wxTopLevelWindowGTK::Show( bool show )
                 g_timeout_add(1000, request_frame_extents_timeout, this);
         }
 
-        // defer calling gtk_widget_show()
+        // defer calling gtk_widget_set_visible(, TRUE)
         m_isShown = true;
         return true;
     }
@@ -2623,7 +2623,7 @@ void wxTopLevelWindowGTK::GTKUpdateDecorSize(const DecorSize& decorSize)
     }
     if (m_deferShow)
     {
-        // gtk_widget_show() was deferred, do it now
+        // gtk_widget_set_visible(, TRUE) was deferred, do it now
         m_deferShow = false;
         DoGetClientSize(&m_clientWidth, &m_clientHeight);
         SendSizeEvent();
@@ -2634,7 +2634,7 @@ void wxTopLevelWindowGTK::GTKUpdateDecorSize(const DecorSize& decorSize)
         if (!m_isShown)
             return;
 
-        gtk_widget_show(m_widget);
+        gtk_widget_set_visible(m_widget, TRUE);
 
 #ifdef __WXGTK3__
         GTKSendSizeEventIfNeeded();

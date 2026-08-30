@@ -125,7 +125,7 @@ bool wxInfoBar::Create(wxWindow *parent, wxWindowID winid, long style)
 
     // also create a label which will be used to show our message
     m_impl->m_label = gtk_label_new("");
-    gtk_widget_show(m_impl->m_label);
+    gtk_widget_set_visible(m_impl->m_label, TRUE);
 
 #ifdef __WXGTK4__
     // gtk_info_bar_get_content_area()/GtkContainer are both gone under

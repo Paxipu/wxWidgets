@@ -338,7 +338,7 @@ bool wxNotebook::SetPageImage( size_t page, int image )
         if (pageData->m_image == nullptr)
         {
             pageData->m_image = wxGtkImage::New();
-            gtk_widget_show(pageData->m_image);
+            gtk_widget_set_visible(pageData->m_image, TRUE);
             gtk_box_pack_start(GTK_BOX(pageData->m_box),
                 pageData->m_image, false, false, m_padding);
         }

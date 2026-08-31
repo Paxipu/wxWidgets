@@ -25,11 +25,13 @@ trap 'rm -rf "$WORK"' EXIT
 echo "== building =="
 gcc -o "$WORK/watcher" "$HERE/sni-watcher.c" \
     $(pkg-config --cflags --libs gio-2.0)
-g++ -o "$WORK/item" "$HERE/sni-item.cpp" "$SRC/src/gtk/statusnotifier.cpp" \
-    "$SRC/src/gtk/dbusmenu.cpp" \
-    -I"$SRC/include" \
-    $("$BUILD/wx-config" --cxxflags) $(pkg-config --cflags gio-2.0) \
-    $("$BUILD/wx-config" --libs core,base) $(pkg-config --libs gio-2.0)
+# Against the library as an application would build, not against the
+# sources: the point is that an ordinary wxTaskBarIcon works, so anything
+# the probe had to reach past the public headers for would be a result
+# about the probe rather than about wx.
+g++ -o "$WORK/item" "$HERE/sni-item.cpp" \
+    $("$BUILD/wx-config" --cxxflags) \
+    $("$BUILD/wx-config" --libs core,base)
 
 run_watcher_alone()
 {
@@ -106,6 +108,19 @@ INNER
     # could be readable and inert.
     grep -q 'ITEM-MENU-CLICKED' "$WORK/item.out" || {
         echo "  the click never reached the application"
+        ok=0
+    }
+
+    # The click has to arrive as the command event a menu of the application's
+    # own would have sent, carrying the id it gave the item: wxID_OPEN, which
+    # is wxID_LOWEST and so 5000.
+    grep -q 'ITEM-MENU-CLICKED id=5000' "$WORK/item.out" || {
+        echo "  the click arrived without the id the application chose"
+        ok=0
+    }
+
+    grep -q 'INSTALLED 1' "$WORK/item.out" || {
+        echo "  IsIconInstalled() disagrees with the icon being up"
         ok=0
     }
 

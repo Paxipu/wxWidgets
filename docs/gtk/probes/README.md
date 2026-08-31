@@ -274,6 +274,39 @@ despite its name.
 This is issue #214, and it is *not* the same code path as #166. Nothing here
 reads `m_x`/`m_y`, so the fix for that one changes no number above.
 
+## `sni-roundtrip.sh` — does a GTK4 tray icon reach a panel?
+
+```
+./sni-roundtrip.sh /path/to/wx-build
+```
+
+GTK4 removed `GtkStatusIcon`, so `wxTaskBarIcon` talks the
+StatusNotifierItem D-Bus interfaces itself (issue #216). Testing that
+normally means a desktop with a tray, which no CI has. It does not have to:
+`sni-watcher.c` is a stand-in `org.kde.StatusNotifierWatcher`, and
+`dbus-run-session` gives it a private bus, so the whole thing runs headless.
+
+The watcher does what a panel does *after* adopting an item -- reads its
+properties back, fetches the menu layout, and clicks an item -- rather than
+counting the registration call. That is the difference between a test and a
+formality: the first run of it registered successfully and then timed out on
+all eight property reads, which is an icon a panel would show as nothing.
+The cause was the item registering synchronously and so being unable to
+answer while it waited.
+
+Two controls. The watcher runs alone first and must report
+`WATCHER-TIMEOUT` and fail, so a run in which nothing registers cannot pass.
+And the check on the output asks what the layout *contains* -- a separator
+typed as one, a check item carrying its state, a submenu still nested, a
+disabled item still disabled -- plus that the click arrived back in the
+application with the id it gave the item. An earlier version matched
+property *names*, which an unreadable property prints too, and passed the
+deadlocked run above.
+
+The probe is written against the public `wxTaskBarIcon` only. Reaching past
+it into `wxStatusNotifierItem` would answer a question about the probe
+rather than about wx.
+
 ## `crash-capture.sh` — what to collect when a sample crashes elsewhere
 
 Some crashes only happen on a real desktop: a running session bus, a desktop

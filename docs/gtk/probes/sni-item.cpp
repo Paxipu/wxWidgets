@@ -1,52 +1,40 @@
-// Does wxStatusNotifierItem actually appear on the bus as a tray icon?
+// Does a wxTaskBarIcon reach a panel under GTK4, and can the panel use it?
+//
+// Deliberately through the public API and nothing else: what matters is that
+// an application which already has a tray icon gets one here without
+// changing, so the probe is written the way such an application is.
 //
 // Driven by sni-roundtrip.sh, which supplies the control: a stand-in watcher
-// on a private session bus, which reads the item's properties back rather
-// than only counting the registration call.
-//
-// Prints ITEM-SHOWN or ITEM-FAILED, then stays up long enough to be read.
+// on a private session bus, which reads the item's properties back and walks
+// its menu rather than only counting the registration call.
 
 #include "wx/wx.h"
-#include "wx/gtk/private/statusnotifier.h"
-#include "wx/gtk/private/dbusmenu.h"
-
-#include "wx/menu.h"
+#include "wx/taskbar.h"
 
 #include <stdio.h>
 
 namespace
 {
 
-class Handler : public wxStatusNotifierItem::Handler
+class ProbeIcon : public wxTaskBarIcon
 {
 public:
-    void OnActivate() override
+    // The panel draws this menu itself, in its own process, so it has to be
+    // handed over rather than shown on demand.
+    wxMenu* CreatePopupMenu() override
     {
-        printf("ITEM-ACTIVATE\n");
-        fflush(stdout);
-    }
+        wxMenu* const menu = new wxMenu;
+        menu->Append(wxID_OPEN, "&Open window");
+        menu->AppendCheckItem(wxID_ANY, "Stay on &top")->Check(true);
+        menu->AppendSeparator();
 
-    void OnSecondaryActivate() override
-    {
-        printf("ITEM-SECONDARY\n");
-        fflush(stdout);
-    }
+        wxMenu* const sub = new wxMenu;
+        sub->Append(wxID_ANY, "Su&bitem");
+        menu->AppendSubMenu(sub, "&More");
 
-    void OnContextMenu() override
-    {
-        printf("ITEM-CONTEXTMENU\n");
-        fflush(stdout);
-    }
-};
+        menu->Append(wxID_EXIT, "E&xit")->Enable(false);
 
-class MenuHandler : public wxDBusMenu::Handler
-{
-public:
-    void OnMenuItem(wxMenuItem* item) override
-    {
-        printf("ITEM-MENU-CLICKED %s\n",
-               static_cast<const char*>(item->GetItemLabel().utf8_str()));
-        fflush(stdout);
+        return menu;
     }
 };
 
@@ -58,36 +46,28 @@ public:
         if ( !wxApp::OnInit() )
             return false;
 
-        m_item.reset(new wxStatusNotifierItem("wxprobe", &m_handler));
-        m_item->SetIcon("/usr/share/icons/hicolor", "probe-icon");
-        m_item->SetToolTip("probe tooltip");
+        printf("AVAILABLE %d\n", wxTaskBarIcon::IsAvailable() ? 1 : 0);
 
-        // The menu has to be built on the item's own connection, so get on
-        // the bus before either of them goes up.
-        if ( m_item->Connect() )
+        m_icon.reset(new ProbeIcon);
+
+        // Any icon will do; the panel is asked whether it can read one, not
+        // what it looks like.
+        wxBitmap bmp(22, 22);
         {
-            m_menu.reset(new wxMenu);
-            m_menu->Append(wxID_OPEN, "&Open window");
-            m_menu->AppendCheckItem(wxID_ANY, "Stay on &top")->Check(true);
-            m_menu->AppendSeparator();
-
-            wxMenu* const sub = new wxMenu;
-            sub->Append(wxID_ANY, "Su&bitem");
-            m_menu->AppendSubMenu(sub, "&More");
-
-            m_menu->Append(wxID_EXIT, "E&xit")->Enable(false);
-
-            m_dbusMenu.reset(new wxDBusMenu(m_item->GetConnection(),
-                                            "/MenuBar", &m_menuHandler));
-            if ( m_dbusMenu->IsOk() )
-            {
-                m_dbusMenu->SetMenu(m_menu.get());
-                m_item->SetMenuPath(m_dbusMenu->GetPath());
-            }
+            wxMemoryDC dc(bmp);
+            dc.SetBackground(*wxBLUE_BRUSH);
+            dc.Clear();
         }
 
-        printf(m_item->Show() ? "ITEM-SHOWN\n" : "ITEM-FAILED\n");
+        const bool ok = m_icon->SetIcon(wxBitmapBundle(bmp), "probe tooltip");
+        printf(ok ? "ITEM-SHOWN\n" : "ITEM-FAILED\n");
+        printf("INSTALLED %d\n", m_icon->IsIconInstalled() ? 1 : 0);
         fflush(stdout);
+
+        m_icon->Bind(wxEVT_MENU, [](wxCommandEvent& e) {
+            printf("ITEM-MENU-CLICKED id=%d\n", e.GetId());
+            fflush(stdout);
+        });
 
         // Nothing here draws, so quit on a timer rather than on a window
         // being closed.
@@ -98,15 +78,17 @@ public:
         return true;
     }
 
+    int OnExit() override
+    {
+        m_icon.reset();
+        return wxApp::OnExit();
+    }
+
 private:
-    Handler m_handler;
-    MenuHandler m_menuHandler;
-    std::unique_ptr<wxStatusNotifierItem> m_item;
-    std::unique_ptr<wxMenu> m_menu;
-    std::unique_ptr<wxDBusMenu> m_dbusMenu;
+    std::unique_ptr<ProbeIcon> m_icon;
     wxTimer m_timer;
 };
 
 } // anonymous namespace
 
-wxIMPLEMENT_APP_CONSOLE(App);
+wxIMPLEMENT_APP(App);

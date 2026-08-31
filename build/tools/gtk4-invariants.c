@@ -1590,6 +1590,78 @@ static void test_indicator_nodes(void)
     g_object_unref(expander);
 }
 
+/* wxChoice and wxComboBox cannot move off the deprecated GtkComboBox unless
+ * GtkDropDown can be returned to "nothing selected": wxWidgets requires that
+ * SetSelection(wxNOT_FOUND) is honoured after items have been added, and
+ * tests/controls/itemcontainertest.cpp asserts exactly that.
+ *
+ * This was reported on #183 as impossible, on the strength of reading rather
+ * than measuring, and the claim held for a while and shaped planning. It is
+ * measured here so that it stays measured, and on whichever GTK the CI runs
+ * rather than only on a developer's newer one.
+ */
+static void test_dropdown_selection_semantics(void)
+{
+    printf("GtkDropDown selection semantics (#183):\n");
+
+    const char* const choices[] = { "one", "two", "three", NULL };
+
+    /* The state wxChoice is actually in when SetSelection(wxNOT_FOUND) is
+     * called: items present, one of them selected. */
+    GtkWidget* dd = gtk_drop_down_new_from_strings(choices);
+    g_object_ref_sink(dd);
+
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(dd), 1);
+    check(gtk_drop_down_get_selected(GTK_DROP_DOWN(dd)) == 1,
+          "GtkDropDown selects the item it is asked for",
+          "set_selected(1) did not take");
+
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(dd), GTK_INVALID_LIST_POSITION);
+    check(gtk_drop_down_get_selected(GTK_DROP_DOWN(dd))
+            == GTK_INVALID_LIST_POSITION,
+          "GtkDropDown can be deselected with items present",
+          "set_selected(GTK_INVALID_LIST_POSITION) was refused, so wxChoice "
+          "cannot honour SetSelection(wxNOT_FOUND) on this GTK");
+
+    /* And once more with the model attached after construction, which is how
+     * wxChoice builds itself. */
+    GtkWidget* late = gtk_drop_down_new(NULL, NULL);
+    g_object_ref_sink(late);
+    GtkStringList* list = gtk_string_list_new(choices);
+    gtk_drop_down_set_model(GTK_DROP_DOWN(late), G_LIST_MODEL(list));
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(late), 2);
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(late), GTK_INVALID_LIST_POSITION);
+    check(gtk_drop_down_get_selected(GTK_DROP_DOWN(late))
+            == GTK_INVALID_LIST_POSITION,
+          "GtkDropDown can be deselected with a model set afterwards",
+          "deselection works only when the model is given at construction");
+
+    /* The real catch, and the reason a port cannot simply forward wx's calls:
+     * adding the first item to an empty model makes GTK select it. wx has to
+     * put its own idea of the selection back afterwards.
+     *
+     * Reported rather than failed: if a later GTK stopped doing this, wx's
+     * compensation would merely be redundant, not wrong. */
+    GtkWidget* growing = gtk_drop_down_new(NULL, NULL);
+    g_object_ref_sink(growing);
+    GtkStringList* empty = gtk_string_list_new(NULL);
+    gtk_drop_down_set_model(GTK_DROP_DOWN(growing), G_LIST_MODEL(empty));
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(growing), GTK_INVALID_LIST_POSITION);
+    gtk_string_list_append(empty, "first");
+
+    const guint afterAppend = gtk_drop_down_get_selected(GTK_DROP_DOWN(growing));
+    soft(afterAppend == GTK_INVALID_LIST_POSITION,
+         "appending to an empty model leaves the drop-down deselected",
+         "GTK selected the new item by itself, so a port has to restore its "
+         "own selection after every model change");
+    printf("           selection after appending to an empty model: %u\n",
+           afterAppend);
+
+    g_object_unref(growing);
+    g_object_unref(late);
+    g_object_unref(dd);
+}
+
 int main(void)
 {
     g_log_set_writer_func(log_writer, NULL, NULL);
@@ -1635,6 +1707,8 @@ int main(void)
     printf("\n");
 #endif
     test_combo_box_internals();
+    printf("\n");
+    test_dropdown_selection_semantics();
     printf("\n");
     test_css_parser_strictness();
     printf("\n");

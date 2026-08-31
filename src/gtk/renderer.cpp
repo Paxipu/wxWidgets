@@ -712,6 +712,10 @@ wxRendererGTK::DrawTreeItemButton(wxWindow* win,
         m_rendererNative.DrawTreeItemButton(win, dc, rect, flags);
     }
 #elif defined(__WXGTK3__)
+    // GTK+ 2 below uses the window for the layout direction and GTK4 above
+    // to host the scratch widget; only this branch has no use for it.
+    wxUnusedVar(win);
+
     int state = GTK_STATE_FLAG_NORMAL;
     if (flags & wxCONTROL_EXPANDED)
     {
@@ -1004,7 +1008,12 @@ wxRendererGTK::DrawDropArrow(wxWindow* win,
         cairo_restore(cr);
         gsk_render_node_unref(node);
     }
-#elif defined(__WXGTK3__)
+#else
+    // Only the GTK4 branch above draws through the window; the ones
+    // below draw from a style context and have no use for it.
+    wxUnusedVar(win);
+
+#ifdef __WXGTK3__
     cairo_t* cr = wxGetGTKDrawable(dc);
     if (cr)
     {
@@ -1035,7 +1044,8 @@ wxRendererGTK::DrawDropArrow(wxWindow* win,
         x, y,
         size, size
     );
-#endif
+#endif // __WXGTK3__/!__WXGTK3__
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 void
@@ -1237,7 +1247,12 @@ wxRendererGTK::DrawCheckBox(wxWindow* win,
 
     if ( !wxGTKDrawThemedWidget(win, s_check, cr, r, GtkStateFlags(state)) )
         m_rendererNative.DrawCheckBox(win, dc, rect, flags);
-#elif defined(__WXGTK3__)
+#else
+    // Only the GTK4 branch above draws through the window; the ones
+    // below draw from a style context and have no use for it.
+    wxUnusedVar(win);
+
+#ifdef __WXGTK3__
     cairo_t* cr = wxGetGTKDrawable(dc);
     if (cr == nullptr)
         return;
@@ -1345,6 +1360,7 @@ wxRendererGTK::DrawCheckBox(wxWindow* win,
         info.indicator_width, info.indicator_height
     );
 #endif // __WXGTK3__/!__WXGTK3__
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 void
@@ -1543,7 +1559,12 @@ void wxRendererGTK::DrawTextCtrl(wxWindow* win, wxDC& dc, const wxRect& rect, in
     {
         m_rendererNative.DrawTextCtrl(win, dc, rect, flags);
     }
-#elif defined(__WXGTK3__)
+#else
+    // Only the GTK4 branch above draws through the window; the ones
+    // below draw from a style context and have no use for it.
+    wxUnusedVar(win);
+
+#ifdef __WXGTK3__
     int state = GTK_STATE_FLAG_NORMAL;
     if (flags & wxCONTROL_FOCUSED)
         state = GTK_STATE_FLAG_FOCUSED;
@@ -1579,7 +1600,8 @@ void wxRendererGTK::DrawTextCtrl(wxWindow* win, wxDC& dc, const wxRect& rect, in
         rect.width,
         rect.height
   );
-#endif
+#endif // __WXGTK3__/!__WXGTK3__
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 // Draw the equivalent of a wxComboBox
@@ -1734,7 +1756,12 @@ void wxRendererGTK::DrawRadioBitmap(wxWindow* win, wxDC& dc, const wxRect& rect,
 
     if ( !wxGTKDrawThemedWidget(win, s_radio, drawable, r, GtkStateFlags(state)) )
         m_rendererNative.DrawRadioBitmap(win, dc, rect, flags);
-#elif defined(__WXGTK3__)
+#else
+    // Only the GTK4 branch above draws through the window; the ones
+    // below draw from a style context and have no use for it.
+    wxUnusedVar(win);
+
+#ifdef __WXGTK3__
     int state = GTK_STATE_FLAG_NORMAL;
     if (flags & wxCONTROL_CHECKED)
     {
@@ -1818,5 +1845,6 @@ void wxRendererGTK::DrawRadioBitmap(wxWindow* win, wxDC& dc, const wxRect& rect,
         dc.LogicalToDeviceY(rect.y),
         rect.width, rect.height
     );
-#endif
+#endif // __WXGTK3__/!__WXGTK3__
+#endif // __WXGTK4__/!__WXGTK4__
 }

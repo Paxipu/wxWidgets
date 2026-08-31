@@ -22,6 +22,16 @@
     #define WXUNUSED_IN_GTK3(x) x
 #endif
 
+// __WXGTK3__ is defined for GTK4 as well, so WXUNUSED_IN_GTK3() cannot express
+// "only the GTK4 code uses this". Quite a few functions are in that position:
+// GTK4 draws from a real widget and so needs the window the GTK+ 2 and 3 code
+// paths, which draw from a style context, have no use for.
+#ifdef __WXGTK4__
+    #define WXUNUSED_UNLESS_GTK4(x) x
+#else
+    #define WXUNUSED_UNLESS_GTK4(x)
+#endif
+
 // The native key event passed along the input-method path. GTK4 removed the
 // concrete GdkEventKey struct in favour of an opaque GdkEvent, but the IM
 // context still consumes a native event either way, so the code paths only

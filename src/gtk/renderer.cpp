@@ -712,6 +712,9 @@ wxRendererGTK::DrawTreeItemButton(wxWindow* win,
         m_rendererNative.DrawTreeItemButton(win, dc, rect, flags);
     }
 #elif defined(__WXGTK3__)
+    // Only the GTK+ 2 and GTK4 code below has a use for the window.
+    wxUnusedVar(win);
+
     int state = GTK_STATE_FLAG_NORMAL;
     if (flags & wxCONTROL_EXPANDED)
     {
@@ -911,7 +914,7 @@ wxRendererGTK::DrawSplitterSash(wxWindow* win,
 }
 
 void
-wxRendererGTK::DrawDropArrow(wxWindow* win,
+wxRendererGTK::DrawDropArrow(wxWindow* WXUNUSED_UNLESS_GTK4(win),
                              wxDC& dc,
                              const wxRect& rect,
                              int flags)
@@ -1205,7 +1208,7 @@ wxRendererGTK::GetCheckBoxSize(wxWindow* win, int flags)
 }
 
 void
-wxRendererGTK::DrawCheckBox(wxWindow* win,
+wxRendererGTK::DrawCheckBox(wxWindow* WXUNUSED_UNLESS_GTK4(win),
                             wxDC& dc,
                             const wxRect& rect,
                             int flags )
@@ -1348,7 +1351,7 @@ wxRendererGTK::DrawCheckBox(wxWindow* win,
 }
 
 void
-wxRendererGTK::DrawPushButton(wxWindow* win,
+wxRendererGTK::DrawPushButton(wxWindow* WXUNUSED_UNLESS_GTK4(win),
                               wxDC& dc,
                               const wxRect& rect,
                               int flags)
@@ -1520,7 +1523,8 @@ void wxRendererGTK::DrawFocusRect(wxWindow* win, wxDC& dc, const wxRect& rect, i
 }
 
 // Uses the theme to draw the border and fill for something like a wxTextCtrl
-void wxRendererGTK::DrawTextCtrl(wxWindow* win, wxDC& dc, const wxRect& rect, int flags)
+void wxRendererGTK::DrawTextCtrl(wxWindow* WXUNUSED_UNLESS_GTK4(win),
+                                 wxDC& dc, const wxRect& rect, int flags)
 {
     wxGTKDrawable* drawable = wxGetGTKDrawable(dc);
     if (drawable == nullptr)
@@ -1696,7 +1700,8 @@ void wxRendererGTK::DrawChoice(wxWindow* win, wxDC& dc,
 
 
 // Draw a themed radio button
-void wxRendererGTK::DrawRadioBitmap(wxWindow* win, wxDC& dc, const wxRect& rect, int flags)
+void wxRendererGTK::DrawRadioBitmap(wxWindow* WXUNUSED_UNLESS_GTK4(win),
+                                    wxDC& dc, const wxRect& rect, int flags)
 {
     wxGTKDrawable* drawable = wxGetGTKDrawable(dc);
     if (drawable == nullptr)

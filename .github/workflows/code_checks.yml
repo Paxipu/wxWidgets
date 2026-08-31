@@ -145,3 +145,20 @@ jobs:
       - name: Check that the generated file lists match build/files
         run: |
             ./misc/scripts/check_files_lists.sh
+
+  check-configure:
+    runs-on: ubuntu-24.04
+    name: Check Generated configure
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install autoconf 2.69
+        run: |
+            sudo apt-get update -qq
+            sudo apt-get install -qq --no-install-recommends autoconf2.69
+
+      - name: Check that configure matches configure.ac
+        run: |
+            ./misc/scripts/check_configure.sh

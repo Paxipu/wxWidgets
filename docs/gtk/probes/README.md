@@ -251,6 +251,26 @@ It also prints where the child sits inside the frame, because a `wxFrame`
 resizes a lone child to fill its client area: the child's origin equalling
 the frame's is then arithmetic rather than a second defect.
 
+It also drives the pointer to a known place and compares
+`ScreenToClient(wxGetMousePosition())` against the motion event, which is
+ground truth because GTK hands wx that position with no mapping involved:
+
+```
+WX motion event (80,108) | ScreenToClient(GetMousePosition) (80,108) | agree
+```
+
+They agree, on both backends. `wxGetMousePosition()` answers in the surface's
+coordinates and wx's "screen" space is that same space, so the two defects
+cancel -- which is why the identity mapping is mostly invisible, and what
+bounds its impact. `docs/gtk/wayland-testing.md` has the rule and the three
+ways out of it.
+
+When the pointer never reaches the window the probe says so rather than
+printing nothing: an empty comparison and a comparison that agreed look
+identical otherwise. Driving the pointer needs `wldrag` on the Wayland side
+(headless sway has no pointer device of its own); note that `wldrag.c` is C++
+despite its name.
+
 This is issue #214, and it is *not* the same code path as #166. Nothing here
 reads `m_x`/`m_y`, so the fix for that one changes no number above.
 

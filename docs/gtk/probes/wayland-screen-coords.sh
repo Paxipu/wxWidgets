@@ -14,6 +14,9 @@
 set -e
 
 BUILD=${1:?usage: $0 <wx-build-dir>}
+# Built from wldrag.c and wlr-virtual-pointer-unstable-v1.xml beside it; see
+# the README. Note that wldrag.c is C++ despite its name.
+WLDRAG=${WLDRAG:-/tmp/wldrag}
 HERE=$(cd "$(dirname "$0")" && pwd)
 WORK=${TMPDIR:-/tmp}/wl-screen-coords.$$
 PROBE=$WORK/wayland-screen-coords
@@ -47,6 +50,15 @@ run_under_x11()
             sed -n 's/.*Position: *\([0-9-]*,[0-9-]*\).*/(\1)/p')"
     else
         echo "X server says: (no such window)"
+    fi
+
+    # Put the pointer inside the frame so the motion comparison has
+    # something to report. Aimed well inside the client area rather than at
+    # an edge, where a pixel of decoration decides which window is under it.
+    if [ -n "$win" ]; then
+        DISPLAY=:78 xdotool mousemove 500 450 >/dev/null 2>&1 || true
+        sleep 1
+        DISPLAY=:78 xdotool mousemove 520 470 >/dev/null 2>&1 || true
     fi
 
     wait $probe 2>/dev/null || true
@@ -85,6 +97,16 @@ run_under_wayland()
     echo "compositor says the frame is at: $(swaymsg -t get_tree 2>/dev/null |
         jq -r '.. | objects | select(.name == "coordstest") |
                "(\(.rect.x),\(.rect.y)) \(.rect.width)x\(.rect.height)"')"
+
+    # A headless sway has no pointer device of its own, so the cursor has to
+    # be driven through the virtual-pointer protocol. Without this the probe
+    # reports that it compared nothing, which is the point of that line.
+    if [ -x "$WLDRAG" ]; then
+        "$WLDRAG" move 500 450 sleep 300 move 520 470 >/dev/null 2>&1 || true
+        sleep 1
+    else
+        echo "no wldrag at $WLDRAG -- the motion comparison will be empty"
+    fi
 
     wait $probe 2>/dev/null || true
     grep '^WX' "$WORK/wl.out" || cat "$WORK/wl.out"

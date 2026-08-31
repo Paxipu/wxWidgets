@@ -1541,6 +1541,7 @@ IMPORTANT: please read docs/tech/tn0016.txt before modifying this file!
     src/gtk/animate.cpp
     src/gtk/srchctrl.cpp
     src/generic/imaglist.cpp
+    src/gtk/statusnotifier.cpp
 </set>
 <set var="GTK2_SRC" hints="files">
     $(GTK_SRC)

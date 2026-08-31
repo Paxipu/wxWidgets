@@ -1425,6 +1425,7 @@ set(GTK_SRC
     src/gtk/hyperlink.cpp
     src/gtk/srchctrl.cpp
     src/generic/imaglist.cpp
+    src/gtk/statusnotifier.cpp
 )
 
 set(GTK2_SRC

@@ -1427,6 +1427,7 @@ GTK_SRC =
     src/gtk/statbox.cpp
     src/gtk/statline.cpp
     src/gtk/stattext.cpp
+    src/gtk/statusnotifier.cpp
     src/gtk/taskbar.cpp
     src/gtk/textctrl.cpp
     src/gtk/textentry.cpp

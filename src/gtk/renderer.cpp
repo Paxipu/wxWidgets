@@ -1127,8 +1127,6 @@ wxRendererGTK::DrawPushButton(wxWindow* win,
                               const wxRect& rect,
                               int flags)
 {
-    GtkWidget *button = wxGTKPrivate::GetButtonWidget();
-
     // draw button
     GtkStateType state;
 
@@ -1151,7 +1149,14 @@ wxRendererGTK::DrawPushButton(wxWindow* win,
         // the failure this whole area of the port has been bitten by.
         m_rendererNative.DrawPushButton(win, dc, rect, flags);
     }
-#elif defined(__WXGTK3__)
+#else
+    // Only the GTK4 branch above draws through the window; only the branches
+    // below draw with a widget of their own.
+    wxUnusedVar(win);
+
+    GtkWidget *button = wxGTKPrivate::GetButtonWidget();
+
+#ifdef __WXGTK3__
     cairo_t* cr = wxGetGTKDrawable(dc);
     if (cr)
     {
@@ -1181,7 +1186,8 @@ wxRendererGTK::DrawPushButton(wxWindow* win,
         rect.width,
         rect.height
     );
-#endif
+#endif // __WXGTK3__/!__WXGTK3__
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 void

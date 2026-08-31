@@ -17,11 +17,12 @@
 
 #ifndef WX_PRECOMP
     #include "wx/app.h"
-    #include "wx/filename.h"
     #include "wx/log.h"
     #include "wx/menu.h"
 #endif
 
+// Not part of wx/wx.h, so it must be included even in PCH builds.
+#include "wx/filename.h"
 #include "wx/stdpaths.h"
 
 // For g_get_user_cache_dir() below, which is wanted before the GTK

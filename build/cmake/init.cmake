@@ -605,6 +605,19 @@ if(wxUSE_GUI)
                     if(NOT WEBKIT2_FOUND)
                         find_package(WEBKIT 3.0)
                     endif()
+                elseif(WXGTK4)
+                    # webkitgtk-6.0 is a different package rather than a
+                    # newer webkit2gtk, so it gets its own find module. What
+                    # it feeds is still the WEBKIT2 backend: wx builds GTK4
+                    # webview from src/gtk/webview_webkit2.cpp, and
+                    # configure.ac likewise sets USE_WEBVIEW_WEBKIT2 here.
+                    find_package(WEBKITGTK6)
+                    if(WEBKITGTK6_FOUND)
+                        set(WEBKIT2_FOUND TRUE)
+                        set(WEBKIT2_INCLUDE_DIR ${WEBKITGTK6_INCLUDE_DIRS})
+                        set(WEBKIT2_LIBRARIES ${WEBKITGTK6_LIBRARIES})
+                        set(WEBKIT_LIBSOUP_VERSION 3.0)
+                    endif()
                 endif()
                 find_package(LIBSOUP ${WEBKIT_LIBSOUP_VERSION})
             endif()

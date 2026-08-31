@@ -136,6 +136,17 @@ their controls are in `docs/gtk/probes/` and the numbers in
 * **`wxNativeContainerWindow` cannot embed a foreign top level window**,
   as set out in the section above.
 
+* **`wxTaskBarIcon` does not work under Wayland**, for a reason that is
+  not GTK4's doing. Wayland has no tray protocol, so the way a tray icon
+  reaches the panel is the StatusNotifierItem D-Bus interface, and the
+  library wx uses for it -- Ayatana's appindicator -- ships GTK+ 2 and
+  GTK+ 3 builds only; there is no GTK4 one, and its `-dev` package
+  depends on `libgtk-3-dev`. So appindicator is gated to GTK+ 3 in
+  `configure.ac` and in CMake, deliberately, and a GTK4 build simply
+  does without it. Speaking to StatusNotifierItem directly would avoid
+  the toolkit question entirely, but that is a new implementation rather
+  than a port fix and it is not attempted here. (#198)
+
 An application that needs any of these keeps working under X11, and
 `GDK_BACKEND=x11` remains available to it. That is worth saying plainly
 to anyone porting: the answer to several of these is not a workaround

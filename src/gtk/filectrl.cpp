@@ -12,6 +12,10 @@
 #if wxUSE_FILECTRL && !defined(__WXUNIVERSAL__)
 
 #include "wx/filectrl.h"
+// Directly, because under GTK4 wx/filectrl.h picks wxGenericFileCtrl and so
+// no longer pulls this in -- but wxGtkFileChooser, which wxFileDialog uses,
+// is declared here and is still built.
+#include "wx/gtk/filectrl.h"
 
 #include "wx/gtk/private.h"
 #include "wx/gtk/private/gtk3-compat.h"
@@ -245,7 +249,15 @@ bool wxGtkFileChooser::HasFilterChoice() const
 // end wxGtkFileChooser Implementation
 //-----------------------------------------------------------------------------
 
-#if wxUSE_FILECTRL
+// Everything below is wxGtkFileCtrl, which is a GtkFileChooserWidget. GTK 4.10
+// deprecated that and GTK4 has nothing to replace it with -- GtkFileDialog and
+// GtkFileLauncher are controller objects, not widgets, and there is no
+// embeddable file chooser left at all. See the wxFileCtrl selection in
+// wx/filectrl.h, which picks wxGenericFileCtrl there instead.
+//
+// wxGtkFileChooser above is a different thing and stays: it wraps whatever
+// GtkFileChooser it is given, and wxFileDialog still has one.
+#if wxUSE_FILECTRL && !defined(__WXGTK4__)
 
 // gtk signal handlers
 
@@ -488,6 +500,6 @@ void wxGtkFileCtrl::ShowHidden(bool show)
     gtk_file_chooser_set_show_hidden(m_fcWidget, show);
 }
 
-#endif // wxUSE_FILECTRL
+#endif // wxUSE_FILECTRL && !defined(__WXGTK4__)
 
 #endif // wxUSE_FILECTRL && !defined(__WXUNIVERSAL__)

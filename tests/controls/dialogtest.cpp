@@ -13,6 +13,62 @@
 
 #include "wx/msgdlg.h"
 #include "wx/filedlg.h"
+#include "wx/colordlg.h"
+#include "wx/fontdlg.h"
+
+#if wxUSE_COLOURDLG
+
+// Under GTK4 wxColourDialog no longer goes through wxDialog::ShowModal(),
+// because GtkColorDialog is a controller object rather than a widget and
+// there is nothing to show. That means the modal dialog hook, which
+// wxTEST_DIALOG and wxExpectModal are built on, has to be called by the
+// replacement -- and if it is not, ShowModal() opens a real dialog and waits
+// for a user who is not there, which is a hung test run rather than a failed
+// one.
+TEST_CASE("Modal::ColourDialog", "[modal]")
+{
+    wxColourData data;
+    data.SetColour(*wxRED);
+
+    wxColourDialog dlg(nullptr, &data);
+
+    int rc = wxID_NONE;
+    wxTEST_DIALOG
+    (
+        rc = dlg.ShowModal(),
+        wxExpectDismissableModal<wxColourDialog>(wxID_CANCEL)
+    );
+
+    CHECK( rc == wxID_CANCEL );
+
+    // Cancelling leaves the colour as it was.
+    CHECK( dlg.GetColourData().GetColour() == *wxRED );
+}
+
+#endif // wxUSE_COLOURDLG
+
+#if wxUSE_FONTDLG
+
+// See the comment on Modal::ColourDialog above: the same applies to
+// GtkFontDialog.
+TEST_CASE("Modal::FontDialog", "[modal]")
+{
+    wxFontData data;
+    data.SetInitialFont(*wxNORMAL_FONT);
+
+    wxFontDialog dlg(nullptr, data);
+
+    int rc = wxID_NONE;
+    wxTEST_DIALOG
+    (
+        rc = dlg.ShowModal(),
+        wxExpectDismissableModal<wxFontDialog>(wxID_CANCEL)
+    );
+
+    CHECK( rc == wxID_CANCEL );
+}
+
+#endif // wxUSE_FONTDLG
 
 #if wxUSE_WIZARDDLG && defined(__WXGTK4__)
     #include "wx/sizer.h"

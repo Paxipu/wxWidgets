@@ -163,6 +163,13 @@ public:
     // always let GTK have mouse release events for multiline controls
     virtual bool GTKProcessEvent(wxEvent& event) const override;
 
+#ifdef __WXGTK4__
+    // A text control binds the usual editing and navigation keys itself, so a
+    // menu accelerator sharing one must not fire while we have the focus.
+    virtual bool GTKShouldPreProcessKey(int keyval,
+                                        int modifiers) const override;
+#endif // __WXGTK4__
+
 
     static wxVisualAttributes
     GetClassDefaultAttributes(wxWindowVariant variant = wxWINDOW_VARIANT_NORMAL);

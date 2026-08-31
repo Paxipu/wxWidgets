@@ -211,6 +211,27 @@ public:
     // base version just calls HandleWindowEvent()
     virtual bool GTKProcessEvent(wxEvent& event) const;
 
+#ifdef __WXGTK4__
+    // Override this and return true for the keys this window binds itself, so
+    // that a menu accelerator using the same key does not fire while this
+    // window has the focus. This is wxGTK4's half of what
+    // MSWShouldPreProcessMessage() does for wxMSW.
+    //
+    // GTK4 gives no way to ask a widget whether it has a binding for a key,
+    // and a window shortcut runs whatever the focused widget does with it --
+    // in every scope GTK offers -- so the only thing that knows is the
+    // control itself. See wxWidgets issue #221 and
+    // docs/gtk/probes/gtk4-shortcut-scope-vs-focus.c.
+    //
+    // keyval and modifiers are a GDK keyval and GdkModifierType; they are
+    // taken as int here to keep this header free of GDK types.
+    virtual bool GTKShouldPreProcessKey(int WXUNUSED(keyval),
+                                        int WXUNUSED(modifiers)) const
+    {
+        return false;
+    }
+#endif // __WXGTK4__
+
     // Map GTK widget direction of the given widget to/from wxLayoutDirection
     static wxLayoutDirection GTKGetLayout(GtkWidget *widget);
     static void GTKSetLayout(GtkWidget *widget, wxLayoutDirection dir);

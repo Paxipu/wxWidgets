@@ -43,6 +43,7 @@
 #include "wx/gtk/private/object.h"
 #include "wx/gtk/private/stylecontext.h"
 #include "wx/gtk/private/value.h"
+#include "wx/gtk/private/win_gtk.h"
 
 #if defined(__WXGTK3__) && !GTK_CHECK_VERSION(3,14,0)
     #define GTK_STATE_FLAG_CHECKED (1 << 11)
@@ -266,6 +267,152 @@ static GdkWindow* wxGetGTKDrawable(wxDC& dc)
     return gdk_window;
 }
 #endif
+
+
+#ifdef __WXGTK4__
+
+// ----------------------------------------------------------------------------
+// drawing a themed widget under GTK4
+// ----------------------------------------------------------------------------
+
+// GTK4 removed gtk_render_background(), gtk_render_frame() and everything that
+// fed them: a GtkStyleContext can no longer be asked to paint. What replaces
+// them is asking a real widget for its render node, and the conditions for
+// that are exact and were measured rather than guessed
+// (docs/gtk/probes/gtk4-snapshot-mapped-vs-allocated.c and
+// gtk4-renderer-scratch-in-paint.c):
+//
+//   * the widget must have a current allocation -- gtk_widget_allocate() gives
+//     it one, which is what any layout manager does;
+//   * it must be inside a MAPPED toplevel. Realized is not enough. wx's own
+//     scratch container is deliberately never shown, so the widget cannot stay
+//     there -- but every wxRendererNative::Draw*() is handed the window it is
+//     drawing into, and during a paint that window is mapped;
+//   * it must be genuinely visible. set_visible(FALSE) and
+//     set_child_visible(FALSE) both unmap it and give no node, and opacity 0
+//     gives none either, because GTK drops a fully transparent widget.
+//
+// So it is parented far outside the client area instead, where it is mapped
+// and visible but clipped away. Its position does not reach the render node:
+// gtk_widget_snapshot_child() produces the node in the child's own coordinate
+// space, so the node is drawn by translating to the target rectangle only.
+//
+// The result is the same picture the deprecated calls produced -- identical
+// pixel-for-pixel for a button in its normal state, and different, as it must
+// be, for prelight and active.
+
+namespace
+{
+
+// Somewhere a control will never be.
+const int wxGTK_SCRATCH_OFFSET = -32000;
+
+// The widgets drawn from here are the renderer's own, not the shared ones in
+// wxGTKPrivate. Those are kept by weak pointer and live in a container that
+// owns them, so unparenting one to move it here destroys it -- which is a
+// crash the next time anything asks for it, and was one.
+//
+// They are also never destroyed: one of each kind, held by a strong reference
+// for the life of the process, moved between windows as the drawing does.
+struct wxGTKScratchWidget
+{
+    explicit wxGTKScratchWidget(GtkWidget* (*factory)())
+        : m_factory(factory)
+    {
+    }
+
+    // Return the widget, parented into win's client area, or null if this
+    // window cannot host it.
+    GtkWidget* GetFor(wxWindow* win)
+    {
+        if ( !win )
+            return nullptr;
+
+        GtkWidget* const host = win->m_wxwindow;
+        if ( !host || !WX_IS_PIZZA(host) )
+            return nullptr;
+
+        // A widget can only be snapshotted inside a mapped toplevel, so a
+        // window that is not on screen cannot be drawn into this way.
+        if ( !gtk_widget_get_mapped(host) )
+            return nullptr;
+
+        if ( !m_widget )
+        {
+            m_widget = m_factory();
+            g_object_ref_sink(m_widget);
+        }
+
+        GtkWidget* const parent = gtk_widget_get_parent(m_widget);
+        if ( parent != host )
+        {
+            // Only when the drawing moves to a different window, which does
+            // not happen part-way through a paint.
+            if ( parent )
+                WX_PIZZA(parent)->remove(m_widget);
+
+            WX_PIZZA(host)->put(m_widget, wxGTK_SCRATCH_OFFSET,
+                                wxGTK_SCRATCH_OFFSET, 1, 1);
+        }
+
+        return m_widget;
+    }
+
+    GtkWidget* (*const m_factory)();
+    GtkWidget* m_widget = nullptr;
+};
+
+} // anonymous namespace
+
+// Draw a themed widget of the given kind into cr at rect.
+//
+// Returns false if this window cannot host the widget -- it is not on screen,
+// or has no client area of its own. The caller then has to fall back to
+// drawing something itself, because there is no way to make GTK4 produce a
+// themed picture without a mapped widget.
+bool
+wxGTKDrawThemedWidget(wxWindow* win,
+                      wxGTKScratchWidget& scratch,
+                      cairo_t* cr,
+                      const wxRect& rect,
+                      GtkStateFlags state)
+{
+    if ( !cr || rect.width <= 0 || rect.height <= 0 )
+        return false;
+
+    GtkWidget* const widget = scratch.GetFor(win);
+    if ( !widget )
+        return false;
+
+    GtkWidget* const host = gtk_widget_get_parent(widget);
+
+    if ( state )
+        gtk_widget_set_state_flags(widget, state, TRUE);
+
+    gtk_widget_allocate(widget, rect.width, rect.height, -1, nullptr);
+
+    GtkSnapshot* const snapshot = gtk_snapshot_new();
+    gtk_widget_snapshot_child(host, widget, snapshot);
+    GskRenderNode* const node = gtk_snapshot_free_to_node(snapshot);
+    const bool drew = node != nullptr;
+
+    if ( node )
+    {
+        cairo_save(cr);
+        cairo_translate(cr, rect.x, rect.y);
+        gsk_render_node_draw(node, cr);
+        cairo_restore(cr);
+
+        gsk_render_node_unref(node);
+    }
+
+    if ( state )
+        gtk_widget_unset_state_flags(widget, state);
+
+    return drew;
+}
+
+#endif // __WXGTK4__
 
 // ----------------------------------------------------------------------------
 // list/tree controls drawing
@@ -975,7 +1122,7 @@ wxRendererGTK::DrawCheckBox(wxWindow*,
 }
 
 void
-wxRendererGTK::DrawPushButton(wxWindow*,
+wxRendererGTK::DrawPushButton(wxWindow* win,
                               wxDC& dc,
                               const wxRect& rect,
                               int flags)
@@ -994,7 +1141,17 @@ wxRendererGTK::DrawPushButton(wxWindow*,
     else
         state = GTK_STATE_NORMAL;
 
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    static wxGTKScratchWidget s_scratchButton(gtk_button_new);
+    if ( !wxGTKDrawThemedWidget(win, s_scratchButton, wxGetGTKDrawable(dc),
+                                rect, stateTypeToFlags[state]) )
+    {
+        // The window is not on screen, so GTK cannot be asked for a themed
+        // picture at all. Draw wx's own rather than nothing: silently blank is
+        // the failure this whole area of the port has been bitten by.
+        m_rendererNative.DrawPushButton(win, dc, rect, flags);
+    }
+#elif defined(__WXGTK3__)
     cairo_t* cr = wxGetGTKDrawable(dc);
     if (cr)
     {

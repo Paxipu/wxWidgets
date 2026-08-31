@@ -9,8 +9,9 @@ contact details, and trim whatever doesn't seem useful to include.
 
 Everything referenced below lives in `docs/gtk/` in this fork:
 `gtk4-port-plan.md` (phased roadmap), `gtk4-status.md` (compiler-verified
-error inventory), `gtk4-phase2-window-model-design.md` (the window/child
-model design), and this file.
+error inventory), `gtk4-known-gaps.md` (what does not work, in one
+table), `gtk4-phase2-window-model-design.md` (the window/child model
+design), and this file.
 
 ## Why this exists
 
@@ -136,32 +137,38 @@ their controls are in `docs/gtk/probes/` and the numbers in
 * **`wxNativeContainerWindow` cannot embed a foreign top level window**,
   as set out in the section above.
 
-* **`wxTaskBarIcon` does not work under Wayland**, for a reason that is
-  not GTK4's doing. Wayland has no tray protocol, so the way a tray icon
-  reaches the panel is the StatusNotifierItem D-Bus interface, and the
-  library wx uses for it -- Ayatana's appindicator -- ships GTK+ 2 and
-  GTK+ 3 builds only; there is no GTK4 one, and its `-dev` package
-  depends on `libgtk-3-dev`. So appindicator is gated to GTK+ 3 in
-  `configure.ac` and in CMake, deliberately, and a GTK4 build simply
-  does without it. Speaking to StatusNotifierItem directly would avoid
-  the toolkit question entirely, but that is a new implementation rather
-  than a port fix and it is not attempted here. (#198)
+* **`wxTaskBarIcon` speaks StatusNotifierItem itself.** Wayland has no
+  tray protocol, so the way a tray icon reaches the panel is the
+  StatusNotifierItem D-Bus interface, and the library wx used for it --
+  Ayatana's appindicator -- ships GTK+ 2 and GTK+ 3 builds only; its
+  `-dev` package depends on `libgtk-3-dev`. Rather than do without,
+  wxGTK4 serves StatusNotifierItem and `com.canonical.dbusmenu` directly
+  over GDBus, which needs no toolkit-specific library at all. So
+  appindicator stays gated to GTK+ 3 and a GTK4 build does not want it.
+  What remains outside wx's reach is the other end: a desktop whose panel
+  runs no `StatusNotifierWatcher` has nowhere for the icon to appear.
+  (#198, #216)
 
 An application that needs any of these keeps working under X11, and
 `GDK_BACKEND=x11` remains available to it. That is worth saying plainly
 to anyone porting: the answer to several of these is not a workaround
 inside wx.
 
-## What's still open (not attempted)
+## What's still open
 
-Everything else in `gtk4-status.md`'s root-cause table: the
-`GtkContainer`/`GtkBin` removal (~103 occurrences, mechanical but wide),
-the DnD/clipboard rewrite (`GdkContentProvider`/`GtkDropTarget`/
-`GdkClipboard`), the old style-properties API, `gtk_box_pack_start/end`
-→ `append`/`prepend`, GFile-based file choosers, and `wxPopupWindow`
-(`GTK_WINDOW_POPUP` is gone, needs a `GtkPopover`/`GdkPopup`-anchored
-rewrite — self-contained to one file). None of these have been started;
-they're scoped in `gtk4-port-plan.md`'s phase breakdown.
+The root-cause table in `gtk4-status.md` describes the state the port
+started from, not the state it is in: the `GtkContainer`/`GtkBin`
+removal, the DnD and clipboard rewrite, the old style-properties API,
+`gtk_box_pack_start/end`, the GFile-based file choosers and
+`wxPopupWindow` have all been worked through since it was written. None
+of those symbols exist in the GTK 4 headers, and the GTK4 library
+builds, which is what settles it.
+
+What is left is behavioural rather than structural, and it is collected
+as one table in `gtk4-known-gaps.md` -- feature, state, cause, and
+whether wx can do anything about it. Most of those rows are consequences
+of Wayland's security model and of what GTK 4 replaced its removed
+widgets with, so they are answers rather than a backlog.
 
 ## If any of this is useful upstream
 

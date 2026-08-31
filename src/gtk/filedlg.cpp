@@ -181,8 +181,11 @@ void wxFileDialog::AddChildGTK(wxWindowGTK* child)
     // gtk_file_chooser_set_extra_widget() is gone: GTK4 only lets a chooser be
     // extended with the fixed set of controls gtk_file_chooser_add_choice()
     // offers, not with an arbitrary widget, so a wxFileDialog extra control
-    // cannot be shown at all. It is still created and owned as before, just
-    // never attached to anything.
+    // cannot be shown at all.
+    //
+    // SupportsExtraControl() therefore returns false under GTK4 and nothing
+    // should reach this point any more; if something does, it is better that
+    // the child simply goes unshown than that this asserts in a file dialog.
     wxUnusedVar(child);
 #else
     gtk_file_chooser_set_extra_widget(

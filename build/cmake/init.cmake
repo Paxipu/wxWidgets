@@ -745,6 +745,16 @@ if(wxUSE_GUI)
 
     # In principle, we could look for ayatana-appindicator-0.1 when using GTK2,
     # but for now we don't support it there and only support it with GTK3.
+    #
+    # GTK4 is excluded on purpose and must stay excluded: the only pkg-config
+    # module, ayatana-appindicator3-0.1, is built against GTK+ 3 and brings
+    # libgtk-3 and libdbusmenu-gtk3 with it, and GTK4 aborts any process that
+    # contains GTK 2/3 symbols.  It would also buy nothing, because
+    # wxTaskBarIcon is a stub under GTK4 -- see the __WXGTK4__ branch at the end
+    # of src/gtk/taskbar.cpp.  WXGTK3 is not set for the gtk4 toolkit here, so
+    # the condition below already does the right thing; this note is so that it
+    # is not "fixed" into doing the wrong one.  (configure has to say it more
+    # explicitly, because there WXGTK3 *is* set for GTK4 too.)
     if(wxUSE_TASKBARICON AND UNIX AND WXGTK3 AND wxUSE_APPINDICATOR)
         find_package(PkgConfig)
         pkg_check_modules(APPINDICATOR IMPORTED_TARGET QUIET ayatana-appindicator3-0.1)
@@ -820,7 +830,20 @@ if(wxUSE_GUI)
         set(wxUSE_LIBGNOMEVFS OFF)
     endif()
 
-    if(WXGTK3 AND wxUSE_SPELLCHECK)
+    if(WXGTK4 AND wxUSE_SPELLCHECK)
+        # gspell-1 is a GTK+ 3 library, so a GTK4 build uses libspelling
+        # instead -- the same split configure.ac makes.  Without this branch
+        # wxUSE_SPELLCHECK stayed on with no library found at all, and
+        # src/gtk/textctrl.cpp then failed on #include <libspelling.h>.
+        find_package(SPELLING)
+        if(SPELLING_FOUND)
+            list(APPEND wxTOOLKIT_INCLUDE_DIRS ${SPELLING_INCLUDE_DIRS})
+            list(APPEND wxTOOLKIT_LIBRARIES ${SPELLING_LIBRARIES})
+        else()
+            message(STATUS "libspelling-1 not found, spell checking in wxTextCtrl won't be available")
+            wx_option_force_value(wxUSE_SPELLCHECK OFF)
+        endif()
+    elseif(WXGTK3 AND wxUSE_SPELLCHECK)
         find_package(GSPELL)
         if(GSPELL_FOUND)
             list(APPEND wxTOOLKIT_INCLUDE_DIRS ${GSPELL_INCLUDE_DIRS})

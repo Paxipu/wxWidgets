@@ -202,25 +202,68 @@ static GtkWidget* wxGTKFindChildNode(GtkWidget* widget, const char* name)
     return widget;
 }
 
-// A note on what does NOT work here, because the newer API looks like the
-// obvious answer and quietly draws nothing.
+// The same, but at any depth. The parts wx wants out of the more elaborate
+// widgets are not direct children: a GtkColumnView's header button sits under
+// its "header" node, and a GtkPaned's separator under the paned itself.
+//
+// Returns null rather than the widget when there is no such node, because
+// here the caller has to be able to tell.
+static GtkWidget* wxGTKFindNodeDeep(GtkWidget* widget, const char* name)
+{
+    for ( GtkWidget* c = gtk_widget_get_first_child(widget);
+          c;
+          c = gtk_widget_get_next_sibling(c) )
+    {
+        const char* const css = gtk_widget_get_css_name(c);
+        if ( css && strcmp(css, name) == 0 )
+            return c;
+
+        if ( GtkWidget* const found = wxGTKFindNodeDeep(c, name) )
+            return found;
+    }
+
+    return nullptr;
+}
+
+// A note on rasterising a themed widget, because the obvious readings of the
+// GTK4 API are wrong in both directions and this cost several rounds.
 //
 // GTK4 deprecates gtk_render_background()/gtk_render_frame() in favour of
 // snapshotting a widget and running the GskRenderNode through
-// gsk_render_node_draw(). That does reproduce them byte for byte -- measured,
-// see docs/gtk/probes/gtk4-renderer-snapshot.c -- but only for a widget whose
-// toplevel has been *mapped*. gtk_widget_snapshot_child() yields nothing for a
-// widget that has merely been realized, and a null node draws nothing at all.
+// gsk_render_node_draw(). That reproduces them byte for byte -- measured, see
+// docs/gtk/probes/gtk4-renderer-snapshot.c -- but only when three things hold
+// at once, and each of them fails silently by producing a null node, which
+// draws nothing:
 //
-// wx's scratch widgets live in a container whose window is deliberately never
-// shown (see wxGTKPrivate::GetContainer()), and showing it is not an option:
-// it would flash a window on the user's desktop every time a control part is
-// drawn. So the replacement cannot be used for these, and the deprecated calls
-// below stay until there is a way to rasterise a widget without mapping it.
+//   * the widget has a current allocation. gtk_widget_allocate() gives it one.
+//   * its toplevel is MAPPED. Realized is not enough
+//     (gtk4-snapshot-mapped-vs-allocated.c).
+//   * it is genuinely visible. set_visible(FALSE), set_child_visible(FALSE)
+//     and even opacity 0 each give no node, the last because GTK drops a
+//     fully transparent widget.
 //
-// This is recorded rather than left to be rediscovered: the substitution
-// compiles, passes the whole test suite and passes CI, because nothing there
-// looks at the pixels wxRendererNative produces. tests/graphics/renderer.cpp
+// This was first recorded here as "cannot be done", because wx's own scratch
+// container is deliberately never shown and showing it would flash a window on
+// the user's desktop. That does not follow: every wxRendererNative::Draw*() is
+// handed the window it is drawing into, and during a paint that window is
+// mapped. So the widget goes there instead, parented far outside the client
+// area where it is mapped and visible but clipped away -- which
+// wxGTKScratchWidget below does.
+//
+// Two further traps, both of which produce a plausible wrong picture rather
+// than an error:
+//
+//   * the node is in the child's own coordinate space, so it is drawn by
+//     translating to the target rectangle only. Its origin is negative (-3,-2
+//     for a button) because the shadow overflows the allocation and is meant
+//     to land outside the rectangle; cancelling that origin shifts the widget.
+//   * the widget must be the renderer's own. The shared ones in wxGTKPrivate
+//     are held by weak pointer in a container that owns them, so unparenting
+//     one to move it here destroys it. That was a SIGSEGV.
+//
+// All of this is recorded rather than left to be rediscovered: the wrong
+// versions compile, pass the whole test suite and pass CI, because nothing
+// there looks at the pixels wxRendererNative produces. tests/graphics/renderer.cpp
 // does now.
 
 #endif // __WXGTK4__
@@ -321,8 +364,17 @@ struct wxGTKScratchWidget
     {
     }
 
-    // Return the widget, parented into win's client area, or null if this
-    // window cannot host it.
+    // Some parts wx draws are not a whole widget but one CSS node inside it --
+    // a check button's "check" indicator, an expander's "arrow". Naming one
+    // here makes GetFor() return that node instead of the widget itself; it is
+    // still the widget that is hosted and allocated.
+    wxGTKScratchWidget(GtkWidget* (*factory)(), const char* childNode)
+        : m_factory(factory), m_childNode(childNode)
+    {
+    }
+
+    // Return the widget (or its named child), parented into win's client area,
+    // or null if this window cannot host it.
     GtkWidget* GetFor(wxWindow* win)
     {
         if ( !win )
@@ -355,12 +407,69 @@ struct wxGTKScratchWidget
                                 wxGTK_SCRATCH_OFFSET, 1, 1);
         }
 
-        return m_widget;
+        if ( !m_childNode )
+            return m_widget;
+
+        // Direct child first, then anywhere below: the shallow answer is the
+        // right one for a check button's indicator, the deep one for a column
+        // view's header button.
+        GtkWidget* const shallow = wxGTKFindChildNode(m_widget, m_childNode);
+        if ( shallow != m_widget )
+            return shallow;
+
+        GtkWidget* const deep = wxGTKFindNodeDeep(m_widget, m_childNode);
+        return deep ? deep : m_widget;
     }
 
     GtkWidget* (*const m_factory)();
+    const char* const m_childNode = nullptr;
     GtkWidget* m_widget = nullptr;
 };
+
+// GtkRadioButton is gone: a radio button is a grouped GtkCheckButton, and it
+// is the grouping that turns its indicator node from "check" into "radio".
+// The group leader is created here and never released -- it exists only to
+// make the returned button a radio one.
+GtkWidget* wxGTKCreateRadioButton()
+{
+    GtkWidget* const leader = gtk_check_button_new();
+    g_object_ref_sink(leader);
+
+    GtkWidget* const radio = gtk_check_button_new();
+    gtk_check_button_set_group(GTK_CHECK_BUTTON(radio), GTK_CHECK_BUTTON(leader));
+
+    return radio;
+}
+
+// A row of a GtkListBox, which is what a theme styles as a selected item.
+// A bare GtkListBoxRow gets no selection background: the rule is
+// "list > row:selected", so the row has to be in a list.
+GtkWidget* wxGTKCreateListRow()
+{
+    GtkWidget* const list = gtk_list_box_new();
+    g_object_ref_sink(list);
+
+    GtkWidget* const row = gtk_list_box_row_new();
+    gtk_list_box_append(GTK_LIST_BOX(list), row);
+
+    return list;      // the "row" node is found inside it
+}
+
+// A GtkColumnView with one column, whose header button is what wx draws for a
+// list or tree control's column heading. GtkTreeViewColumn's button is gone
+// with the rest of GtkTreeView.
+GtkWidget* wxGTKCreateColumnHeader()
+{
+    GtkWidget* const view = gtk_column_view_new(nullptr);
+
+    GtkListItemFactory* const factory = gtk_signal_list_item_factory_new();
+    GtkColumnViewColumn* const column =
+        gtk_column_view_column_new("", factory);
+    gtk_column_view_append_column(GTK_COLUMN_VIEW(view), column);
+    g_object_unref(column);
+
+    return view;      // the header "button" node is found inside it
+}
 
 } // anonymous namespace
 
@@ -441,7 +550,42 @@ wxRendererGTK::DrawHeaderButton(wxWindow *win,
             state = GTK_STATE_PRELIGHT;
     }
 
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    cairo_t* cr = wxGetGTKDrawable(dc);
+    if (cr == nullptr)
+        return 0;
+
+    wxUnusedVar(button);
+
+    // The heading of a list or tree control is a GtkColumnView header button;
+    // GtkTreeViewColumn and its button went with the rest of GtkTreeView. The
+    // three-way first/middle/last distinction the GTK+ 3 path draws through
+    // AddTreeviewHeaderButton() is not reproduced: a column view styles its
+    // header buttons alike, so wxCONTROL_SPECIAL and wxCONTROL_DIRTY have no
+    // effect here.
+    static wxGTKScratchWidget s_header(wxGTKCreateColumnHeader, "button");
+
+    if ( !wxGTKDrawThemedWidget(win, s_header, cr, rect,
+                                stateTypeToFlags[state]) )
+    {
+        return m_rendererNative.DrawHeaderButton(win, dc, rect, flags,
+                                                 sortArrow, params);
+    }
+
+    if (params)
+    {
+        // gtk_widget_get_color() is the non-deprecated equivalent of
+        // gtk_style_context_get_color(), and gives the identical value --
+        // measured in docs/gtk/probes/gtk4-style-query-replacements.c.
+        if ( GtkWidget* const w = s_header.GetFor(win) )
+        {
+            GdkRGBA rgba;
+            gtk_widget_get_color(w, &rgba);
+            params->m_arrowColour = wxColour(rgba);
+            params->m_labelColour = params->m_arrowColour;
+        }
+    }
+#elif defined(__WXGTK3__)
     cairo_t* cr = wxGetGTKDrawable(dc);
     if (cr == nullptr)
         return 0;
@@ -529,7 +673,7 @@ int wxRendererGTK::GetHeaderButtonMargin(wxWindow *WXUNUSED(win))
 
 // draw a ">" or "v" button
 void
-wxRendererGTK::DrawTreeItemButton(wxWindow* WXUNUSED_IN_GTK3(win),
+wxRendererGTK::DrawTreeItemButton(wxWindow* win,
                                   wxDC& dc, const wxRect& rect, int flags)
 {
     wxGTKDrawable* drawable = wxGetGTKDrawable(dc);
@@ -538,7 +682,40 @@ wxRendererGTK::DrawTreeItemButton(wxWindow* WXUNUSED_IN_GTK3(win),
 
     GtkWidget *tree = wxGTKPrivate::GetTreeWidget();
 
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    wxUnusedVar(tree);
+
+    int state = GTK_STATE_FLAG_NORMAL;
+    if (flags & wxCONTROL_EXPANDED)
+        state |= GTK_STATE_FLAG_CHECKED;
+    if (flags & wxCONTROL_CURRENT)
+        state |= GTK_STATE_FLAG_PRELIGHT;
+    if (flags & wxCONTROL_SELECTED)
+        state |= GTK_STATE_FLAG_SELECTED;
+
+    // A GtkExpander's arrow lives in its "expander" node, and the theme turns
+    // it by the CHECKED state rather than by a separate call.
+    static wxGTKScratchWidget
+        s_expander([]() { return gtk_expander_new(nullptr); }, "expander");
+
+    int expanderSize = 0;
+    wxGTKMeasureWidget(wxGTKPrivate::GetExpanderWidget(), &expanderSize, nullptr);
+    expanderSize++;             // +1 to match GtkTreeView behavior
+
+    const wxRect r(rect.x + (rect.width - expanderSize) / 2,
+                   rect.y + (rect.width - expanderSize) / 2,
+                   expanderSize, expanderSize);
+
+    if ( !wxGTKDrawThemedWidget(win, s_expander, drawable, r,
+                                GtkStateFlags(state)) )
+    {
+        m_rendererNative.DrawTreeItemButton(win, dc, rect, flags);
+    }
+#elif defined(__WXGTK3__)
+    // GTK+ 2 below uses the window for the layout direction and GTK4 above
+    // to host the scratch widget; only this branch has no use for it.
+    wxUnusedVar(win);
+
     int state = GTK_STATE_FLAG_NORMAL;
     if (flags & wxCONTROL_EXPANDED)
     {
@@ -684,7 +861,22 @@ wxRendererGTK::DrawSplitterSash(wxWindow* win,
         rect.width = size.x;
     }
 
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    // The separator of a GtkPaned is not a child anyone can reach by name at
+    // the top level, but it is there: "paned > separator".
+    static wxGTKScratchWidget
+        s_sash([]() { return gtk_paned_new(GTK_ORIENTATION_HORIZONTAL); },
+               "separator");
+
+    const wxRect r(rect.x, rect.y, rect.width, rect.height);
+    if ( !wxGTKDrawThemedWidget(win, s_sash, drawable, r,
+                                flags & wxCONTROL_CURRENT
+                                    ? GTK_STATE_FLAG_PRELIGHT
+                                    : GTK_STATE_FLAG_NORMAL) )
+    {
+        m_rendererNative.DrawSplitterSash(win, dc, size, position, orient, flags);
+    }
+#elif defined(__WXGTK3__)
     wxGtkStyleContext sc(dc.GetContentScaleFactor());
     sc.AddWindow();
     gtk_render_background(sc, drawable, rect.x, rect.y, rect.width, rect.height);
@@ -723,7 +915,7 @@ wxRendererGTK::DrawSplitterSash(wxWindow* win,
 }
 
 void
-wxRendererGTK::DrawDropArrow(wxWindow*,
+wxRendererGTK::DrawDropArrow(wxWindow* win,
                              wxDC& dc,
                              const wxRect& rect,
                              int flags)
@@ -765,9 +957,11 @@ wxRendererGTK::DrawDropArrow(wxWindow*,
     // blank. The icon route is what the themes themselves use.
     const double scale = dc.GetContentScaleFactor();
 
-    wxGtkStyleContext sc(scale);
-    sc.AddButton();
-    gtk_style_context_set_state(sc, stateTypeToFlags[state]);
+    // The style context was only ever consulted here for the foreground
+    // colour. gtk_widget_get_color() is the non-deprecated equivalent and
+    // gives the identical value -- measured in
+    // docs/gtk/probes/gtk4-style-query-replacements.c.
+    static wxGTKScratchWidget s_arrowButton(gtk_button_new);
 
     GtkIconTheme* const theme =
         gtk_icon_theme_get_for_display(gdk_display_get_default());
@@ -782,8 +976,17 @@ wxRendererGTK::DrawDropArrow(wxWindow*,
 
     // A symbolic icon has no colour of its own: it takes the one it is
     // snapshotted with, so it follows the theme into a dark one.
-    wxColour fg;
-    sc.Fg(fg, stateTypeToFlags[state]);
+    wxColour fg(*wxBLACK);
+    if ( GtkWidget* const w = s_arrowButton.GetFor(win) )
+    {
+        gtk_widget_set_state_flags(w, stateTypeToFlags[state], TRUE);
+
+        GdkRGBA rgba;
+        gtk_widget_get_color(w, &rgba);
+        fg = wxColour(rgba);
+
+        gtk_widget_unset_state_flags(w, stateTypeToFlags[state]);
+    }
 
     // GdkRGBA holds floats, so divide by a float: 255.0 makes these double
     // and narrows inside the braces.
@@ -805,7 +1008,12 @@ wxRendererGTK::DrawDropArrow(wxWindow*,
         cairo_restore(cr);
         gsk_render_node_unref(node);
     }
-#elif defined(__WXGTK3__)
+#else
+    // Only the GTK4 branch above draws through the window; the ones
+    // below draw from a style context and have no use for it.
+    wxUnusedVar(win);
+
+#ifdef __WXGTK3__
     cairo_t* cr = wxGetGTKDrawable(dc);
     if (cr)
     {
@@ -836,7 +1044,8 @@ wxRendererGTK::DrawDropArrow(wxWindow*,
         x, y,
         size, size
     );
-#endif
+#endif // __WXGTK3__/!__WXGTK3__
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 void
@@ -1006,11 +1215,43 @@ wxRendererGTK::GetCheckBoxSize(wxWindow* win, int flags)
 }
 
 void
-wxRendererGTK::DrawCheckBox(wxWindow*,
+wxRendererGTK::DrawCheckBox(wxWindow* win,
                             wxDC& dc,
                             const wxRect& rect,
                             int flags )
 {
+#ifdef __WXGTK4__
+    cairo_t* const cr = wxGetGTKDrawable(dc);
+
+    int state = GTK_STATE_FLAG_NORMAL;
+    if (flags & wxCONTROL_CHECKED)
+        state |= GTK_STATE_FLAG_CHECKED;
+    if (flags & wxCONTROL_PRESSED)
+        state |= GTK_STATE_FLAG_ACTIVE;
+    if (flags & wxCONTROL_DISABLED)
+        state |= GTK_STATE_FLAG_INSENSITIVE;
+    if (flags & wxCONTROL_UNDETERMINED)
+        state |= GTK_STATE_FLAG_INCONSISTENT;
+    if (flags & wxCONTROL_CURRENT)
+        state |= GTK_STATE_FLAG_PRELIGHT;
+
+    // The "check" node draws the box and the tick together, so none of the
+    // indicator geometry the GTK+ 3 path computes by hand is needed: it is
+    // centred in the rectangle at the size the theme asks for.
+    static wxGTKScratchWidget s_check(gtk_check_button_new, "check");
+
+    const wxSize indicator = GetCheckBoxSize(win, flags);
+    const wxRect r(rect.x + (rect.width  - indicator.x) / 2,
+                   rect.y + (rect.height - indicator.y) / 2,
+                   indicator.x, indicator.y);
+
+    if ( !wxGTKDrawThemedWidget(win, s_check, cr, r, GtkStateFlags(state)) )
+        m_rendererNative.DrawCheckBox(win, dc, rect, flags);
+#else
+    // Only the GTK4 branch above draws through the window; the ones
+    // below draw from a style context and have no use for it.
+    wxUnusedVar(win);
+
 #ifdef __WXGTK3__
     cairo_t* cr = wxGetGTKDrawable(dc);
     if (cr == nullptr)
@@ -1119,6 +1360,7 @@ wxRendererGTK::DrawCheckBox(wxWindow*,
         info.indicator_width, info.indicator_height
     );
 #endif // __WXGTK3__/!__WXGTK3__
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 void
@@ -1204,7 +1446,21 @@ wxRendererGTK::DrawItemSelectionRect(wxWindow* win,
     {
         GtkWidget* treeWidget = wxGTKPrivate::GetTreeWidget();
 
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+        wxUnusedVar(treeWidget);
+
+        int state = GTK_STATE_FLAG_SELECTED;
+        if (flags & wxCONTROL_FOCUSED)
+            state |= GTK_STATE_FLAG_FOCUSED;
+
+        static wxGTKScratchWidget s_row(wxGTKCreateListRow, "row");
+
+        if ( !wxGTKDrawThemedWidget(win, s_row, drawable, rect,
+                                    GtkStateFlags(state)) )
+        {
+            m_rendererNative.DrawItemSelectionRect(win, dc, rect, flags);
+        }
+#elif defined(__WXGTK3__)
         GtkStyleContext* sc = gtk_widget_get_style_context(treeWidget);
         gtk_style_context_save(sc);
         int state = GTK_STATE_FLAG_SELECTED;
@@ -1251,7 +1507,19 @@ void wxRendererGTK::DrawFocusRect(wxWindow* win, wxDC& dc, const wxRect& rect, i
     else
         state = GTK_STATE_NORMAL;
 
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    // gtk_render_focus() is gone and GTK4 has no replacement that draws a
+    // focus indication on its own: there, focus is an `outline` CSS property
+    // of the widget that has it, and the only way to get one is to snapshot a
+    // focused widget -- which would bring its background and frame along.
+    //
+    // So wx draws its own here, which is what every platform without a native
+    // focus rectangle already does. It is a visible difference: a dotted
+    // rectangle rather than the theme's outline.
+    wxUnusedVar(drawable);
+    wxUnusedVar(state);
+    m_rendererNative.DrawFocusRect(win, dc, rect, flags);
+#elif defined(__WXGTK3__)
     GtkStyleContext* sc = gtk_widget_get_style_context(win->m_widget);
     gtk_style_context_save(sc);
     gtk_style_context_set_state(sc, stateTypeToFlags[state]);
@@ -1272,11 +1540,29 @@ void wxRendererGTK::DrawFocusRect(wxWindow* win, wxDC& dc, const wxRect& rect, i
 }
 
 // Uses the theme to draw the border and fill for something like a wxTextCtrl
-void wxRendererGTK::DrawTextCtrl(wxWindow*, wxDC& dc, const wxRect& rect, int flags)
+void wxRendererGTK::DrawTextCtrl(wxWindow* win, wxDC& dc, const wxRect& rect, int flags)
 {
     wxGTKDrawable* drawable = wxGetGTKDrawable(dc);
     if (drawable == nullptr)
         return;
+
+#ifdef __WXGTK4__
+    int state = GTK_STATE_FLAG_NORMAL;
+    if (flags & wxCONTROL_FOCUSED)
+        state = GTK_STATE_FLAG_FOCUSED;
+    if (flags & wxCONTROL_DISABLED)
+        state = GTK_STATE_FLAG_INSENSITIVE;
+
+    static wxGTKScratchWidget s_scratchEntry(gtk_entry_new);
+    if ( !wxGTKDrawThemedWidget(win, s_scratchEntry, drawable, rect,
+                                GtkStateFlags(state)) )
+    {
+        m_rendererNative.DrawTextCtrl(win, dc, rect, flags);
+    }
+#else
+    // Only the GTK4 branch above draws through the window; the ones
+    // below draw from a style context and have no use for it.
+    wxUnusedVar(win);
 
 #ifdef __WXGTK3__
     int state = GTK_STATE_FLAG_NORMAL;
@@ -1314,7 +1600,8 @@ void wxRendererGTK::DrawTextCtrl(wxWindow*, wxDC& dc, const wxRect& rect, int fl
         rect.width,
         rect.height
   );
-#endif
+#endif // __WXGTK3__/!__WXGTK3__
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 // Draw the equivalent of a wxComboBox
@@ -1332,7 +1619,29 @@ void wxRendererGTK::DrawComboBox(wxWindow* win, wxDC& dc, const wxRect& rect, in
 
     wx_gtk_widget_set_focusable(combo, (flags & wxCONTROL_CURRENT) != 0);
 
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    wxUnusedVar(combo);
+    wxUnusedVar(state);
+
+    int stateFlags = GTK_STATE_FLAG_NORMAL;
+    if ( flags & wxCONTROL_DISABLED )
+        stateFlags = GTK_STATE_FLAG_INSENSITIVE;
+    if ( flags & wxCONTROL_CURRENT )
+        stateFlags |= GTK_STATE_FLAG_FOCUSED;
+
+    // GtkDropDown replaces GtkComboBox, and it draws its frame and its arrow
+    // together -- so unlike the GTK+ 3 path below there is no separate call to
+    // DrawComboBoxDropButton() afterwards, which would put a second arrow on
+    // top of the one already there.
+    static wxGTKScratchWidget
+        s_combo([]() { return gtk_drop_down_new(nullptr, nullptr); });
+
+    if ( !wxGTKDrawThemedWidget(win, s_combo, drawable, rect,
+                                GtkStateFlags(stateFlags)) )
+    {
+        m_rendererNative.DrawComboBox(win, dc, rect, flags);
+    }
+#elif defined(__WXGTK3__)
     GtkStyleContext* sc = gtk_widget_get_style_context(combo);
     gtk_style_context_save(sc);
     gtk_style_context_set_state(sc, stateTypeToFlags[state]);
@@ -1413,11 +1722,44 @@ void wxRendererGTK::DrawChoice(wxWindow* win, wxDC& dc,
 
 
 // Draw a themed radio button
-void wxRendererGTK::DrawRadioBitmap(wxWindow*, wxDC& dc, const wxRect& rect, int flags)
+void wxRendererGTK::DrawRadioBitmap(wxWindow* win, wxDC& dc, const wxRect& rect, int flags)
 {
     wxGTKDrawable* drawable = wxGetGTKDrawable(dc);
     if (drawable == nullptr)
         return;
+
+#ifdef __WXGTK4__
+    int state = GTK_STATE_FLAG_NORMAL;
+    if (flags & wxCONTROL_CHECKED)
+        state |= GTK_STATE_FLAG_CHECKED;
+    if (flags & wxCONTROL_PRESSED)
+        state |= GTK_STATE_FLAG_ACTIVE;
+    if (flags & wxCONTROL_DISABLED)
+        state |= GTK_STATE_FLAG_INSENSITIVE;
+    if (flags & wxCONTROL_UNDETERMINED)
+        state |= GTK_STATE_FLAG_INCONSISTENT;
+    if (flags & wxCONTROL_CURRENT)
+        state |= GTK_STATE_FLAG_PRELIGHT;
+
+    // As for the check box: the "radio" node draws the circle and its mark
+    // together, so no geometry has to be computed here.
+    static wxGTKScratchWidget s_radio(wxGTKCreateRadioButton, "radio");
+
+    int minWidth = 0, minHeight = 0;
+    wxGTKMeasureWidget(
+        wxGTKFindChildNode(wxGTKPrivate::GetRadioButtonWidget(), "radio"),
+        &minWidth, &minHeight);
+
+    const wxRect r(rect.x + (rect.width  - minWidth)  / 2,
+                   rect.y + (rect.height - minHeight) / 2,
+                   minWidth, minHeight);
+
+    if ( !wxGTKDrawThemedWidget(win, s_radio, drawable, r, GtkStateFlags(state)) )
+        m_rendererNative.DrawRadioBitmap(win, dc, rect, flags);
+#else
+    // Only the GTK4 branch above draws through the window; the ones
+    // below draw from a style context and have no use for it.
+    wxUnusedVar(win);
 
 #ifdef __WXGTK3__
     int state = GTK_STATE_FLAG_NORMAL;
@@ -1503,5 +1845,6 @@ void wxRendererGTK::DrawRadioBitmap(wxWindow*, wxDC& dc, const wxRect& rect, int
         dc.LogicalToDeviceY(rect.y),
         rect.width, rect.height
     );
-#endif
+#endif // __WXGTK3__/!__WXGTK3__
+#endif // __WXGTK4__/!__WXGTK4__
 }

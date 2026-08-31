@@ -674,14 +674,33 @@ static bool CheckDirectoryForWebExt(const wxString& dirname)
     return false;
 }
 
-static bool TrySetWebExtensionsDirectory(WebKitWebContext *context, const wxString& dir)
-{
-    if (dir.empty() || !CheckDirectoryForWebExt(dir))
-        return false;
+#ifdef __WXGTK4__
 
-    webkit_web_context_set_web_extensions_directory(context, dir.utf8_str());
-    return true;
+// The directory the private D-Bus socket is created in.
+//
+// Its own, rather than the temporary directory at large: the sandbox has to
+// be told about it, and granting the web process all of /tmp to reach one
+// socket is more than this needs.
+static wxString GetWebExtensionSocketDir()
+{
+    static const wxString s_dir = []
+    {
+        wxString base = wxString::FromUTF8(g_get_user_runtime_dir());
+        if ( base.empty() )
+            base = wxString::FromUTF8(g_get_tmp_dir());
+
+        const wxString dir =
+            wxString::Format("%s/wxwebview-%lu", base, wxGetProcessId());
+
+        wxFileName::Mkdir(dir, 0700, wxPATH_MKDIR_FULL);
+
+        return dir;
+    }();
+
+    return s_dir;
 }
+
+#endif // __WXGTK4__
 
 static wxString GetStandardWebExtensionsDir()
 {
@@ -691,6 +710,36 @@ static wxString GetStandardWebExtensionsDir()
     return dir;
 }
 
+// Where our extension actually is, or empty if it was not found.
+//
+// The standard location first, then locations relative to the executable, so
+// that the tests and the sample can run before wxWebView is installed.
+static wxString FindWebExtensionsDir()
+{
+    if ( CheckDirectoryForWebExt(GetStandardWebExtensionsDir()) )
+        return GetStandardWebExtensionsDir();
+
+    const wxString exepath =
+        wxFileName(wxStandardPaths::Get().GetExecutablePath()).GetPath();
+    if ( !exepath.empty() )
+    {
+        wxString const directories[] =
+        {
+            exepath + "/..",
+            exepath + "/../..",
+            exepath,
+        };
+
+        for ( size_t n = 0; n < WXSIZEOF(directories); ++n )
+        {
+            if ( CheckDirectoryForWebExt(directories[n]) )
+                return directories[n];
+        }
+    }
+
+    return wxString();
+}
+
 static void
 wxgtk_initialize_web_extensions(WebKitWebContext *context,
                                 GDBusServer *dbusServer)
@@ -698,29 +747,10 @@ wxgtk_initialize_web_extensions(WebKitWebContext *context,
     const char *address = g_dbus_server_get_client_address(dbusServer);
     wxGtkVariant user_data(g_variant_new("(s)", address));
 
-    // Try to setup extension loading from the location it is supposed to be
-    // normally installed in.
-    if ( !TrySetWebExtensionsDirectory(context, GetStandardWebExtensionsDir()) )
-    {
-        // These relative locations are used as fallbacks to allow running
-        // the tests and sample using wxWebView before installing it.
-        wxString exepath = wxFileName(wxStandardPaths::Get().GetExecutablePath()).GetPath();
-        if ( !exepath.empty() )
-        {
-            wxString const directories[] =
-            {
-                exepath + "/..",
-                exepath + "/../..",
-                exepath,
-            };
-
-            for ( size_t n = 0; n < WXSIZEOF(directories); ++n )
-            {
-                if ( TrySetWebExtensionsDirectory(context, directories[n]) )
-                    break;
-            }
-        }
-    }
+    const wxString dir = FindWebExtensionsDir();
+    if ( !dir.empty() )
+        webkit_web_context_set_web_extensions_directory(context,
+                                                        dir.utf8_str());
 
     webkit_web_context_set_web_extensions_initialization_user_data(context,
                                                                    user_data.Release());
@@ -868,6 +898,40 @@ private:
     bool m_persistentStorage = true;
 #endif
 
+#ifdef __WXGTK4__
+    // The web process runs sandboxed and can open only what it was told
+    // about. It has to load our extension module and connect back to a
+    // private D-Bus socket, and neither is in a place the sandbox grants.
+    //
+    // This has to happen here, when the context is made: WebKit refuses to
+    // change the paths once it has spawned a process, and by the time
+    // ::initialize-web-process-extensions is emitted it has -- the emission
+    // is part of starting one. That is fatal rather than ignored, so calling
+    // it late aborts the application.
+    static void AllowSandboxPaths(WebKitWebContext* context)
+    {
+        // The default context is shared, so more than one configuration can
+        // reach this for the same one. The second call would be the fatal
+        // one, since a process has been spawned by then.
+        static bool s_done = false;
+        if ( s_done )
+            return;
+        s_done = true;
+
+        const wxString extDir = FindWebExtensionsDir();
+        if ( !extDir.empty() )
+        {
+            // Read-only: the web process only loads the module from here.
+            webkit_web_context_add_path_to_sandbox(context, extDir.utf8_str(),
+                                                   TRUE);
+        }
+
+        // Not read-only: connecting to a socket is not a read.
+        webkit_web_context_add_path_to_sandbox(
+            context, GetWebExtensionSocketDir().utf8_str(), FALSE);
+    }
+#endif // __WXGTK4__
+
     WebKitWebContext* GetOrCreateContext() const
     {
         if (m_webContext)
@@ -919,6 +983,8 @@ private:
             WEBKIT_WEBSITE_DATA_MANAGER(g_object_ref(
                 webkit_network_session_get_website_data_manager(
                     m_networkSession)));
+
+        AllowSandboxPaths(m_webContext);
 
         return m_webContext;
 #else // !__WXGTK4__
@@ -2345,7 +2411,16 @@ wxWebViewWebKit::GetClassDefaultAttributes(wxWindowVariant WXUNUSED(variant))
 
 void wxWebViewWebKit::SetupWebExtensionServer()
 {
+#ifdef __WXGTK4__
+    // Our own directory, which the sandbox was told about when the context
+    // was created; the temporary directory at large is not reachable from
+    // the web process.
+    const wxString socketDir = GetWebExtensionSocketDir();
+    wxGtkString address(g_strdup_printf("unix:tmpdir=%s",
+                                        (const char*)socketDir.utf8_str()));
+#else
     wxGtkString address(g_strdup_printf("unix:tmpdir=%s", g_get_tmp_dir()));
+#endif
     wxGtkString guid(g_dbus_generate_guid());
     wxGtkObject<GDBusAuthObserver> observer(g_dbus_auth_observer_new());
     wxGtkError error;

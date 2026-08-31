@@ -67,6 +67,7 @@ gcc -o ref gtk3-reference-values.c $(pkg-config --cflags --libs gtk+-3.0) \
 | `gtk4-dialogbutton-vs-button.c` | Are `GtkColorDialogButton`/`GtkFontDialogButton` drop-in replacements for the deprecated `GtkColorButton`/`GtkFontButton` that `clrpicker.cpp` and `fontpicker.cpp` use? (Value round trips are exact, and the new buttons report the same font string as the old one. One trap, and it is the whole reason the migration needs care: the replacements have no `"color-set"`/`"font-set"` signal, only a property notify -- and that notify fires for *our own* writes too, which the old signals never did. Without blocking the handler around the write, `SetColour()` raises a `wxColourPickerEvent` that no user asked for. Part of #180.) |
 | `gtk4-assertdlg-backtrace.cpp` | Does the assert dialog's backtrace list still round-trip after moving from `GtkTreeView` to `GtkColumnView`? (Yes. It exists because that dialog is unreachable from the test suite -- it appears only on an assertion failure and its entry points are not exported -- so the conversion would otherwise have gone in with no functional check, which is how #181's substitution shipped drawing nothing. Compiles `assertdlg_gtk.cpp` into itself.) |
 | `gtk4-columnview-vs-dataview.c` | Can `GtkColumnView` carry what `wxDataViewCtrl` needs -- a tree, per-column renderers, cells that draw themselves, in-place editing, per-column sorting? (All of it, so the 143 warnings in `dataview.cpp` are work rather than a wall -- except drag and drop, which this does not cover. Two traps: `GtkTreeListModel` wraps items in a `GtkTreeListRow` that has to be unwrapped, and iterating the main loop from inside a callback hangs.) |
+| `gtk4-entry-completion-parts.c` | `GtkEntryCompletion` is deprecated in GTK 4.10 with no replacement, so `wxTextEntry::AutoComplete()` has to be rebuilt from parts. Three things decide whether the obvious construction -- a `GtkPopover` under the entry over a filtered `GtkListView` -- behaves like a completion popup rather than a menu. (All three yes: `autohide=FALSE` leaves the focus where it was, `GtkStringFilter` in prefix mode filters as `GtkEntryCompletion` did, and a capture-phase key controller can take Up/Down/Return while everything else reaches the entry. **The trap is the focus check**: a `GtkEntry` delegates editing to an inner `GtkText`, so `gtk_widget_has_focus(entry)` is FALSE even when the entry is where typing goes -- the first version of this probe reported "the popup stole the focus" on that basis. Ask `gtk_root_get_focus()` instead.) |
 | `gtk3-reference-values.c` + `gtk4-comparison-values.c` | Differential check: does the GTK4 real-widget approach return the same values as the GTK3 synthetic-path approach for the same logical query? |
 
 ## Reading the differential check
@@ -211,6 +212,101 @@ numbers should be thrown away.
 The answer is in `docs/gtk/wayland-testing.md`: three moves, no movement, and
 wx reporting all three as having happened. It is the first half of issue #134.
 
+After its own moves the probe keeps reporting once a second, and the `WATCH`
+lines carry the running count of `wxEVT_MOVE`. The compositor is told to move
+the window during that window of time, so the other half of #166 -- a move
+that really happens sending no event -- lands in the log as a count that does
+not change, rather than as output that is not there. An absence proves
+nothing about a probe that might simply have exited.
+
+## `wayland-screen-coords.cpp` — are screen coordinates screen coordinates?
+
+```
+./wayland-screen-coords.sh /path/to/wx-build
+```
+
+The probe prints what `ClientToScreen()` and `ScreenToClient()` make of a
+frame and of a child inside it. The driver supplies the witness both times:
+the X server under a private Xvfb with openbox, the compositor under headless
+sway. A wrong answer on both backends would be a broken probe; a wrong answer
+only where the position is unknowable is the defect.
+
+```
+X server says the frame is at: (441,392)
+WX frame-client-origin (440,370)
+WX roundtrip (17,23) -> (457,393) -> (17,23)
+
+compositor says the frame is at: (438,362) 404x302
+WX frame-client-origin (0,0)
+WX roundtrip (17,23) -> (17,23) -> (17,23)
+```
+
+Under Wayland the mapping is the identity: client coordinates are handed
+back labelled as screen coordinates, short by the whole position of the
+window. The round trip still agrees with itself, which is why this is easy
+to miss -- only an absolute answer, or one compared against something
+outside the process, is wrong.
+
+It also prints where the child sits inside the frame, because a `wxFrame`
+resizes a lone child to fill its client area: the child's origin equalling
+the frame's is then arithmetic rather than a second defect.
+
+It also drives the pointer to a known place and compares
+`ScreenToClient(wxGetMousePosition())` against the motion event, which is
+ground truth because GTK hands wx that position with no mapping involved:
+
+```
+WX motion event (80,108) | ScreenToClient(GetMousePosition) (80,108) | agree
+```
+
+They agree, on both backends. `wxGetMousePosition()` answers in the surface's
+coordinates and wx's "screen" space is that same space, so the two defects
+cancel -- which is why the identity mapping is mostly invisible, and what
+bounds its impact. `docs/gtk/wayland-testing.md` has the rule and the three
+ways out of it.
+
+When the pointer never reaches the window the probe says so rather than
+printing nothing: an empty comparison and a comparison that agreed look
+identical otherwise. Driving the pointer needs `wldrag` on the Wayland side
+(headless sway has no pointer device of its own); note that `wldrag.c` is C++
+despite its name.
+
+This is issue #214, and it is *not* the same code path as #166. Nothing here
+reads `m_x`/`m_y`, so the fix for that one changes no number above.
+
+## `sni-roundtrip.sh` — does a GTK4 tray icon reach a panel?
+
+```
+./sni-roundtrip.sh /path/to/wx-build
+```
+
+GTK4 removed `GtkStatusIcon`, so `wxTaskBarIcon` talks the
+StatusNotifierItem D-Bus interfaces itself (issue #216). Testing that
+normally means a desktop with a tray, which no CI has. It does not have to:
+`sni-watcher.c` is a stand-in `org.kde.StatusNotifierWatcher`, and
+`dbus-run-session` gives it a private bus, so the whole thing runs headless.
+
+The watcher does what a panel does *after* adopting an item -- reads its
+properties back, fetches the menu layout, and clicks an item -- rather than
+counting the registration call. That is the difference between a test and a
+formality: the first run of it registered successfully and then timed out on
+all eight property reads, which is an icon a panel would show as nothing.
+The cause was the item registering synchronously and so being unable to
+answer while it waited.
+
+Two controls. The watcher runs alone first and must report
+`WATCHER-TIMEOUT` and fail, so a run in which nothing registers cannot pass.
+And the check on the output asks what the layout *contains* -- a separator
+typed as one, a check item carrying its state, a submenu still nested, a
+disabled item still disabled -- plus that the click arrived back in the
+application with the id it gave the item. An earlier version matched
+property *names*, which an unreadable property prints too, and passed the
+deadlocked run above.
+
+The probe is written against the public `wxTaskBarIcon` only. Reaching past
+it into `wxStatusNotifierItem` would answer a question about the probe
+rather than about wx.
+
 ## `crash-capture.sh` — what to collect when a sample crashes elsewhere
 
 Some crashes only happen on a real desktop: a running session bus, a desktop
@@ -298,3 +394,57 @@ git log --oneline -1
 grep -c wxAuiGetDragClientPosition ../src/aui/framemanager.cpp
 find . -name '*framemanager.o' -newer ../src/aui/framemanager.cpp
 ```
+
+## `sway-up.sh` — a compositor that is actually there
+
+Prints the socket of a live headless sway, starting one if none answers.
+Sway exits on its own often enough here that a run which "failed" has to be
+checked against whether the compositor was still up, and a stale socket file
+left behind by a dead one answers nothing while looking exactly like a live
+one. Every Wayland probe should get its `SWAYSOCK` from this rather than from
+`ls -t`.
+
+```sh
+export SWAYSOCK=$(docs/gtk/probes/sway-up.sh)
+```
+
+## `aui-redock-floating.sh` — the reproduction for #167
+
+```
+$ aui-redock-floating.sh x11
+  RESULT PASS the floating pane docked again
+  dock logic ran 137 times
+
+$ aui-redock-floating.sh wayland
+  pane was dragged 60,85 -> 262,597
+  RESULT FAIL ended up floating, not docked
+  dock logic ran 0 times
+```
+
+Same code, same drag, opposite outcomes, and both controls hold: the Wayland
+line shows the window really did move, so the drag happened, and the X11 leg
+passes, so the test can succeed.
+
+Two things about the drag are load-bearing, and every scripted attempt at this
+bug before finding the first of them was measuring nothing at all.
+
+**Three pixels at a time.** `wxAuiFloatingFrame::OnMoveEvent()` discards any
+move larger than that outright:
+
+```cpp
+if ((abs(winRect.x - m_lastRect.x) > 3) ||
+    (abs(winRect.y - m_lastRect.y) > 3))
+    return;
+```
+
+A drag that jumps in tens of pixels has *every* event thrown away, reaches no
+dock logic, and reports a failure that belongs to the harness. A person's hand
+produces a continuous stream of small moves and never notices this.
+
+**Finish about fifteen pixels from the edge**, because that is where the dock
+zone is. Dropping sixty pixels in leaves the pane floating on X11 too, which
+looks exactly like the bug and is not.
+
+The pane is floated through the manager rather than by dragging
+(`AUIDOCK_START_FLOATING`), so a failure here cannot be a failed undock
+wearing a re-dock's clothes.

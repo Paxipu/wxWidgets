@@ -209,8 +209,10 @@ bool wxGTKSetWindowShape(GtkWidget* widget, const cairo_region_t* region)
 // so honour the request there rather than letting wxTopLevelWindow::Move() and
 // GetPosition() drift into reporting a position nothing ever applied.
 //
-// On Wayland this is a no-op, which is the most that can be done.
-static void wx_gtk_window_move(GtkWindow* window, int x, int y)
+// On Wayland this is a no-op, which is the most that can be done. Returns
+// whether the request was issued at all, so a caller that reports moves to
+// the application can tell a move that happened from one that could not.
+static bool wx_gtk_window_move(GtkWindow* window, int x, int y)
 {
 #ifdef GDK_WINDOWING_X11
     GdkSurface* const surface = gtk_native_get_surface(GTK_NATIVE(window));
@@ -223,13 +225,15 @@ static void wx_gtk_window_move(GtkWindow* window, int x, int y)
 
         XMoveWindow(GDK_SURFACE_XDISPLAY(surface), GDK_SURFACE_XID(surface),
                     x, y);
-        return;
+        return true;
     }
 #endif // GDK_WINDOWING_X11
 
     wxUnusedVar(window);
     wxUnusedVar(x);
     wxUnusedVar(y);
+
+    return false;
 }
 
 #endif // __WXGTK4__
@@ -2292,17 +2296,25 @@ void wxTopLevelWindowGTK::DoSetSize( int x, int y, int width, int height, int si
     if ( m_x != old_x || m_y != old_y )
     {
 #ifdef __WXGTK4__
-        wx_gtk_window_move( GTK_WINDOW(m_widget), m_x, m_y );
+        const bool moved = wx_gtk_window_move( GTK_WINDOW(m_widget), m_x, m_y );
 #else
         gtk_window_move( GTK_WINDOW(m_widget), m_x, m_y );
+        const bool moved = true;
 #endif
-        // Note that under GTK4 on Wayland nothing actually moved: the event
-        // then reports the position wx was asked for, not one the compositor
-        // confirmed, because it will neither position a window nor say where
-        // it ended up.
-        wxMoveEvent event(wxPoint(m_x, m_y), GetId());
-        event.SetEventObject(this);
-        HandleWindowEvent(event);
+
+        // Say the window moved only where it could: under Wayland a client
+        // may not position its own toplevel, and an event carrying m_x and
+        // m_y would name a position the window has never been at. This is
+        // acted on rather than ignored -- wxComboCtrl closes its popup on it
+        // and wxAUI docks a floating pane from it. GetPosition() still
+        // answers with what was asked for, which is a separate question:
+        // see docs/gtk/wayland-testing.md.
+        if ( moved )
+        {
+            wxMoveEvent event(wxPoint(m_x, m_y), GetId());
+            event.SetEventObject(this);
+            HandleWindowEvent(event);
+        }
     }
 
     if (m_width != oldSize.x || m_height != oldSize.y)

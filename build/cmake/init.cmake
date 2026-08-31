@@ -551,7 +551,12 @@ if(wxUSE_GUI)
                     endif()
                 endforeach()
             endif()
-            if(WXGTK3 AND OpenGL_EGL_FOUND AND wxUSE_GLCANVAS_EGL)
+            # WXGTK3 here means the gtk3 toolkit only, but configure.ac's
+            # WXGTK3 is set for GTK4 as well, so autoconf enables the EGL
+            # canvas for both and CMake was enabling it for neither of the two
+            # -- wxHAS_EGL was 1 in an autoconf GTK4 build and unset in a
+            # CMake one of the same tree.
+            if((WXGTK3 OR WXGTK4) AND OpenGL_EGL_FOUND AND wxUSE_GLCANVAS_EGL)
                 if(TARGET OpenGL::EGL)
                     set(OPENGL_LIBRARIES OpenGL::EGL ${OPENGL_LIBRARIES})
                 else()
@@ -579,7 +584,7 @@ if(wxUSE_GUI)
             message(WARNING "OpenGL not found, wxGLCanvas won't be available")
             wx_option_force_value(wxUSE_OPENGL OFF)
         endif()
-        if(UNIX AND (NOT WXGTK3 OR NOT OpenGL_EGL_FOUND))
+        if(UNIX AND ((NOT WXGTK3 AND NOT WXGTK4) OR NOT OpenGL_EGL_FOUND))
             wx_option_force_value(wxUSE_GLCANVAS_EGL OFF)
         endif()
     endif()
@@ -599,6 +604,19 @@ if(wxUSE_GUI)
                     endif()
                     if(NOT WEBKIT2_FOUND)
                         find_package(WEBKIT 3.0)
+                    endif()
+                elseif(WXGTK4)
+                    # webkitgtk-6.0 is a different package rather than a
+                    # newer webkit2gtk, so it gets its own find module. What
+                    # it feeds is still the WEBKIT2 backend: wx builds GTK4
+                    # webview from src/gtk/webview_webkit2.cpp, and
+                    # configure.ac likewise sets USE_WEBVIEW_WEBKIT2 here.
+                    find_package(WEBKITGTK6)
+                    if(WEBKITGTK6_FOUND)
+                        set(WEBKIT2_FOUND TRUE)
+                        set(WEBKIT2_INCLUDE_DIR ${WEBKITGTK6_INCLUDE_DIRS})
+                        set(WEBKIT2_LIBRARIES ${WEBKITGTK6_LIBRARIES})
+                        set(WEBKIT_LIBSOUP_VERSION 3.0)
                     endif()
                 endif()
                 find_package(LIBSOUP ${WEBKIT_LIBSOUP_VERSION})

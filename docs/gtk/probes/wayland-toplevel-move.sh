@@ -51,10 +51,10 @@ run_under_x11()
     env -u WAYLAND_DISPLAY DISPLAY=:77 GDK_BACKEND=x11 \
         LD_LIBRARY_PATH="$BUILD/lib" "$PROBE" >"$WORK/x11.out" 2>&1 &
     probe=$!
-    sleep 4
+    sleep 10
     echo "X server says the window is at: $(x11_rect :77)"
     echo "-- what wx believed --"
-    grep '^MOVE' "$WORK/x11.out" || cat "$WORK/x11.out"
+    grep -E '^(MOVE|EVENT|DONE|WATCH)' "$WORK/x11.out" || cat "$WORK/x11.out"
     kill $probe $xvfb 2>/dev/null || true
     wait $probe 2>/dev/null || true
 }
@@ -93,7 +93,7 @@ run_under_wayland()
 
     # The harness control.  If this one does not move either, stop reading.
     swaymsg '[title="movetest"] move position 900 700' >/dev/null 2>&1 || true
-    sleep 1
+    sleep 4
     echo "after the compositor moved it: $(rect_of movetest)"
 
     echo "-- what wx believed --"

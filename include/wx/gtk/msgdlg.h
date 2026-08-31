@@ -40,9 +40,15 @@ private:
     virtual wxString GetDefaultCancelLabel() const override;
     virtual wxString GetDefaultHelpLabel() const override;
 
+#ifndef __WXGTK4__
     // create the real GTK+ dialog: this is done from ShowModal() to allow
-    // changing the message between constructing the dialog and showing it
+    // changing the message between constructing the dialog and showing it.
+    //
+    // Not under GTK4: GtkAlertDialog is a controller object rather than a
+    // widget, so there is no dialog to create -- ShowModal() drives it
+    // directly and there is nothing between calls.
     void GTKCreateMsgDialog();
+#endif
 
     wxDECLARE_DYNAMIC_CLASS(wxMessageDialog);
 };

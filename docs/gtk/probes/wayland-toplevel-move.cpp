@@ -20,6 +20,10 @@ namespace
 const int MOVE_TARGETS[][2] = { { 400, 300 }, { 700, 120 }, { 150, 600 } };
 const size_t MOVE_COUNT = WXSIZEOF(MOVE_TARGETS);
 
+// How many one-second reports to make after the moves are over. The driver
+// asks the compositor to move the window during this window of time.
+const int WATCH_TICKS = 6;
+
 class MoveProbeFrame : public wxFrame
 {
 public:
@@ -28,6 +32,8 @@ public:
                   wxPoint(50, 50), wxSize(320, 200))
     {
         m_step = 0;
+        m_events = 0;
+        m_watch = 0;
         m_timer.SetOwner(this);
         Bind(wxEVT_TIMER, &MoveProbeFrame::OnTimer, this);
         Bind(wxEVT_MOVE, &MoveProbeFrame::OnMove, this);
@@ -38,8 +44,10 @@ public:
 private:
     void OnMove(wxMoveEvent& event)
     {
+        m_events++;
         wxPrintf("EVENT  wxEVT_MOVE says (%d,%d)\n",
                  event.GetPosition().x, event.GetPosition().y);
+        fflush(stdout);
         event.Skip();
     }
 
@@ -47,10 +55,29 @@ private:
     {
         if ( m_step >= MOVE_COUNT )
         {
-            // Stay up rather than closing: the driver script wants to ask the
-            // compositor about this window after the moves are over.
-            m_timer.Stop();
-            wxPrintf("DONE\n");
+            // The moves are over, but the run is not: the driver now asks the
+            // compositor to move this window itself. Keep reporting, once a
+            // second, so that a move the compositor really performs can be
+            // seen arriving -- or not arriving -- rather than inferred from
+            // an absence of output. WATCH lines carry the running count of
+            // wxEVT_MOVE, so a compositor move that sends none says so in a
+            // number.
+            if ( m_watch == 0 )
+            {
+                wxPrintf("DONE   wxEVT_MOVE seen so far: %d\n", m_events);
+                fflush(stdout);
+                m_timer.Start(1000);
+            }
+
+            if ( ++m_watch > WATCH_TICKS )
+            {
+                m_timer.Stop();
+                return;
+            }
+
+            const wxPoint pos = GetPosition();
+            wxPrintf("WATCH  t+%ds wx says (%d,%d), wxEVT_MOVE total %d\n",
+                     m_watch, pos.x, pos.y, m_events);
             fflush(stdout);
             return;
         }
@@ -74,6 +101,8 @@ private:
 
     wxTimer m_timer;
     size_t m_step;
+    int m_events;
+    int m_watch;
 };
 
 class MoveProbeApp : public wxApp

@@ -14,6 +14,18 @@ in CI on the GTK4 job. If a GTK upgrade changes something fundamental, that
 check is what should catch it; these programs are then useful for
 investigating what changed.
 
+## Editing this file
+
+Both instances add entries here, so this file is marked `merge=union` in
+the `.gitattributes` beside it: a merge keeps the lines from both sides
+instead of stopping on a conflict, and appending a table row or a section
+of your own therefore merges by itself.
+
+Union merges never conflict, including when they should. Two branches that
+edit the *same* line leave both versions of it in the file, one after the
+other, and the merge reports success. So append freely, and change existing
+prose in one branch at a time.
+
 ## Building and running
 
 Each is a single file with no dependencies beyond GTK itself. A display is

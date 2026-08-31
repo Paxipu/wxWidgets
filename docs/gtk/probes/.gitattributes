@@ -1,0 +1,5 @@
+# Both instances add probe entries to README.md and the additions are
+# disjoint, so keep the lines from both sides of a merge rather than
+# stopping on a conflict. Union merges never conflict, including when they
+# should -- see "Editing this file" in README.md.
+README.md merge=union

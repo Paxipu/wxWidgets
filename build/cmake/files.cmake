@@ -1325,6 +1325,7 @@ set(GTK2_LOWLEVEL_SRC
     src/gtk/dcclient.cpp
     src/gtk/dcmemory.cpp
     src/gtk/dcscreen.cpp
+    src/gtk/dbusmenu.cpp
 )
 
 set(GTK_LOWLEVEL_HDR

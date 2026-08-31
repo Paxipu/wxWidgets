@@ -58,8 +58,19 @@ public:
     // Show(): the Menu property is read once when the item is adopted.
     void SetMenuPath(const wxString& path);
 
-    // Owns the name, exports the object, and registers with the watcher.
-    // Returns false if any of that failed, having logged why.
+    // Get on the session bus without exporting anything yet. Show() does
+    // this itself, but a caller that wants to serve a menu has to build it
+    // on this same connection -- the panel reaches the menu through the bus
+    // name the item is registered under -- and so needs the connection
+    // before the item goes up.
+    bool Connect();
+
+    GDBusConnection* GetConnection() const { return m_connection; }
+
+    // Exports the object and asks the watcher to adopt it. Returns false if
+    // that could not even be attempted, having logged why; a true return
+    // means the item is on the bus, not that a panel has taken it, which is
+    // what IsShown() reports once the answer arrives.
     bool Show();
 
     void Hide();

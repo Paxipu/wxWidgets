@@ -26,6 +26,7 @@ echo "== building =="
 gcc -o "$WORK/watcher" "$HERE/sni-watcher.c" \
     $(pkg-config --cflags --libs gio-2.0)
 g++ -o "$WORK/item" "$HERE/sni-item.cpp" "$SRC/src/gtk/statusnotifier.cpp" \
+    "$SRC/src/gtk/dbusmenu.cpp" \
     -I"$SRC/include" \
     $("$BUILD/wx-config" --cxxflags) $(pkg-config --cflags gio-2.0) \
     $("$BUILD/wx-config" --libs core,base) $(pkg-config --libs gio-2.0)
@@ -80,12 +81,42 @@ INNER
     # back exists to catch.
     unreadable=$(grep -c '<unreadable' "$WORK/watcher.out" || true)
 
+    # The menu has to be checked for what it contains, not for having
+    # answered. Each of these is a different way for the walk to be wrong
+    # while still producing output: a separator that came out as an ordinary
+    # item, a check item with no state, a submenu that was flattened, a
+    # disabled item reported enabled.
+    ok=1
+    for want in \
+        'MENU-REVISION' \
+        'label=_Open window' \
+        'label=Stay on _top type=standard enabled=1 toggle=checkmark state=1' \
+        'type=separator' \
+        'label=_More .* children=submenu' \
+        'label=Su_bitem' \
+        'label=E_xit type=standard enabled=0'
+    do
+        grep -qE "$want" "$WORK/watcher.out" || {
+            echo "  missing from the layout: $want"
+            ok=0
+        }
+    done
+
+    # And the click has to arrive on the other side. Without this the menu
+    # could be readable and inert.
+    grep -q 'ITEM-MENU-CLICKED' "$WORK/item.out" || {
+        echo "  the click never reached the application"
+        ok=0
+    }
+
     if grep -q REGISTERED "$WORK/watcher.out" &&
        grep -q "PROP IconName *'" "$WORK/watcher.out" &&
        grep -q "PROP Id *'" "$WORK/watcher.out" &&
-       [ "$unreadable" -eq 0 ]
+       [ "$unreadable" -eq 0 ] &&
+       [ "$ok" -eq 1 ]
     then
-        echo "  RESULT PASS the panel adopted the item and read it back"
+        echo "  RESULT PASS the panel read the item, walked the menu," \
+             "and the click came back"
     else
         echo "  RESULT FAIL ($unreadable unreadable properties)"
         return 1

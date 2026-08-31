@@ -283,21 +283,29 @@ bool wxStatusNotifierItem::RegisterWithWatcher()
     return true;
 }
 
+bool wxStatusNotifierItem::Connect()
+{
+    if ( m_connection )
+        return true;
+
+    wxGtkError error;
+    m_connection = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, error.Out());
+    if ( !m_connection )
+    {
+        wxLogTrace(TRACE_SNI, "no session bus: %s", error.GetMessage());
+        return false;
+    }
+
+    return true;
+}
+
 bool wxStatusNotifierItem::Show()
 {
     if ( m_registered )
         return true;
 
-    wxGtkError error;
-    if ( !m_connection )
-    {
-        m_connection = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, error.Out());
-        if ( !m_connection )
-        {
-            wxLogTrace(TRACE_SNI, "no session bus: %s", error.GetMessage());
-            return false;
-        }
-    }
+    if ( !Connect() )
+        return false;
 
     GDBusNodeInfo* const node = GetItemNodeInfo();
     if ( !node )

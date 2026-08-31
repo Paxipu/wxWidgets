@@ -1335,6 +1335,7 @@ GTK2_LOWLEVEL_SRC =
     $(GTK_LOWLEVEL_SRC)
     src/gtk/dcclient.cpp
     src/gtk/dcmemory.cpp
+    src/gtk/dbusmenu.cpp
     src/gtk/dcscreen.cpp
 GTK_LOWLEVEL_HDR =
     $(GTK_PLATFORM_HDR)

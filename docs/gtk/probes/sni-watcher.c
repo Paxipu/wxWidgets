@@ -39,6 +39,7 @@ static GMainLoop* loop;
 static int seen;
 static gchar* pending;
 static GDBusConnection* pending_conn;
+static gchar* menu_path;
 
 static void read_back(GDBusConnection* conn, const char* service)
 {
@@ -65,9 +66,114 @@ static void read_back(GDBusConnection* conn, const char* service)
         g_variant_get(res, "(v)", &value);
         gchar* printed = g_variant_print(value, FALSE);
         printf("PROP %-14s %s\n", PROPS[i], printed);
+
+        if ( strcmp(PROPS[i], "Menu") == 0 )
+            menu_path = g_variant_dup_string(value, NULL);
+
         g_free(printed);
         g_variant_unref(value);
         g_variant_unref(res);
+    }
+
+    fflush(stdout);
+}
+
+// Walk the layout the way a panel builds its menu from it, printing one
+// MENU line per item so the test can see labels, states and nesting rather
+// than only that a reply arrived.
+static void walk_layout(GVariant* node, int depth)
+{
+    gint32 id = 0;
+    GVariant* props = NULL;
+    GVariant* children = NULL;
+
+    g_variant_get(node, "(i@a{sv}@av)", &id, &props, &children);
+
+    if ( id != 0 )
+    {
+        const gchar* label = NULL;
+        const gchar* type = NULL;
+        const gchar* toggle = NULL;
+        const gchar* kids = NULL;
+        gboolean enabled = TRUE;
+        gint32 state = -1;
+
+        g_variant_lookup(props, "label", "&s", &label);
+        g_variant_lookup(props, "type", "&s", &type);
+        g_variant_lookup(props, "enabled", "b", &enabled);
+        g_variant_lookup(props, "toggle-type", "&s", &toggle);
+        g_variant_lookup(props, "toggle-state", "i", &state);
+        g_variant_lookup(props, "children-display", "&s", &kids);
+
+        printf("MENU %*sid=%d label=%s type=%s enabled=%d toggle=%s state=%d"
+               " children=%s\n",
+               depth * 2, "", id,
+               label ? label : "-", type ? type : "standard",
+               enabled ? 1 : 0, toggle ? toggle : "-", state,
+               kids ? kids : "-");
+    }
+
+    GVariantIter it;
+    GVariant* child;
+    g_variant_iter_init(&it, children);
+    while ( (child = g_variant_iter_next_value(&it)) )
+    {
+        GVariant* inner = g_variant_get_variant(child);
+        walk_layout(inner, depth + 1);
+        g_variant_unref(inner);
+        g_variant_unref(child);
+    }
+
+    g_variant_unref(props);
+    g_variant_unref(children);
+}
+
+// Ask the menu named by the item's Menu property for its layout, then click
+// the first ordinary item, which is what makes the return path testable.
+static void read_menu(GDBusConnection* conn, const char* service,
+                      const char* path)
+{
+    GError* error = NULL;
+    GVariant* res = g_dbus_connection_call_sync(
+        conn, service, path, "com.canonical.dbusmenu", "GetLayout",
+        g_variant_new("(iias)", 0, -1, NULL),
+        G_VARIANT_TYPE("(u(ia{sv}av))"), G_DBUS_CALL_FLAGS_NONE, 3000,
+        NULL, &error);
+
+    if ( !res )
+    {
+        printf("MENU <unreadable: %s>\n", error->message);
+        g_error_free(error);
+        fflush(stdout);
+        return;
+    }
+
+    guint32 revision = 0;
+    GVariant* layout = NULL;
+    g_variant_get(res, "(u@(ia{sv}av))", &revision, &layout);
+    printf("MENU-REVISION %u\n", revision);
+    walk_layout(layout, 0);
+    g_variant_unref(layout);
+    g_variant_unref(res);
+
+    // Click item 1: the first item of the top level menu, by the numbering
+    // the server documents.
+    GError* clickError = NULL;
+    GVariant* clicked = g_dbus_connection_call_sync(
+        conn, service, path, "com.canonical.dbusmenu", "Event",
+        g_variant_new("(isvu)", 1, "clicked",
+                      g_variant_new_int32(0), (guint32)0),
+        NULL, G_DBUS_CALL_FLAGS_NONE, 3000, NULL, &clickError);
+
+    if ( clicked )
+    {
+        printf("MENU-CLICKED 1\n");
+        g_variant_unref(clicked);
+    }
+    else
+    {
+        printf("MENU-CLICK-FAILED %s\n", clickError->message);
+        g_error_free(clickError);
     }
 
     fflush(stdout);
@@ -78,6 +184,9 @@ static gboolean do_read_back(gpointer u)
     (void)u;
 
     read_back(pending_conn, pending);
+
+    if ( menu_path && strcmp(menu_path, "/NO_DBUSMENU") != 0 )
+        read_menu(pending_conn, pending, menu_path);
 
     printf("WATCHER-DONE\n");
     fflush(stdout);

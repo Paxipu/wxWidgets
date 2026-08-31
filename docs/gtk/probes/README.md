@@ -212,6 +212,13 @@ numbers should be thrown away.
 The answer is in `docs/gtk/wayland-testing.md`: three moves, no movement, and
 wx reporting all three as having happened. It is the first half of issue #134.
 
+After its own moves the probe keeps reporting once a second, and the `WATCH`
+lines carry the running count of `wxEVT_MOVE`. The compositor is told to move
+the window during that window of time, so the other half of #166 -- a move
+that really happens sending no event -- lands in the log as a count that does
+not change, rather than as output that is not there. An absence proves
+nothing about a probe that might simply have exited.
+
 ## `crash-capture.sh` — what to collect when a sample crashes elsewhere
 
 Some crashes only happen on a real desktop: a running session bus, a desktop

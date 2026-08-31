@@ -19,9 +19,9 @@
 #include "wx/dataview.h"
 #include "wx/uiaction.h"
 
-#ifdef __WXGTK__
-    #include "waitfor.h"
-#endif // __WXGTK__
+// Not under __WXGTK__ any more: the layout tests below wait on every platform,
+// because "has the control laid anything out yet" is not a GTK question.
+#include "waitfor.h"
 
 #include "testableframe.h"
 #include "asserthelper.h"
@@ -859,6 +859,214 @@ TEST_CASE_METHOD(MultiColumnsDataViewCtrlTestCase,
     const int lastColumnMinWidth = lastColumnMaxWidth - 10;
     CHECK( m_lastColumn->GetWidth() <= lastColumnMaxWidth );
     CHECK( m_lastColumn->GetWidth() >= lastColumnMinWidth );
+}
+
+// The tests above all ask the control about its model. None of them asks
+// whether anything was ever laid out, so all of them would still pass against
+// a control that shows an empty box -- which is exactly the shape of bug that
+// reached a release in #187, where a renderer drew zero pixels and both the
+// suite and CI stayed green.
+//
+// HitTest() is the cheapest thing that cannot pass on an empty control: it
+// answers from where the rows actually are, so agreeing with GetItemRect()
+// means the rows exist, are laid out, and are where the control claims.
+
+TEST_CASE_METHOD(SingleSelectDataViewCtrlTestCase,
+                 "wxDVC::HitTestFindsItems",
+                 "[wxDataViewCtrl][item]")
+{
+    // The fixture expands m_root only, so m_grandchild is inside a collapsed
+    // container and correctly has no rectangle at all. Expand its parent too,
+    // so that every item below is one the control is actually showing.
+    m_dvc->Expand(m_child1);
+
+    // Rows have no geometry until the control has been laid out, which does
+    // not happen synchronously everywhere. Wait for the width as well as the
+    // height: with no column given, GetItemRect() takes the width from the
+    // columns, and under GTK+ 3 those are still 0 at the point where the rows
+    // already have their height. The same wait is why wxDVC::AppendTextColumn
+    // below watches wxDataViewColumn::GetWidth().
+    WaitFor("wxDataViewCtrl to lay out its rows", [this]() {
+        const wxRect rect = m_dvc->GetItemRect(m_grandchild);
+        return rect.height != 0 && rect.width != 0;
+    });
+
+    const wxDataViewItem items[] = { m_root, m_child1, m_grandchild, m_child2 };
+    for ( const wxDataViewItem& item : items )
+    {
+        const wxRect rect = m_dvc->GetItemRect(item);
+        INFO("item rect " << rect.x << "," << rect.y
+                          << " " << rect.width << "x" << rect.height);
+
+        REQUIRE( rect.height > 0 );
+        REQUIRE( rect.width > 0 );
+
+        wxDataViewItem hit;
+        wxDataViewColumn* col = nullptr;
+        m_dvc->HitTest(wxPoint(rect.x + rect.width / 2,
+                               rect.y + rect.height / 2), hit, col);
+
+        CHECK( hit == item );
+    }
+}
+
+// Two items may not be drawn on top of each other, and the order the control
+// reports them in has to be the order it draws them in.
+TEST_CASE_METHOD(SingleSelectDataViewCtrlTestCase,
+                 "wxDVC::ItemRectsDoNotOverlap",
+                 "[wxDataViewCtrl][item]")
+{
+    WaitFor("wxDataViewCtrl to lay out its rows", [this]() {
+        return m_dvc->GetItemRect(m_root).height != 0;
+    });
+
+    const wxRect rectRoot = m_dvc->GetItemRect(m_root);
+    const wxRect rectChild1 = m_dvc->GetItemRect(m_child1);
+    const wxRect rectChild2 = m_dvc->GetItemRect(m_child2);
+
+    REQUIRE( rectRoot.height > 0 );
+    REQUIRE( rectChild1.height > 0 );
+    REQUIRE( rectChild2.height > 0 );
+
+    // m_root is a container holding m_child1, which holds m_grandchild, and
+    // m_child2 comes after both, so this is also the order down the screen.
+    CHECK( rectRoot.y < rectChild1.y );
+    CHECK( rectChild1.y < rectChild2.y );
+
+    CHECK( rectRoot.GetBottom() <= rectChild1.y );
+    CHECK( rectChild1.GetBottom() <= rectChild2.y );
+}
+
+// Same idea across columns instead of down rows: the two columns have to
+// occupy different horizontal bands, and a point inside one of them has to be
+// reported as belonging to that one.
+TEST_CASE_METHOD(MultiColumnsDataViewCtrlTestCase,
+                 "wxDVC::HitTestFindsColumns",
+                 "[wxDataViewCtrl][column]")
+{
+    wxVector<wxVariant> values;
+    values.push_back("first");
+    values.push_back("second");
+    m_dvc->AppendItem(values);
+
+    const wxDataViewItem item = m_dvc->RowToItem(0);
+    REQUIRE( item.IsOk() );
+
+    WaitFor("wxDataViewCtrl to lay out its columns", [this, item]() {
+        return m_dvc->GetItemRect(item, m_firstColumn).width > 0
+                && m_dvc->GetItemRect(item, m_lastColumn).width > 0;
+    });
+
+    const wxRect rectFirst = m_dvc->GetItemRect(item, m_firstColumn);
+    const wxRect rectLast = m_dvc->GetItemRect(item, m_lastColumn);
+    INFO("first column " << rectFirst.x << "+" << rectFirst.width
+         << ", last column " << rectLast.x << "+" << rectLast.width);
+
+    REQUIRE( rectFirst.width > 0 );
+    REQUIRE( rectLast.width > 0 );
+
+    // Side by side, in order, without overlapping.
+    CHECK( rectFirst.GetRight() <= rectLast.x );
+
+    for ( int i = 0; i < 2; i++ )
+    {
+        const wxRect& rect = i ? rectLast : rectFirst;
+        const wxDataViewColumn* const expected = i ? m_lastColumn
+                                                   : m_firstColumn;
+
+        wxDataViewItem hit;
+        wxDataViewColumn* col = nullptr;
+        m_dvc->HitTest(wxPoint(rect.x + rect.width / 2,
+                               rect.y + rect.height / 2), hit, col);
+
+        INFO("column " << i);
+        CHECK( hit == item );
+        CHECK( col == expected );
+    }
+}
+
+// GetTopItem() and GetCountPerPage() answer from the view's own geometry
+// rather than from the model, so neither can be right about a control that
+// never laid anything out.
+TEST_CASE_METHOD(SingleSelectDataViewCtrlTestCase,
+                 "wxDVC::VisibleRange",
+                 "[wxDataViewCtrl][item]")
+{
+    WaitFor("wxDataViewCtrl to lay out its rows", [this]() {
+        return m_dvc->GetItemRect(m_root).height != 0;
+    });
+
+    // m_root is the first row and the control is not scrolled.
+    CHECK( m_dvc->GetTopItem() == m_root );
+
+    WaitFor("wxDataViewCtrl to know its page size", [this]() {
+        return m_dvc->GetCountPerPage() != wxNOT_FOUND;
+    });
+
+    // The fixture's control is 400x200 with four rows in it, so a page holds
+    // more than one row and fewer than a hundred. The point is not the exact
+    // number -- that depends on the theme's row height -- but that the control
+    // has a row height at all and knows how many fit.
+    const int perPage = m_dvc->GetCountPerPage();
+    INFO("rows per page " << perPage);
+    CHECK( perPage > 1 );
+    CHECK( perPage < 100 );
+}
+
+// Sorting is a statement about what order the rows are drawn in, and the only
+// wx API that reports that is where each item lands. wxDataViewListCtrl's
+// RowToItem() deliberately does not: it indexes the store, so it answers the
+// same before and after sorting and could not fail this test.
+TEST_CASE_METHOD(MultiColumnsDataViewCtrlTestCase,
+                 "wxDVC::SortingChangesRowOrder",
+                 "[wxDataViewCtrl][column]")
+{
+    const char* const labels[] = { "ccc", "aaa", "bbb" };
+    for ( const char* label : labels )
+    {
+        wxVector<wxVariant> values;
+        values.push_back(label);
+        values.push_back("x");
+        m_dvc->AppendItem(values);
+    }
+
+    const wxDataViewItem itemC = m_dvc->RowToItem(0);
+    const wxDataViewItem itemA = m_dvc->RowToItem(1);
+    const wxDataViewItem itemB = m_dvc->RowToItem(2);
+    REQUIRE( itemC.IsOk() );
+    REQUIRE( itemA.IsOk() );
+    REQUIRE( itemB.IsOk() );
+
+    WaitFor("wxDataViewCtrl to lay out its rows", [this, itemC]() {
+        return m_dvc->GetItemRect(itemC).height > 0;
+    });
+
+    // Unsorted, they are drawn in the order they were added.
+    CHECK( m_dvc->GetItemRect(itemC).y < m_dvc->GetItemRect(itemA).y );
+    CHECK( m_dvc->GetItemRect(itemA).y < m_dvc->GetItemRect(itemB).y );
+
+    m_firstColumn->SetSortable(true);
+    m_firstColumn->SetSortOrder(true /* ascending */);
+    m_dvc->GetModel()->Resort();
+
+    WaitFor("the sorted order to be laid out", [this, itemA, itemC]() {
+        return m_dvc->GetItemRect(itemA).y < m_dvc->GetItemRect(itemC).y;
+    });
+
+    CHECK( m_dvc->GetItemRect(itemA).y < m_dvc->GetItemRect(itemB).y );
+    CHECK( m_dvc->GetItemRect(itemB).y < m_dvc->GetItemRect(itemC).y );
+    CHECK( m_dvc->GetTopItem() == itemA );
+
+    m_firstColumn->SetSortOrder(false /* descending */);
+    m_dvc->GetModel()->Resort();
+
+    WaitFor("the reversed order to be laid out", [this, itemA, itemC]() {
+        return m_dvc->GetItemRect(itemC).y < m_dvc->GetItemRect(itemA).y;
+    });
+
+    CHECK( m_dvc->GetItemRect(itemC).y < m_dvc->GetItemRect(itemB).y );
+    CHECK( m_dvc->GetItemRect(itemB).y < m_dvc->GetItemRect(itemA).y );
+    CHECK( m_dvc->GetTopItem() == itemC );
 }
 
 #if wxUSE_UIACTIONSIMULATOR

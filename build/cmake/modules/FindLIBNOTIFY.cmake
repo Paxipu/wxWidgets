@@ -45,6 +45,36 @@ find_library(LIBNOTIFY_LIBRARIES
           ${LIBNOTIFY_LIBRARY_DIRS}
 )
 
+# pkg_check_modules() above sets LIBNOTIFY_VERSION, but the find_path() and
+# find_library() calls do not: they can succeed on their own when libnotify is
+# installed but its .pc file is not on the pkg-config search path.  The version
+# then stays empty, "" VERSION_LESS "0.7" is true, and the caller quietly
+# concludes the library is older than 0.7 -- which builds the pre-0.7 call to
+# notify_notification_new() against a modern libnotify and fails to compile.
+# Read the version out of the header when pkg-config could not supply it.
+if(LIBNOTIFY_INCLUDE_DIRS AND NOT LIBNOTIFY_VERSION)
+    set(_libnotify_features "${LIBNOTIFY_INCLUDE_DIRS}/notify-features.h")
+    if(EXISTS "${_libnotify_features}")
+        file(STRINGS "${_libnotify_features}" _libnotify_version_lines
+             REGEX "^#define[ \t]+NOTIFY_VERSION_(MAJOR|MINOR|MICRO)[ \t]+\\(-?[0-9]+\\)")
+        foreach(_part MAJOR MINOR MICRO)
+            foreach(_line ${_libnotify_version_lines})
+                if(_line MATCHES "NOTIFY_VERSION_${_part}[ \t]+\\(([0-9]+)\\)")
+                    set(_libnotify_${_part} "${CMAKE_MATCH_1}")
+                endif()
+            endforeach()
+        endforeach()
+        if(DEFINED _libnotify_MAJOR AND DEFINED _libnotify_MINOR AND DEFINED _libnotify_MICRO)
+            set(LIBNOTIFY_VERSION "${_libnotify_MAJOR}.${_libnotify_MINOR}.${_libnotify_MICRO}")
+        endif()
+        unset(_libnotify_MAJOR)
+        unset(_libnotify_MINOR)
+        unset(_libnotify_MICRO)
+        unset(_libnotify_version_lines)
+    endif()
+    unset(_libnotify_features)
+endif()
+
 include(FindPackageHandleStandardArgs)
 FIND_PACKAGE_HANDLE_STANDARD_ARGS(LIBNOTIFY REQUIRED_VARS LIBNOTIFY_INCLUDE_DIRS LIBNOTIFY_LIBRARIES
                                             VERSION_VAR   LIBNOTIFY_VERSION)

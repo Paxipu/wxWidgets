@@ -1272,13 +1272,26 @@ void wxRendererGTK::DrawFocusRect(wxWindow* win, wxDC& dc, const wxRect& rect, i
 }
 
 // Uses the theme to draw the border and fill for something like a wxTextCtrl
-void wxRendererGTK::DrawTextCtrl(wxWindow*, wxDC& dc, const wxRect& rect, int flags)
+void wxRendererGTK::DrawTextCtrl(wxWindow* win, wxDC& dc, const wxRect& rect, int flags)
 {
     wxGTKDrawable* drawable = wxGetGTKDrawable(dc);
     if (drawable == nullptr)
         return;
 
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    int state = GTK_STATE_FLAG_NORMAL;
+    if (flags & wxCONTROL_FOCUSED)
+        state = GTK_STATE_FLAG_FOCUSED;
+    if (flags & wxCONTROL_DISABLED)
+        state = GTK_STATE_FLAG_INSENSITIVE;
+
+    static wxGTKScratchWidget s_scratchEntry(gtk_entry_new);
+    if ( !wxGTKDrawThemedWidget(win, s_scratchEntry, drawable, rect,
+                                GtkStateFlags(state)) )
+    {
+        m_rendererNative.DrawTextCtrl(win, dc, rect, flags);
+    }
+#elif defined(__WXGTK3__)
     int state = GTK_STATE_FLAG_NORMAL;
     if (flags & wxCONTROL_FOCUSED)
         state = GTK_STATE_FLAG_FOCUSED;

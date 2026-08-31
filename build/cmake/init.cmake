@@ -551,7 +551,12 @@ if(wxUSE_GUI)
                     endif()
                 endforeach()
             endif()
-            if(WXGTK3 AND OpenGL_EGL_FOUND AND wxUSE_GLCANVAS_EGL)
+            # WXGTK3 here means the gtk3 toolkit only, but configure.ac's
+            # WXGTK3 is set for GTK4 as well, so autoconf enables the EGL
+            # canvas for both and CMake was enabling it for neither of the two
+            # -- wxHAS_EGL was 1 in an autoconf GTK4 build and unset in a
+            # CMake one of the same tree.
+            if((WXGTK3 OR WXGTK4) AND OpenGL_EGL_FOUND AND wxUSE_GLCANVAS_EGL)
                 if(TARGET OpenGL::EGL)
                     set(OPENGL_LIBRARIES OpenGL::EGL ${OPENGL_LIBRARIES})
                 else()
@@ -579,7 +584,7 @@ if(wxUSE_GUI)
             message(WARNING "OpenGL not found, wxGLCanvas won't be available")
             wx_option_force_value(wxUSE_OPENGL OFF)
         endif()
-        if(UNIX AND (NOT WXGTK3 OR NOT OpenGL_EGL_FOUND))
+        if(UNIX AND ((NOT WXGTK3 AND NOT WXGTK4) OR NOT OpenGL_EGL_FOUND))
             wx_option_force_value(wxUSE_GLCANVAS_EGL OFF)
         endif()
     endif()

@@ -219,6 +219,41 @@ that really happens sending no event -- lands in the log as a count that does
 not change, rather than as output that is not there. An absence proves
 nothing about a probe that might simply have exited.
 
+## `wayland-screen-coords.cpp` — are screen coordinates screen coordinates?
+
+```
+./wayland-screen-coords.sh /path/to/wx-build
+```
+
+The probe prints what `ClientToScreen()` and `ScreenToClient()` make of a
+frame and of a child inside it. The driver supplies the witness both times:
+the X server under a private Xvfb with openbox, the compositor under headless
+sway. A wrong answer on both backends would be a broken probe; a wrong answer
+only where the position is unknowable is the defect.
+
+```
+X server says the frame is at: (441,392)
+WX frame-client-origin (440,370)
+WX roundtrip (17,23) -> (457,393) -> (17,23)
+
+compositor says the frame is at: (438,362) 404x302
+WX frame-client-origin (0,0)
+WX roundtrip (17,23) -> (17,23) -> (17,23)
+```
+
+Under Wayland the mapping is the identity: client coordinates are handed
+back labelled as screen coordinates, short by the whole position of the
+window. The round trip still agrees with itself, which is why this is easy
+to miss -- only an absolute answer, or one compared against something
+outside the process, is wrong.
+
+It also prints where the child sits inside the frame, because a `wxFrame`
+resizes a lone child to fill its client area: the child's origin equalling
+the frame's is then arithmetic rather than a second defect.
+
+This is issue #214, and it is *not* the same code path as #166. Nothing here
+reads `m_x`/`m_y`, so the fix for that one changes no number above.
+
 ## `crash-capture.sh` — what to collect when a sample crashes elsewhere
 
 Some crashes only happen on a real desktop: a running session bus, a desktop

@@ -28509,7 +28509,13 @@ $as_echo "$as_me: WARNING: Wayland-specific code will be disabled" >&2;}
 
         if test "$wxUSE_TASKBARICON" = "yes"; then
             if test "$wxUSE_APPINDICATOR" = "yes"; then
-                if test "$WXGTK3" = 1; then
+                if test "$WXGTK4" = 1; then
+                                                                                                                                                                                                                                                                                                                                                                        if test "${with_appindicator+set}" = set; then
+                        { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: AppIndicator is not usable under GTK4: it exists only as a GTK+ 3 library, and GTK4 refuses to run in a process containing GTK 2/3 symbols" >&5
+$as_echo "$as_me: WARNING: AppIndicator is not usable under GTK4: it exists only as a GTK+ 3 library, and GTK4 refuses to run in a process containing GTK 2/3 symbols" >&2;}
+                    fi
+                    wxUSE_APPINDICATOR=no
+                elif test "$WXGTK3" = 1; then
 
 pkg_failed=no
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking for ayatana-appindicator3-0.1" >&5

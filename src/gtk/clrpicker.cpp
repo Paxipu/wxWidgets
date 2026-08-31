@@ -30,24 +30,13 @@
 // "color-set"
 //-----------------------------------------------------------------------------
 
-extern "C" {
-static void gtk_clrbutton_setcolor_callback(GtkColorButton *widget,
-                                            wxColourButton *p)
+// Common tail of both change callbacks below: take the new colour and tell
+// the world about it. Templated only because the native colour type differs
+// between the GTK versions -- GdkColor under GTK+ 2, GdkRGBA after it -- and
+// GTKSetColour() is overloaded for both.
+template <typename GdkColourType>
+static void wxGTKColourButtonChanged(wxColourButton* p, const GdkColourType& gdkColor)
 {
-    // update the m_colour member of the wxColourButton
-    wxASSERT(p);
-#ifdef __WXGTK4__
-    GdkRGBA gdkColor;
-    gtk_color_chooser_get_rgba(GTK_COLOR_CHOOSER(widget), &gdkColor);
-#elif defined(__WXGTK3__)
-    wxGCC_WARNING_SUPPRESS(deprecated-declarations)
-    GdkRGBA gdkColor;
-    gtk_color_button_get_rgba(widget, &gdkColor);
-    wxGCC_WARNING_RESTORE()
-#else
-    GdkColor gdkColor;
-    gtk_color_button_get_color(widget, &gdkColor);
-#endif
     p->GTKSetColour(gdkColor);
 
     // Fire the corresponding event: note that we want it to appear as
@@ -57,6 +46,45 @@ static void gtk_clrbutton_setcolor_callback(GtkColorButton *widget,
     wxColourPickerEvent event(parent, parent->GetId(), p->GetColour());
     p->HandleWindowEvent(event);
 }
+
+extern "C" {
+
+#ifdef __WXGTK4__
+
+// GtkColorDialogButton has no "color-set" signal -- the colour is a plain
+// property and the only notification is the property notify. That notify also
+// fires when *we* set the colour from UpdateColour(), which "color-set" never
+// did, so UpdateColour() blocks this handler; see the comment there.
+static void gtk_clrbutton_setcolor_callback(GObject *widget,
+                                            GParamSpec * WXUNUSED(pspec),
+                                            wxColourButton *p)
+{
+    wxASSERT(p);
+    wxGTKColourButtonChanged(
+        p, *gtk_color_dialog_button_get_rgba(GTK_COLOR_DIALOG_BUTTON(widget)));
+}
+
+#else // !__WXGTK4__
+
+static void gtk_clrbutton_setcolor_callback(GtkColorButton *widget,
+                                            wxColourButton *p)
+{
+    // update the m_colour member of the wxColourButton
+    wxASSERT(p);
+#ifdef __WXGTK3__
+    wxGCC_WARNING_SUPPRESS(deprecated-declarations)
+    GdkRGBA gdkColor;
+    gtk_color_button_get_rgba(widget, &gdkColor);
+    wxGCC_WARNING_RESTORE()
+#else
+    GdkColor gdkColor;
+    gtk_color_button_get_color(widget, &gdkColor);
+#endif
+    wxGTKColourButtonChanged(p, gdkColor);
+}
+
+#endif // __WXGTK4__/!__WXGTK4__
+
 }
 
 //-----------------------------------------------------------------------------
@@ -79,6 +107,21 @@ bool wxColourButton::Create( wxWindow *parent, wxWindowID id,
     }
 
     m_colour = col;
+#ifdef __WXGTK4__
+    // GtkColorButton is deprecated since GTK 4.10; GtkColorDialogButton is the
+    // replacement. It carries the settings that used to be properties of the
+    // button on a GtkColorDialog it owns, so the dialog has to exist first --
+    // gtk_color_dialog_button_new() takes our reference to it.
+    GtkColorDialog* const dialog = gtk_color_dialog_new();
+    gtk_color_dialog_set_with_alpha(dialog, (style & wxCLRP_SHOW_ALPHA) != 0);
+    m_widget = gtk_color_dialog_button_new(dialog);
+    gtk_color_dialog_button_set_rgba(GTK_COLOR_DIALOG_BUTTON(m_widget),
+                                     m_colour.GTKGetRGBA());
+    g_object_ref(m_widget);
+
+    g_signal_connect(m_widget, "notify::rgba",
+                    G_CALLBACK(gtk_clrbutton_setcolor_callback), this);
+#else // !__WXGTK4__
 #ifdef __WXGTK3__
     m_widget = gtk_color_button_new_with_rgba(m_colour.GTKGetRGBA());
 #else
@@ -92,6 +135,7 @@ bool wxColourButton::Create( wxWindow *parent, wxWindowID id,
     // GtkColourButton signals
     g_signal_connect(m_widget, "color-set",
                     G_CALLBACK(gtk_clrbutton_setcolor_callback), this);
+#endif // __WXGTK4__/!__WXGTK4__
 
 
     m_parent->DoAddChild( this );
@@ -109,7 +153,16 @@ wxColourButton::~wxColourButton()
 void wxColourButton::UpdateColour()
 {
 #ifdef __WXGTK4__
-    gtk_color_chooser_set_rgba(GTK_COLOR_CHOOSER(m_widget), m_colour.GTKGetRGBA());
+    // This is a programmatic change, so it must not look like the user picked
+    // a colour. The old "color-set" signal only fired for the latter, but the
+    // property notify we replaced it with fires for both, so block it here --
+    // otherwise SetColour() would emit a wxColourPickerEvent of its own.
+    g_signal_handlers_block_by_func(
+        m_widget, (gpointer)gtk_clrbutton_setcolor_callback, this);
+    gtk_color_dialog_button_set_rgba(GTK_COLOR_DIALOG_BUTTON(m_widget),
+                                     m_colour.GTKGetRGBA());
+    g_signal_handlers_unblock_by_func(
+        m_widget, (gpointer)gtk_clrbutton_setcolor_callback, this);
 #elif defined(__WXGTK3__)
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     gtk_color_button_set_rgba(GTK_COLOR_BUTTON(m_widget), m_colour.GTKGetRGBA());

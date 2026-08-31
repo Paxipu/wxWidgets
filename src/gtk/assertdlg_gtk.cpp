@@ -89,6 +89,107 @@ GtkWidget *gtk_assert_dialog_add_button (GtkAssertDialog *dlg, const gchar *labe
 
 #if wxUSE_STACKWALKER
 
+#ifdef __WXGTK4__
+
+/* One row of the backtrace. GtkColumnView has no columns of its own kind: the
+   model holds objects and each column's factory picks a field out of one, so
+   the four GtkListStore columns become four fields here. */
+#define WX_TYPE_ASSERT_FRAME (wx_assert_frame_get_type())
+G_DECLARE_FINAL_TYPE(WxAssertFrame, wx_assert_frame, WX, ASSERT_FRAME, GObject)
+
+struct _WxAssertFrame
+{
+    GObject parent;
+    guint   level;
+    gchar  *function;
+    gchar  *sourcefile;
+    gchar  *linenum;
+};
+
+G_DEFINE_TYPE(WxAssertFrame, wx_assert_frame, G_TYPE_OBJECT)
+
+static void wx_assert_frame_finalize(GObject *obj)
+{
+    WxAssertFrame *self = WX_ASSERT_FRAME(obj);
+    g_free(self->function);
+    g_free(self->sourcefile);
+    g_free(self->linenum);
+    G_OBJECT_CLASS(wx_assert_frame_parent_class)->finalize(obj);
+}
+
+static void wx_assert_frame_class_init(WxAssertFrameClass *klass)
+{ G_OBJECT_CLASS(klass)->finalize = wx_assert_frame_finalize; }
+
+static void wx_assert_frame_init(WxAssertFrame *self) { (void)self; }
+
+static WxAssertFrame *
+wx_assert_frame_new(guint level, const gchar *function,
+                    const gchar *sourcefile, const gchar *linenum)
+{
+    WxAssertFrame *self = WX_ASSERT_FRAME(g_object_new(WX_TYPE_ASSERT_FRAME, nullptr));
+    self->level      = level;
+    self->function   = g_strdup(function   ? function   : "");
+    self->sourcefile = g_strdup(sourcefile ? sourcefile : "");
+    self->linenum    = g_strdup(linenum    ? linenum    : "");
+    return self;
+}
+
+extern "C" {
+
+static void wx_assert_column_setup(GtkSignalListItemFactory *, GtkListItem *item, gpointer)
+{
+    GtkWidget *label = gtk_label_new(nullptr);
+    gtk_label_set_xalign(GTK_LABEL(label), 0.0);
+    gtk_list_item_set_child(item, label);
+}
+
+static void wx_assert_column_bind(GtkSignalListItemFactory *, GtkListItem *item,
+                                  gpointer colidx)
+{
+    WxAssertFrame *frame = WX_ASSERT_FRAME(gtk_list_item_get_item(item));
+    GtkWidget *label = gtk_list_item_get_child(item);
+    if (!frame || !label)
+        return;
+
+    switch (GPOINTER_TO_INT(colidx))
+    {
+        case STACKFRAME_LEVEL_COLIDX:
+        {
+            gchar *text = g_strdup_printf("%u", frame->level);
+            gtk_label_set_text(GTK_LABEL(label), text);
+            g_free(text);
+            break;
+        }
+        case FUNCTION_PROTOTYPE_COLIDX:
+            gtk_label_set_text(GTK_LABEL(label), frame->function);
+            break;
+        case SOURCE_FILE_COLIDX:
+            gtk_label_set_text(GTK_LABEL(label), frame->sourcefile);
+            break;
+        case LINE_NUMBER_COLIDX:
+            gtk_label_set_text(GTK_LABEL(label), frame->linenum);
+            break;
+    }
+}
+
+} /* extern "C" */
+
+static
+void gtk_assert_dialog_append_text_column (GtkWidget *columnview, const gchar *name, int index)
+{
+    GtkListItemFactory *factory = gtk_signal_list_item_factory_new();
+    g_signal_connect(factory, "setup", G_CALLBACK(wx_assert_column_setup), nullptr);
+    g_signal_connect(factory, "bind",  G_CALLBACK(wx_assert_column_bind),
+                     GINT_TO_POINTER(index));
+
+    GtkColumnViewColumn *column = gtk_column_view_column_new(name, factory);
+    gtk_column_view_column_set_resizable(column, TRUE);
+    gtk_column_view_append_column(GTK_COLUMN_VIEW(columnview), column);
+    g_object_unref(column);
+}
+
+#else // !__WXGTK4__
+
 // This function is called only for GTK+ < 3.10
 static
 void gtk_assert_dialog_append_text_column (GtkWidget *treeview, const gchar *name, int index)
@@ -104,6 +205,29 @@ void gtk_assert_dialog_append_text_column (GtkWidget *treeview, const gchar *nam
     gtk_tree_view_column_set_reorderable (column, TRUE);
 }
 
+#endif // __WXGTK4__/!__WXGTK4__
+
+#ifdef __WXGTK4__
+static
+GtkWidget *gtk_assert_dialog_create_backtrace_list_model (GtkAssertDialog *dlg)
+{
+    /* The store outlives this function through dlg->frames; the selection
+       model and the view take their own references to what they are given. */
+    dlg->frames = g_list_store_new(WX_TYPE_ASSERT_FRAME);
+
+    GtkSelectionModel *selection = GTK_SELECTION_MODEL(
+        gtk_no_selection_new(G_LIST_MODEL(g_object_ref(dlg->frames))));
+
+    GtkWidget *columnview = gtk_column_view_new(selection);
+
+    gtk_assert_dialog_append_text_column(columnview, "#", STACKFRAME_LEVEL_COLIDX);
+    gtk_assert_dialog_append_text_column(columnview, "Function Prototype", FUNCTION_PROTOTYPE_COLIDX);
+    gtk_assert_dialog_append_text_column(columnview, "Source file", SOURCE_FILE_COLIDX);
+    gtk_assert_dialog_append_text_column(columnview, "Line #", LINE_NUMBER_COLIDX);
+
+    return columnview;
+}
+#else
 // This function is called only for GTK+ < 3.10
 static
 GtkWidget *gtk_assert_dialog_create_backtrace_list_model ()
@@ -121,11 +245,9 @@ GtkWidget *gtk_assert_dialog_create_backtrace_list_model ()
     /* create the tree view */
     treeview = gtk_tree_view_new_with_model (GTK_TREE_MODEL(store));
     g_object_unref (store);
-#ifndef __WXGTK4__
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     gtk_tree_view_set_rules_hint (GTK_TREE_VIEW (treeview), TRUE);
     wxGCC_WARNING_RESTORE()
-#endif
 
     /* append columns */
     gtk_assert_dialog_append_text_column(treeview, "#", STACKFRAME_LEVEL_COLIDX);
@@ -135,6 +257,7 @@ GtkWidget *gtk_assert_dialog_create_backtrace_list_model ()
 
     return treeview;
 }
+#endif // __WXGTK4__/!__WXGTK4__
 
 static
 void gtk_assert_dialog_process_backtrace (GtkAssertDialog *dlg)
@@ -786,7 +909,7 @@ static void gtk_assert_dialog_init(GTypeInstance* instance, void*)
         gtk_widget_set_vexpand(sw, TRUE);
         gtk_box_append(GTK_BOX(expVBox), sw);
 
-        dlg->treeview = gtk_assert_dialog_create_backtrace_list_model();
+        dlg->treeview = gtk_assert_dialog_create_backtrace_list_model(dlg);
         gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sw), dlg->treeview);
 
         /* GtkButtonBox is gone; a box with the children aligned to its end
@@ -977,14 +1100,44 @@ gchar *gtk_assert_dialog_get_message (GtkAssertDialog *dlg)
 
 gchar *gtk_assert_dialog_get_backtrace (GtkAssertDialog *dlg)
 {
+#ifndef __WXGTK4__
     gchar *function, *sourcefile, *linenum;
     guint count;
 
     GtkTreeModel *model;
     GtkTreeIter iter;
     GString *string;
+#endif
 
     g_return_val_if_fail (GTK_IS_ASSERT_DIALOG (dlg), nullptr);
+
+#ifdef __WXGTK4__
+    {
+        GListModel *const frames = G_LIST_MODEL(dlg->frames);
+        const guint n = g_list_model_get_n_items(frames);
+        if (n == 0)
+            return nullptr;
+
+        GString *const out = g_string_new("");
+        for (guint i = 0; i < n; i++)
+        {
+            WxAssertFrame *const f =
+                WX_ASSERT_FRAME(g_list_model_get_item(frames, i));
+
+            g_string_append_printf(out, "[%u] %s", f->level, f->function);
+            if (f->sourcefile[0] != '\0')
+                g_string_append_printf(out, " %s", f->sourcefile);
+            if (f->linenum[0] != '\0')
+                g_string_append_printf(out, ":%s", f->linenum);
+            g_string_append(out, "\n");
+
+            g_object_unref(f);
+        }
+
+        /* returned string must be g_free()d */
+        return g_string_free(out, FALSE);
+    }
+#else
     model = gtk_tree_view_get_model (GTK_TREE_VIEW(dlg->treeview));
 
     /* iterate over the list */
@@ -1018,6 +1171,7 @@ gchar *gtk_assert_dialog_get_backtrace (GtkAssertDialog *dlg)
 
     /* returned string must g_free()d */
     return g_string_free (string, FALSE);
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 #endif // wxUSE_STACKWALKER
@@ -1052,12 +1206,33 @@ void gtk_assert_dialog_append_stack_frame(GtkAssertDialog *dlg,
                                           const gchar *sourcefile,
                                           guint line_number)
 {
+#ifndef __WXGTK4__
     GtkTreeModel *model;
     GtkTreeIter iter;
     GString *linenum;
     gint count;
+#endif
 
     g_return_if_fail (GTK_IS_ASSERT_DIALOG (dlg));
+
+#ifdef __WXGTK4__
+    {
+        GString *const num = g_string_new("");
+        if ( line_number != 0 )
+            g_string_printf(num, "%u", line_number);
+
+        /* numbered from 1, as before */
+        const guint level =
+            g_list_model_get_n_items(G_LIST_MODEL(dlg->frames)) + 1;
+
+        WxAssertFrame *const frame =
+            wx_assert_frame_new(level, function, sourcefile, num->str);
+        g_list_store_append(dlg->frames, frame);
+        g_object_unref(frame);
+
+        g_string_free(num, TRUE);
+    }
+#else
     model = gtk_tree_view_get_model (GTK_TREE_VIEW(dlg->treeview));
 
     /* how many items are in the list up to now ? */
@@ -1077,6 +1252,7 @@ void gtk_assert_dialog_append_stack_frame(GtkAssertDialog *dlg,
                         -1);
 
     g_string_free (linenum, TRUE);
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 #endif // wxUSE_STACKWALKER

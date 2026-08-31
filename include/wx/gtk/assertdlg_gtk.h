@@ -27,7 +27,14 @@ struct _GtkAssertDialog
     /* GtkAssertDialog widgets */
     GtkWidget *expander;
     GtkWidget *message;
+    /* Under GTK4 this is a GtkColumnView and the rows live in "frames" below;
+       elsewhere it is a GtkTreeView owning its own GtkListStore. */
     GtkWidget *treeview;
+
+#ifdef __WXGTK4__
+    /* GListStore of WxAssertFrame, the model behind the column view. */
+    GListStore *frames;
+#endif
 
     GtkWidget *shownexttime;
 

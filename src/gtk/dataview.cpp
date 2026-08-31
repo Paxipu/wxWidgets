@@ -5908,6 +5908,15 @@ wxDataViewCtrl::GetItemRect(const wxDataViewItem& item,
     if ( item_rect.height == 0 )
         return wxRect();
 
+    // And when a column is given but the tree view has not been allocated
+    // yet, gtk_tree_view_get_cell_area() subtracts the horizontal separator
+    // from a width it does not have and the width comes back negative -- -4
+    // for the default separator of 2 on each side. A rectangle of negative
+    // width is not a smaller rectangle, it is a wrong one, so report the same
+    // "nothing to show here" that a zero height already does.
+    if ( gcolumn && item_rect.width < 0 )
+        return wxRect();
+
     // If column is null we compute the combined width of all the columns
     if ( !column )
     {

@@ -1916,3 +1916,69 @@ TEST_CASE("wxTextCtrl::KeyEventsWhenFocused", "[wxTextCtrl][key][event]")
 #endif // wxUSE_UIACTIONSIMULATOR
 
 #endif //wxUSE_TEXTCTRL
+
+#if wxUSE_UIACTIONSIMULATOR && defined(__WXGTK4__)
+
+// wxTextEntry::AutoComplete() had no test at all, on any platform.
+//
+// Under GTK4 it is no longer GtkEntryCompletion -- that is deprecated with no
+// replacement -- but a popup wxWidgets builds itself from a GtkPopover, a
+// GtkListView and a filtered model. None of that is visible through the wx
+// API except the two things that matter, and both are checked here: that the
+// popup goes up while a prefix matches, and that choosing a completion and
+// accepting it puts that completion into the control.
+//
+// Only under GTK4, and the reason is measured rather than assumed. wx clears
+// wxTE_PROCESS_ENTER while the completion popup is up, so the flag says
+// whether wx knows the popup is there. After typing a matching prefix:
+//
+//     GTK4     flag 0 -- the popup is up and wx knows it
+//     GTK+ 3   flag 1 -- wx never learns of it
+//
+// So on GTK+ 2 and 3 either GtkEntryCompletion's popup does not appear under
+// synthesised input at all, or it appears without grabbing and the
+// "grab-notify" the port listens for never comes. Both leave nothing for a
+// test to observe, which is why this one does not run there.
+TEST_CASE("wxTextCtrl::AutoComplete", "[wxTextCtrl][autocomplete]")
+{
+    if ( !EnableUITests() )
+        return;
+
+    std::unique_ptr<wxTextCtrl>
+        text(new wxTextCtrl(wxTheApp->GetTopWindow(), wxID_ANY, "",
+                            wxDefaultPosition, wxDefaultSize,
+                            wxTE_PROCESS_ENTER));
+
+    wxArrayString completions;
+    completions.push_back("alpha");
+    completions.push_back("alpine");
+    completions.push_back("beta");
+
+    REQUIRE( text->AutoComplete(completions) );
+
+    text->SetFocus();
+    wxYield();
+
+    wxUIActionSimulator sim;
+    sim.Text("al");
+    wxYield();
+
+    // Both "alpha" and "alpine" start with this, so the popup must be up --
+    // and while it is, Enter belongs to it rather than to wxTE_PROCESS_ENTER.
+    INFO("after typing a matching prefix");
+    CHECK( !text->HasFlag(wxTE_PROCESS_ENTER) );
+
+    // Down highlights the first match, Return accepts it.
+    sim.Char(WXK_DOWN);
+    wxYield();
+    sim.Char(WXK_RETURN);
+    wxYield();
+
+    INFO("value after typing \"al\", Down, Return: " << text->GetValue());
+    CHECK( text->GetValue() == "alpha" );
+
+    // And the popup is gone again, so the flag comes back.
+    CHECK( text->HasFlag(wxTE_PROCESS_ENTER) );
+}
+
+#endif // wxUSE_UIACTIONSIMULATOR && __WXGTK4__

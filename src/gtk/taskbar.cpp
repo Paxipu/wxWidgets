@@ -15,6 +15,64 @@
 
 #include "wx/taskbar.h"
 
+#ifndef WX_PRECOMP
+    #include "wx/app.h"
+    #include "wx/filename.h"
+    #include "wx/log.h"
+    #include "wx/menu.h"
+#endif
+
+#include "wx/stdpaths.h"
+
+// For g_get_user_cache_dir() below, which is wanted before the GTK
+// headers are reached further down.
+#include <glib.h>
+
+#if wxUSE_APPINDICATOR || defined(__WXGTK4__)
+
+class TempIconFile
+{
+public:
+    TempIconFile() = default;
+
+    ~TempIconFile()
+    {
+        if ( Cleanup() )
+            wxFileName::Rmdir(m_path.GetPath(), wxPATH_RMDIR_PARENTS);
+    }
+
+    // Each time this function is called, it returns path to a new file: this
+    // is needed because AppIndicator doesn't update the icon if the file name
+    // is the same as before, even if the file contents have changed.
+    wxFileName GetNewIconPath()
+    {
+        Cleanup();
+
+        wxString dir = wxString::FromUTF8(g_get_user_cache_dir());
+        dir = wxStandardPaths::Get().AppendAppInfo(dir);
+        wxFileName::Mkdir(dir, 0700, wxPATH_MKDIR_FULL);
+
+        m_path.Assign(dir, wxString::Format("taskbaricon-%d.png", ++m_counter));
+
+        return m_path;
+    }
+
+private:
+    bool Cleanup()
+    {
+       return m_path.IsOk() && wxRemoveFile(m_path.GetFullPath());
+    }
+
+    wxFileName m_path;
+
+    int m_counter = 0;
+
+    wxDECLARE_NO_COPY_CLASS(TempIconFile);
+};
+
+#endif // wxUSE_APPINDICATOR || __WXGTK4__
+
+
 #ifndef __WXGTK4__
 
 #ifndef WX_PRECOMP
@@ -60,49 +118,6 @@ wxGCC_WARNING_SUPPRESS(deprecated-declarations)
 
 GdkWindow* wxGetTopLevelGDK();
 
-#if wxUSE_APPINDICATOR
-
-class TempIconFile
-{
-public:
-    TempIconFile() = default;
-
-    ~TempIconFile()
-    {
-        if ( Cleanup() )
-            wxFileName::Rmdir(m_path.GetPath(), wxPATH_RMDIR_PARENTS);
-    }
-
-    // Each time this function is called, it returns path to a new file: this
-    // is needed because AppIndicator doesn't update the icon if the file name
-    // is the same as before, even if the file contents have changed.
-    wxFileName GetNewIconPath()
-    {
-        Cleanup();
-
-        wxString dir = wxString::FromUTF8(g_get_user_cache_dir());
-        dir = wxStandardPaths::Get().AppendAppInfo(dir);
-        wxFileName::Mkdir(dir, 0700, wxPATH_MKDIR_FULL);
-
-        m_path.Assign(dir, wxString::Format("taskbaricon-%d.png", ++m_counter));
-
-        return m_path;
-    }
-
-private:
-    bool Cleanup()
-    {
-       return m_path.IsOk() && wxRemoveFile(m_path.GetFullPath());
-    }
-
-    wxFileName m_path;
-
-    int m_counter = 0;
-
-    wxDECLARE_NO_COPY_CLASS(TempIconFile);
-};
-
-#endif // wxUSE_APPINDICATOR
 
 class wxTaskBarIcon::Private
 {
@@ -584,43 +599,237 @@ bool wxTaskBarIcon::PopupMenu(wxMenu* menu)
 #else
 wxIMPLEMENT_DYNAMIC_CLASS(wxTaskBarIcon, wxEvtHandler);
 
-// GtkStatusIcon, which this class is built on, was removed in GTK4 with no
-// replacement: the freedesktop system tray protocol it spoke is not something
-// GTK implements any more, and the StatusNotifierItem D-Bus interface that
-// took its place is out of scope for a widget toolkit. So there is no tray
-// icon under GTK4, and this says so rather than pretending to install one.
+// GtkStatusIcon was removed in GTK4 with no replacement: the freedesktop
+// system tray protocol it spoke is not something GTK implements any more.
+// What took its place is StatusNotifierItem, a pair of D-Bus interfaces, and
+// wx talks them itself -- see wx/gtk/private/statusnotifier.h for why not
+// through libayatana-appindicator, which is a GTK+ 3 library.
+
+#include "wx/gtk/private/dbusmenu.h"
+#include "wx/gtk/private/statusnotifier.h"
+
+class wxTaskBarIcon::Private : public wxStatusNotifierItem::Handler,
+                               public wxDBusMenu::Handler
+{
+public:
+    explicit Private(wxTaskBarIcon* taskBarIcon)
+        : m_taskBarIcon(taskBarIcon)
+    {
+    }
+
+    bool SetIcon(const wxBitmapBundle& bitmap, const wxString& tooltip);
+    bool RemoveIcon();
+    bool ShowMenu(wxMenu* menu);
+
+    bool IsIconInstalled() const { return m_item != nullptr; }
+
+    // wxStatusNotifierItem::Handler
+    void OnActivate() override
+    {
+        Send(wxEVT_TASKBAR_LEFT_DCLICK);
+    }
+
+    void OnSecondaryActivate() override
+    {
+        Send(wxEVT_TASKBAR_LEFT_DOWN);
+    }
+
+    void OnContextMenu() override
+    {
+        // Only reached when no menu was served, since a panel with a menu
+        // opens that itself rather than calling this.
+        Send(wxEVT_TASKBAR_RIGHT_DOWN);
+    }
+
+    // wxDBusMenu::Handler
+    void OnMenuItem(wxMenuItem* item) override
+    {
+        // The panel drew the menu, so nothing here has been through
+        // wxMenu's own event code: turn the choice into the command event
+        // the application would have got from a menu of its own.
+        wxCommandEvent event(wxEVT_MENU, item->GetId());
+        event.SetEventObject(m_taskBarIcon);
+
+        if ( item->IsCheckable() )
+            event.SetInt(item->IsChecked() ? 1 : 0);
+
+        m_taskBarIcon->SafelyProcessEvent(event);
+    }
+
+private:
+    void Send(wxEventType type)
+    {
+        wxTaskBarIconEvent event(type, m_taskBarIcon);
+        m_taskBarIcon->SafelyProcessEvent(event);
+    }
+
+    // The menu the panel should show, which is the application's if it keeps
+    // one and ours to destroy if it does not.
+    wxMenu* GetMenu();
+
+    wxTaskBarIcon* const m_taskBarIcon;
+
+    std::unique_ptr<wxStatusNotifierItem> m_item;
+    std::unique_ptr<wxDBusMenu> m_dbusMenu;
+    std::unique_ptr<wxMenu> m_ownedMenu;
+
+    TempIconFile m_iconFile;
+};
+
+wxMenu* wxTaskBarIcon::Private::GetMenu()
+{
+    // GetPopupMenu() is documented to return a menu that is kept alive by the
+    // application, which is what a menu served over the bus needs: the panel
+    // may ask about it at any time, not only while it is on screen.
+    if ( wxMenu* const menu = m_taskBarIcon->GetPopupMenu() )
+    {
+        m_ownedMenu.reset();
+        return menu;
+    }
+
+    m_ownedMenu.reset(m_taskBarIcon->CreatePopupMenu());
+
+    return m_ownedMenu.get();
+}
+
+bool wxTaskBarIcon::Private::SetIcon(const wxBitmapBundle& bitmap,
+                                     const wxString& tooltip)
+{
+    // A named icon in a directory of our own rather than pixels on the bus:
+    // it is what panels implement most reliably, and the same choice the
+    // GTK+ 3 path makes. The name changes with every image because a panel
+    // that sees the same name may not look at the file again.
+    const wxBitmap bmp = bitmap.GetBitmap(bitmap.GetDefaultSize());
+    if ( !bmp.IsOk() )
+        return false;
+
+    const wxFileName fnIcon = m_iconFile.GetNewIconPath();
+    if ( !bmp.SaveFile(fnIcon.GetFullPath(), wxBITMAP_TYPE_PNG) )
+        return false;
+
+    if ( !m_item )
+    {
+        // The class name is the application ID under Wayland, so prefer it.
+        wxString appId = wxTheApp->GetClassName();
+        if ( appId.empty() )
+        {
+            appId = wxString::Format("%s-%lu",
+                                     wxTheApp->GetAppName(), wxGetProcessId());
+        }
+
+        m_item.reset(new wxStatusNotifierItem(appId, this));
+
+        // The menu lives on the item's connection, because the panel reaches
+        // it through the bus name the item is registered under. So the bus
+        // comes first, then the menu, then the item goes up carrying its
+        // path: the Menu property is read as soon as the item is adopted.
+        if ( m_item->Connect() )
+        {
+            if ( wxMenu* const menu = GetMenu() )
+            {
+                m_dbusMenu.reset(new wxDBusMenu(m_item->GetConnection(),
+                                                "/MenuBar", this));
+                if ( m_dbusMenu->IsOk() )
+                {
+                    m_dbusMenu->SetMenu(menu);
+                    m_item->SetMenuPath(m_dbusMenu->GetPath());
+                }
+                else
+                {
+                    m_dbusMenu.reset();
+                }
+            }
+        }
+    }
+    else if ( m_dbusMenu )
+    {
+        // Already up: the menu may have been rebuilt since, and the panel
+        // has to be told rather than left showing the old one.
+        m_dbusMenu->SetMenu(GetMenu());
+    }
+
+    m_item->SetToolTip(tooltip);
+    m_item->SetIcon(fnIcon.GetPath(), fnIcon.GetName());
+
+    return m_item->Show();
+}
+
+bool wxTaskBarIcon::Private::RemoveIcon()
+{
+    if ( !m_item )
+        return false;
+
+    m_item.reset();
+    m_dbusMenu.reset();
+    m_ownedMenu.reset();
+
+    return true;
+}
+
+bool wxTaskBarIcon::Private::ShowMenu(wxMenu* menu)
+{
+    if ( !m_dbusMenu )
+    {
+        if ( !m_item || !m_item->GetConnection() )
+            return false;
+
+        m_dbusMenu.reset(new wxDBusMenu(m_item->GetConnection(),
+                                        "/MenuBar", this));
+        if ( !m_dbusMenu->IsOk() )
+        {
+            m_dbusMenu.reset();
+            return false;
+        }
+
+        m_item->SetMenuPath(m_dbusMenu->GetPath());
+    }
+
+    m_dbusMenu->SetMenu(menu);
+
+    return true;
+}
+
 bool wxTaskBarIconBase::IsAvailable()
 {
-    return false;
+    return wxStatusNotifierItem::IsWatcherPresent();
 }
 
 wxTaskBarIcon::wxTaskBarIcon(wxTaskBarIconType)
 {
-    m_priv = nullptr;
+    m_priv = new Private(this);
 }
 
 wxTaskBarIcon::~wxTaskBarIcon()
 {
+    delete m_priv;
 }
 
-bool wxTaskBarIcon::SetIcon(const wxBitmapBundle&, const wxString&)
+bool wxTaskBarIcon::SetIcon(const wxBitmapBundle& icon, const wxString& tip)
 {
-    return false;
+    return m_priv->SetIcon(icon, tip);
 }
 
 bool wxTaskBarIcon::RemoveIcon()
 {
-    return false;
+    return m_priv->RemoveIcon();
 }
 
 bool wxTaskBarIcon::IsIconInstalled() const
 {
-    return false;
+    return m_priv->IsIconInstalled();
 }
 
-bool wxTaskBarIcon::PopupMenu(wxMenu*)
+bool wxTaskBarIcon::PopupMenu(wxMenu* menu)
 {
-    return false;
+    // The panel owns the menu and decides when to show it, from its own
+    // process; a client cannot make it appear. Serving the menu given here
+    // is the closest thing that is actually possible, and leaves the icon
+    // showing what the caller asked for.
+    if ( !m_priv->IsIconInstalled() )
+        return false;
+
+    return m_priv->ShowMenu(menu);
 }
+
 #endif // __WXGTK4__
 #endif // wxUSE_TASKBARICON

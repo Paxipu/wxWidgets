@@ -56,8 +56,14 @@
 #define webkit_web_context_set_web_extensions_initialization_user_data \
         webkit_web_context_set_web_process_extensions_initialization_user_data
 #define wxWEBKIT_INITIALIZE_WEB_EXTENSIONS "initialize-web-process-extensions"
+// The entry point the extension exports was renamed with everything else, and
+// this is the name looked up to recognise our own module in a directory.
+#define wxWEBKIT_EXTENSION_ENTRY_POINT \
+        "webkit_web_process_extension_initialize_with_user_data"
 #else
 #define wxWEBKIT_INITIALIZE_WEB_EXTENSIONS "initialize-web-extensions"
+#define wxWEBKIT_EXTENSION_ENTRY_POINT \
+        "webkit_web_extension_initialize_with_user_data"
 #endif
 
 #if WEBKIT_CHECK_VERSION(2, 10, 0)
@@ -656,7 +662,7 @@ static bool CheckDirectoryForWebExt(const wxString& dirname)
         wxDynamicLibrary dl;
         if ( dl.Load(wxFileName(dirname, file).GetFullPath(),
                      wxDL_VERBATIM | wxDL_LAZY) &&
-                dl.HasSymbol("webkit_web_extension_initialize_with_user_data") )
+                dl.HasSymbol(wxWEBKIT_EXTENSION_ENTRY_POINT) )
         {
             // Looks like our extension.
             return true;
@@ -789,6 +795,11 @@ public:
 #ifdef wxHAVE_WEBKIT_WEBSITE_DATA_MANAGER
         g_clear_object(&m_websiteDataManager);
 #endif
+#ifdef __WXGTK4__
+        // Held by us in every case: created here by the two branches that
+        // make their own, and referenced by the one that shares the default.
+        g_clear_object(&m_networkSession);
+#endif
     }
 
 #ifdef wxHAVE_WEBKIT_WEBSITE_DATA_MANAGER
@@ -890,12 +901,24 @@ private:
             // Nothing to customize, so share the default session and context
             // between all the views, as the GTK3 version shared the default
             // context in this case.
-            m_networkSession = webkit_network_session_get_default();
-            m_webContext = webkit_web_context_get_default();
+
+            // transfer none, both of them, so take a reference: the
+            // destructor releases these unconditionally, and without this the
+            // first configuration destroyed takes the process-wide defaults
+            // with it and every later view gets a dangling pointer.
+            m_networkSession =
+                WEBKIT_NETWORK_SESSION(g_object_ref(
+                    webkit_network_session_get_default()));
+            m_webContext =
+                WEBKIT_WEB_CONTEXT(g_object_ref(
+                    webkit_web_context_get_default()));
         }
 
+        // transfer none as well: the session owns this one.
         m_websiteDataManager =
-            webkit_network_session_get_website_data_manager(m_networkSession);
+            WEBKIT_WEBSITE_DATA_MANAGER(g_object_ref(
+                webkit_network_session_get_website_data_manager(
+                    m_networkSession)));
 
         return m_webContext;
 #else // !__WXGTK4__

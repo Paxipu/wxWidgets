@@ -4912,6 +4912,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_2___LOWLEVEL_SRC_OBJECTS =  \
 	monodll_gtk_toplevel.o \
 	monodll_utilsgtk.o \
 	monodll_accessgtk.o \
+	monodll_statusnotifier.o \
+	monodll_dbusmenu.o \
 	monodll_win_gtk.o \
 	monodll_gtk_window.o \
 	monodll_gtk_mimetype.o \
@@ -4956,6 +4958,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_3___LOWLEVEL_SRC_OBJECTS =  \
 	monodll_gtk_toplevel.o \
 	monodll_utilsgtk.o \
 	monodll_accessgtk.o \
+	monodll_statusnotifier.o \
+	monodll_dbusmenu.o \
 	monodll_win_gtk.o \
 	monodll_gtk_window.o \
 	monodll_gtk_mimetype.o \
@@ -4997,6 +5001,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_4___LOWLEVEL_SRC_OBJECTS =  \
 	monodll_gtk_toplevel.o \
 	monodll_utilsgtk.o \
 	monodll_accessgtk.o \
+	monodll_statusnotifier.o \
+	monodll_dbusmenu.o \
 	monodll_win_gtk.o \
 	monodll_gtk_window.o \
 	monodll_gtk_mimetype.o \
@@ -5660,6 +5666,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_2___LOWLEVEL_SRC_OBJECTS_1 =  \
 	monodll_gtk_toplevel.o \
 	monodll_utilsgtk.o \
 	monodll_accessgtk.o \
+	monodll_statusnotifier.o \
+	monodll_dbusmenu.o \
 	monodll_win_gtk.o \
 	monodll_gtk_window.o \
 	monodll_gtk_mimetype.o \
@@ -5704,6 +5712,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_3___LOWLEVEL_SRC_OBJECTS_1 =  \
 	monodll_gtk_toplevel.o \
 	monodll_utilsgtk.o \
 	monodll_accessgtk.o \
+	monodll_statusnotifier.o \
+	monodll_dbusmenu.o \
 	monodll_win_gtk.o \
 	monodll_gtk_window.o \
 	monodll_gtk_mimetype.o \
@@ -5745,6 +5755,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_4___LOWLEVEL_SRC_OBJECTS_1 =  \
 	monodll_gtk_toplevel.o \
 	monodll_utilsgtk.o \
 	monodll_accessgtk.o \
+	monodll_statusnotifier.o \
+	monodll_dbusmenu.o \
 	monodll_win_gtk.o \
 	monodll_gtk_window.o \
 	monodll_gtk_mimetype.o \
@@ -6708,6 +6720,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_2___LOWLEVEL_SRC_OBJECTS_2 =  \
 	monolib_gtk_toplevel.o \
 	monolib_utilsgtk.o \
 	monolib_accessgtk.o \
+	monolib_statusnotifier.o \
+	monolib_dbusmenu.o \
 	monolib_win_gtk.o \
 	monolib_gtk_window.o \
 	monolib_gtk_mimetype.o \
@@ -6752,6 +6766,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_3___LOWLEVEL_SRC_OBJECTS_2 =  \
 	monolib_gtk_toplevel.o \
 	monolib_utilsgtk.o \
 	monolib_accessgtk.o \
+	monolib_statusnotifier.o \
+	monolib_dbusmenu.o \
 	monolib_win_gtk.o \
 	monolib_gtk_window.o \
 	monolib_gtk_mimetype.o \
@@ -6793,6 +6809,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_4___LOWLEVEL_SRC_OBJECTS_2 =  \
 	monolib_gtk_toplevel.o \
 	monolib_utilsgtk.o \
 	monolib_accessgtk.o \
+	monolib_statusnotifier.o \
+	monolib_dbusmenu.o \
 	monolib_win_gtk.o \
 	monolib_gtk_window.o \
 	monolib_gtk_mimetype.o \
@@ -7456,6 +7474,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_2___LOWLEVEL_SRC_OBJECTS_3 =  \
 	monolib_gtk_toplevel.o \
 	monolib_utilsgtk.o \
 	monolib_accessgtk.o \
+	monolib_statusnotifier.o \
+	monolib_dbusmenu.o \
 	monolib_win_gtk.o \
 	monolib_gtk_window.o \
 	monolib_gtk_mimetype.o \
@@ -7500,6 +7520,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_3___LOWLEVEL_SRC_OBJECTS_3 =  \
 	monolib_gtk_toplevel.o \
 	monolib_utilsgtk.o \
 	monolib_accessgtk.o \
+	monolib_statusnotifier.o \
+	monolib_dbusmenu.o \
 	monolib_win_gtk.o \
 	monolib_gtk_window.o \
 	monolib_gtk_mimetype.o \
@@ -7541,6 +7563,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_4___LOWLEVEL_SRC_OBJECTS_3 =  \
 	monolib_gtk_toplevel.o \
 	monolib_utilsgtk.o \
 	monolib_accessgtk.o \
+	monolib_statusnotifier.o \
+	monolib_dbusmenu.o \
 	monolib_win_gtk.o \
 	monolib_gtk_window.o \
 	monolib_gtk_mimetype.o \
@@ -8650,6 +8674,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_2___LOWLEVEL_SRC_OBJECTS_4 =  \
 	coredll_gtk_toplevel.o \
 	coredll_utilsgtk.o \
 	coredll_accessgtk.o \
+	coredll_statusnotifier.o \
+	coredll_dbusmenu.o \
 	coredll_win_gtk.o \
 	coredll_gtk_window.o \
 	coredll_mimetype.o \
@@ -8694,6 +8720,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_3___LOWLEVEL_SRC_OBJECTS_4 =  \
 	coredll_gtk_toplevel.o \
 	coredll_utilsgtk.o \
 	coredll_accessgtk.o \
+	coredll_statusnotifier.o \
+	coredll_dbusmenu.o \
 	coredll_win_gtk.o \
 	coredll_gtk_window.o \
 	coredll_mimetype.o \
@@ -8735,6 +8763,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_4___LOWLEVEL_SRC_OBJECTS_4 =  \
 	coredll_gtk_toplevel.o \
 	coredll_utilsgtk.o \
 	coredll_accessgtk.o \
+	coredll_statusnotifier.o \
+	coredll_dbusmenu.o \
 	coredll_win_gtk.o \
 	coredll_gtk_window.o \
 	coredll_mimetype.o \
@@ -9398,6 +9428,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_2___LOWLEVEL_SRC_OBJECTS_5 =  \
 	coredll_gtk_toplevel.o \
 	coredll_utilsgtk.o \
 	coredll_accessgtk.o \
+	coredll_statusnotifier.o \
+	coredll_dbusmenu.o \
 	coredll_win_gtk.o \
 	coredll_gtk_window.o \
 	coredll_mimetype.o \
@@ -9442,6 +9474,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_3___LOWLEVEL_SRC_OBJECTS_5 =  \
 	coredll_gtk_toplevel.o \
 	coredll_utilsgtk.o \
 	coredll_accessgtk.o \
+	coredll_statusnotifier.o \
+	coredll_dbusmenu.o \
 	coredll_win_gtk.o \
 	coredll_gtk_window.o \
 	coredll_mimetype.o \
@@ -9483,6 +9517,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_4___LOWLEVEL_SRC_OBJECTS_5 =  \
 	coredll_gtk_toplevel.o \
 	coredll_utilsgtk.o \
 	coredll_accessgtk.o \
+	coredll_statusnotifier.o \
+	coredll_dbusmenu.o \
 	coredll_win_gtk.o \
 	coredll_gtk_window.o \
 	coredll_mimetype.o \
@@ -10171,6 +10207,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_2___LOWLEVEL_SRC_OBJECTS_6 =  \
 	corelib_gtk_toplevel.o \
 	corelib_utilsgtk.o \
 	corelib_accessgtk.o \
+	corelib_statusnotifier.o \
+	corelib_dbusmenu.o \
 	corelib_win_gtk.o \
 	corelib_gtk_window.o \
 	corelib_mimetype.o \
@@ -10215,6 +10253,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_3___LOWLEVEL_SRC_OBJECTS_6 =  \
 	corelib_gtk_toplevel.o \
 	corelib_utilsgtk.o \
 	corelib_accessgtk.o \
+	corelib_statusnotifier.o \
+	corelib_dbusmenu.o \
 	corelib_win_gtk.o \
 	corelib_gtk_window.o \
 	corelib_mimetype.o \
@@ -10256,6 +10296,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_4___LOWLEVEL_SRC_OBJECTS_6 =  \
 	corelib_gtk_toplevel.o \
 	corelib_utilsgtk.o \
 	corelib_accessgtk.o \
+	corelib_statusnotifier.o \
+	corelib_dbusmenu.o \
 	corelib_win_gtk.o \
 	corelib_gtk_window.o \
 	corelib_mimetype.o \
@@ -10919,6 +10961,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_2___LOWLEVEL_SRC_OBJECTS_7 =  \
 	corelib_gtk_toplevel.o \
 	corelib_utilsgtk.o \
 	corelib_accessgtk.o \
+	corelib_statusnotifier.o \
+	corelib_dbusmenu.o \
 	corelib_win_gtk.o \
 	corelib_gtk_window.o \
 	corelib_mimetype.o \
@@ -10963,6 +11007,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_3___LOWLEVEL_SRC_OBJECTS_7 =  \
 	corelib_gtk_toplevel.o \
 	corelib_utilsgtk.o \
 	corelib_accessgtk.o \
+	corelib_statusnotifier.o \
+	corelib_dbusmenu.o \
 	corelib_win_gtk.o \
 	corelib_gtk_window.o \
 	corelib_mimetype.o \
@@ -11004,6 +11050,8 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_4___LOWLEVEL_SRC_OBJECTS_7 =  \
 	corelib_gtk_toplevel.o \
 	corelib_utilsgtk.o \
 	corelib_accessgtk.o \
+	corelib_statusnotifier.o \
+	corelib_dbusmenu.o \
 	corelib_win_gtk.o \
 	corelib_gtk_window.o \
 	corelib_mimetype.o \
@@ -17891,18 +17939,30 @@ monodll_sound_sdl.o: $(srcdir)/src/unix/sound_sdl.cpp $(MONODLL_ODEP)
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@monodll_accessgtk.o: $(srcdir)/src/gtk/accessgtk.cpp $(MONODLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@	$(CXXC) -c -o $@ $(MONODLL_CXXFLAGS) $(srcdir)/src/gtk/accessgtk.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@monodll_statusnotifier.o: $(srcdir)/src/gtk/statusnotifier.cpp $(MONODLL_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@	$(CXXC) -c -o $@ $(MONODLL_CXXFLAGS) $(srcdir)/src/gtk/statusnotifier.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@monodll_dbusmenu.o: $(srcdir)/src/gtk/dbusmenu.cpp $(MONODLL_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@	$(CXXC) -c -o $@ $(MONODLL_CXXFLAGS) $(srcdir)/src/gtk/dbusmenu.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@monodll_win_gtk.o: $(srcdir)/src/gtk/win_gtk.cpp $(MONODLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@	$(CXXC) -c -o $@ $(MONODLL_CXXFLAGS) $(srcdir)/src/gtk/win_gtk.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@monodll_accessgtk.o: $(srcdir)/src/gtk/accessgtk.cpp $(MONODLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@	$(CXXC) -c -o $@ $(MONODLL_CXXFLAGS) $(srcdir)/src/gtk/accessgtk.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@monodll_statusnotifier.o: $(srcdir)/src/gtk/statusnotifier.cpp $(MONODLL_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@	$(CXXC) -c -o $@ $(MONODLL_CXXFLAGS) $(srcdir)/src/gtk/statusnotifier.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@monodll_dbusmenu.o: $(srcdir)/src/gtk/dbusmenu.cpp $(MONODLL_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@	$(CXXC) -c -o $@ $(MONODLL_CXXFLAGS) $(srcdir)/src/gtk/dbusmenu.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@monodll_win_gtk.o: $(srcdir)/src/gtk/win_gtk.cpp $(MONODLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@	$(CXXC) -c -o $@ $(MONODLL_CXXFLAGS) $(srcdir)/src/gtk/win_gtk.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@monodll_accessgtk.o: $(srcdir)/src/gtk/accessgtk.cpp $(MONODLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@	$(CXXC) -c -o $@ $(MONODLL_CXXFLAGS) $(srcdir)/src/gtk/accessgtk.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@monodll_statusnotifier.o: $(srcdir)/src/gtk/statusnotifier.cpp $(MONODLL_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@	$(CXXC) -c -o $@ $(MONODLL_CXXFLAGS) $(srcdir)/src/gtk/statusnotifier.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@monodll_dbusmenu.o: $(srcdir)/src/gtk/dbusmenu.cpp $(MONODLL_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@	$(CXXC) -c -o $@ $(MONODLL_CXXFLAGS) $(srcdir)/src/gtk/dbusmenu.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@monodll_gtk_window.o: $(srcdir)/src/gtk/window.cpp $(MONODLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@	$(CXXC) -c -o $@ $(MONODLL_CXXFLAGS) $(srcdir)/src/gtk/window.cpp
@@ -22697,18 +22757,30 @@ monolib_sound_sdl.o: $(srcdir)/src/unix/sound_sdl.cpp $(MONOLIB_ODEP)
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@monolib_accessgtk.o: $(srcdir)/src/gtk/accessgtk.cpp $(MONOLIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@	$(CXXC) -c -o $@ $(MONOLIB_CXXFLAGS) $(srcdir)/src/gtk/accessgtk.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@monolib_statusnotifier.o: $(srcdir)/src/gtk/statusnotifier.cpp $(MONOLIB_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@	$(CXXC) -c -o $@ $(MONOLIB_CXXFLAGS) $(srcdir)/src/gtk/statusnotifier.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@monolib_dbusmenu.o: $(srcdir)/src/gtk/dbusmenu.cpp $(MONOLIB_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@	$(CXXC) -c -o $@ $(MONOLIB_CXXFLAGS) $(srcdir)/src/gtk/dbusmenu.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@monolib_win_gtk.o: $(srcdir)/src/gtk/win_gtk.cpp $(MONOLIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@	$(CXXC) -c -o $@ $(MONOLIB_CXXFLAGS) $(srcdir)/src/gtk/win_gtk.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@monolib_accessgtk.o: $(srcdir)/src/gtk/accessgtk.cpp $(MONOLIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@	$(CXXC) -c -o $@ $(MONOLIB_CXXFLAGS) $(srcdir)/src/gtk/accessgtk.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@monolib_statusnotifier.o: $(srcdir)/src/gtk/statusnotifier.cpp $(MONOLIB_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@	$(CXXC) -c -o $@ $(MONOLIB_CXXFLAGS) $(srcdir)/src/gtk/statusnotifier.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@monolib_dbusmenu.o: $(srcdir)/src/gtk/dbusmenu.cpp $(MONOLIB_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@	$(CXXC) -c -o $@ $(MONOLIB_CXXFLAGS) $(srcdir)/src/gtk/dbusmenu.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@monolib_win_gtk.o: $(srcdir)/src/gtk/win_gtk.cpp $(MONOLIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@	$(CXXC) -c -o $@ $(MONOLIB_CXXFLAGS) $(srcdir)/src/gtk/win_gtk.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@monolib_accessgtk.o: $(srcdir)/src/gtk/accessgtk.cpp $(MONOLIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@	$(CXXC) -c -o $@ $(MONOLIB_CXXFLAGS) $(srcdir)/src/gtk/accessgtk.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@monolib_statusnotifier.o: $(srcdir)/src/gtk/statusnotifier.cpp $(MONOLIB_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@	$(CXXC) -c -o $@ $(MONOLIB_CXXFLAGS) $(srcdir)/src/gtk/statusnotifier.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@monolib_dbusmenu.o: $(srcdir)/src/gtk/dbusmenu.cpp $(MONOLIB_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@	$(CXXC) -c -o $@ $(MONOLIB_CXXFLAGS) $(srcdir)/src/gtk/dbusmenu.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@monolib_gtk_window.o: $(srcdir)/src/gtk/window.cpp $(MONOLIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@	$(CXXC) -c -o $@ $(MONOLIB_CXXFLAGS) $(srcdir)/src/gtk/window.cpp
@@ -27566,18 +27638,30 @@ coredll_sound_sdl.o: $(srcdir)/src/unix/sound_sdl.cpp $(COREDLL_ODEP)
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@coredll_accessgtk.o: $(srcdir)/src/gtk/accessgtk.cpp $(COREDLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@	$(CXXC) -c -o $@ $(COREDLL_CXXFLAGS) $(srcdir)/src/gtk/accessgtk.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@coredll_statusnotifier.o: $(srcdir)/src/gtk/statusnotifier.cpp $(COREDLL_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@	$(CXXC) -c -o $@ $(COREDLL_CXXFLAGS) $(srcdir)/src/gtk/statusnotifier.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@coredll_dbusmenu.o: $(srcdir)/src/gtk/dbusmenu.cpp $(COREDLL_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@	$(CXXC) -c -o $@ $(COREDLL_CXXFLAGS) $(srcdir)/src/gtk/dbusmenu.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@coredll_win_gtk.o: $(srcdir)/src/gtk/win_gtk.cpp $(COREDLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@	$(CXXC) -c -o $@ $(COREDLL_CXXFLAGS) $(srcdir)/src/gtk/win_gtk.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@coredll_accessgtk.o: $(srcdir)/src/gtk/accessgtk.cpp $(COREDLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@	$(CXXC) -c -o $@ $(COREDLL_CXXFLAGS) $(srcdir)/src/gtk/accessgtk.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@coredll_statusnotifier.o: $(srcdir)/src/gtk/statusnotifier.cpp $(COREDLL_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@	$(CXXC) -c -o $@ $(COREDLL_CXXFLAGS) $(srcdir)/src/gtk/statusnotifier.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@coredll_dbusmenu.o: $(srcdir)/src/gtk/dbusmenu.cpp $(COREDLL_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@	$(CXXC) -c -o $@ $(COREDLL_CXXFLAGS) $(srcdir)/src/gtk/dbusmenu.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@coredll_win_gtk.o: $(srcdir)/src/gtk/win_gtk.cpp $(COREDLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@	$(CXXC) -c -o $@ $(COREDLL_CXXFLAGS) $(srcdir)/src/gtk/win_gtk.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@coredll_accessgtk.o: $(srcdir)/src/gtk/accessgtk.cpp $(COREDLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@	$(CXXC) -c -o $@ $(COREDLL_CXXFLAGS) $(srcdir)/src/gtk/accessgtk.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@coredll_statusnotifier.o: $(srcdir)/src/gtk/statusnotifier.cpp $(COREDLL_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@	$(CXXC) -c -o $@ $(COREDLL_CXXFLAGS) $(srcdir)/src/gtk/statusnotifier.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@coredll_dbusmenu.o: $(srcdir)/src/gtk/dbusmenu.cpp $(COREDLL_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@	$(CXXC) -c -o $@ $(COREDLL_CXXFLAGS) $(srcdir)/src/gtk/dbusmenu.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@coredll_gtk_window.o: $(srcdir)/src/gtk/window.cpp $(COREDLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@	$(CXXC) -c -o $@ $(COREDLL_CXXFLAGS) $(srcdir)/src/gtk/window.cpp
@@ -31334,18 +31418,30 @@ corelib_sound_sdl.o: $(srcdir)/src/unix/sound_sdl.cpp $(CORELIB_ODEP)
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@corelib_accessgtk.o: $(srcdir)/src/gtk/accessgtk.cpp $(CORELIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@	$(CXXC) -c -o $@ $(CORELIB_CXXFLAGS) $(srcdir)/src/gtk/accessgtk.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@corelib_statusnotifier.o: $(srcdir)/src/gtk/statusnotifier.cpp $(CORELIB_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@	$(CXXC) -c -o $@ $(CORELIB_CXXFLAGS) $(srcdir)/src/gtk/statusnotifier.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@corelib_dbusmenu.o: $(srcdir)/src/gtk/dbusmenu.cpp $(CORELIB_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@	$(CXXC) -c -o $@ $(CORELIB_CXXFLAGS) $(srcdir)/src/gtk/dbusmenu.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@corelib_win_gtk.o: $(srcdir)/src/gtk/win_gtk.cpp $(CORELIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@	$(CXXC) -c -o $@ $(CORELIB_CXXFLAGS) $(srcdir)/src/gtk/win_gtk.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@corelib_accessgtk.o: $(srcdir)/src/gtk/accessgtk.cpp $(CORELIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@	$(CXXC) -c -o $@ $(CORELIB_CXXFLAGS) $(srcdir)/src/gtk/accessgtk.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@corelib_statusnotifier.o: $(srcdir)/src/gtk/statusnotifier.cpp $(CORELIB_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@	$(CXXC) -c -o $@ $(CORELIB_CXXFLAGS) $(srcdir)/src/gtk/statusnotifier.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@corelib_dbusmenu.o: $(srcdir)/src/gtk/dbusmenu.cpp $(CORELIB_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1@	$(CXXC) -c -o $@ $(CORELIB_CXXFLAGS) $(srcdir)/src/gtk/dbusmenu.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@corelib_win_gtk.o: $(srcdir)/src/gtk/win_gtk.cpp $(CORELIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@	$(CXXC) -c -o $@ $(CORELIB_CXXFLAGS) $(srcdir)/src/gtk/win_gtk.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@corelib_accessgtk.o: $(srcdir)/src/gtk/accessgtk.cpp $(CORELIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@	$(CXXC) -c -o $@ $(CORELIB_CXXFLAGS) $(srcdir)/src/gtk/accessgtk.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@corelib_statusnotifier.o: $(srcdir)/src/gtk/statusnotifier.cpp $(CORELIB_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@	$(CXXC) -c -o $@ $(CORELIB_CXXFLAGS) $(srcdir)/src/gtk/statusnotifier.cpp
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@corelib_dbusmenu.o: $(srcdir)/src/gtk/dbusmenu.cpp $(CORELIB_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1@	$(CXXC) -c -o $@ $(CORELIB_CXXFLAGS) $(srcdir)/src/gtk/dbusmenu.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@corelib_gtk_window.o: $(srcdir)/src/gtk/window.cpp $(CORELIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1@	$(CXXC) -c -o $@ $(CORELIB_CXXFLAGS) $(srcdir)/src/gtk/window.cpp

@@ -84,6 +84,74 @@ which embeds a native child *control* rather than a foreign toplevel) is
 unaffected — it doesn't touch `GdkWindow` at all and should port without
 much difficulty.
 
+## Limitations that follow from Wayland's security model
+
+The `wxNativeContainerWindow` decision above is one instance of something
+wider, and it is worth stating as a group rather than meeting six times.
+A Wayland client is not allowed to position its own window, is not told
+where the compositor put it, and is not told about surfaces belonging to
+anyone else. That is deliberate: a client that could do those things
+could place a window over another application's and follow it around,
+and where a window sits on screen is itself a small fact about the
+session. None of it is a gap waiting for an API, and none of it is
+something wx can work around.
+
+What wx *can* do is not claim otherwise, and that is what the port aims
+at in each case below. Every one of these is measured; the probes and
+their controls are in `docs/gtk/probes/` and the numbers in
+`docs/gtk/wayland-testing.md`.
+
+* **`Move()` on a top level window does nothing.** There is no request to
+  position a toplevel. wx used to send a `wxMoveEvent` carrying the
+  requested position regardless, so a move that had not happened still
+  closed an open `wxComboCtrl` popup; it now sends the event only when
+  the request was actually issued. `GetPosition()` still answers with
+  what was asked for, because the true answer is unknowable and any
+  other lie would break more callers than it fixed. (#166)
+
+* **`ClientToScreen()` and `GetScreenPosition()` do not return screen
+  coordinates.** They can only map as far as the top level window, so
+  they are relative to it. The round trip stays consistent, and so does
+  comparison with `wxGetMousePosition()`, which answers in the same
+  space -- the two defects cancel while everything involved belongs to
+  one toplevel. Mixing in a second toplevel, `wxDisplay`, or a
+  compositor rectangle is what breaks. Documented as an `@note` on
+  `wxWindow::ClientToScreen()`. (#214)
+
+* **`wxGetMousePosition()` answers in the coordinates of whichever
+  surface the pointer is over**, not the desktop's. (#134)
+
+* **A floating wxAUI pane cannot be dragged back into a dock.** Docking
+  is driven from the pane's motion, and a compositor-driven move sends
+  none. The protocol built for exactly this case,
+  `xdg_toplevel_drag_v1`, is not implemented in GTK 4.22.4 -- measured
+  from the library's own interface strings, and it is a GTK gap rather
+  than a Wayland one. (#167)
+
+* **`wxUIActionSimulator` cannot synthesise input.** It needs XTest.
+  `wxUIActionSimulatorWaylandImpl` reports the limitation rather than
+  sending events to a separate Xwayland connection and calling them
+  delivered. (#69)
+
+* **`wxNativeContainerWindow` cannot embed a foreign top level window**,
+  as set out in the section above.
+
+* **`wxTaskBarIcon` does not work under Wayland**, for a reason that is
+  not GTK4's doing. Wayland has no tray protocol, so the way a tray icon
+  reaches the panel is the StatusNotifierItem D-Bus interface, and the
+  library wx uses for it -- Ayatana's appindicator -- ships GTK+ 2 and
+  GTK+ 3 builds only; there is no GTK4 one, and its `-dev` package
+  depends on `libgtk-3-dev`. So appindicator is gated to GTK+ 3 in
+  `configure.ac` and in CMake, deliberately, and a GTK4 build simply
+  does without it. Speaking to StatusNotifierItem directly would avoid
+  the toolkit question entirely, but that is a new implementation rather
+  than a port fix and it is not attempted here. (#198)
+
+An application that needs any of these keeps working under X11, and
+`GDK_BACKEND=x11` remains available to it. That is worth saying plainly
+to anyone porting: the answer to several of these is not a workaround
+inside wx.
+
 ## What's still open (not attempted)
 
 Everything else in `gtk4-status.md`'s root-cause table: the

@@ -3,7 +3,10 @@
 //
 //     wldrag move 360 340  down  move 400 380  move 500 450  up
 //
-// Coordinates are absolute screen pixels; the extent is the output size.
+// Coordinates are absolute screen pixels. The extent they are expressed in
+// is the output's own size, which is asked for rather than assumed: a
+// mismatch does not fail, it silently scales every coordinate, and the run
+// then reports a drag that landed somewhere nobody aimed at.
 #include <wayland-client.h>
 #include "vp.h"
 #include <stdio.h>
@@ -15,13 +18,46 @@
 
 static struct wl_seat* seat;
 static struct zwlr_virtual_pointer_manager_v1* mgr;
-static int outW = 1280, outH = 1024;
+static struct wl_output* output;
+static int outW, outH;
+
+static void out_geometry(void*, struct wl_output*, int32_t, int32_t, int32_t,
+                         int32_t, int32_t, const char*, const char*, int32_t)
+{
+}
+static void out_mode(void*, struct wl_output*, uint32_t flags,
+                     int32_t w, int32_t h, int32_t)
+{
+    if ( flags & WL_OUTPUT_MODE_CURRENT )
+    {
+        outW = w;
+        outH = h;
+    }
+}
+static void out_done(void*, struct wl_output*) {}
+static void out_scale(void*, struct wl_output*, int32_t) {}
+static void out_name(void*, struct wl_output*, const char*) {}
+static void out_description(void*, struct wl_output*, const char*) {}
+static const struct wl_output_listener out_l = {
+    out_geometry, out_mode, out_done, out_scale, out_name, out_description
+};
 
 static void reg_global(void*, struct wl_registry* r, uint32_t name,
                        const char* iface, uint32_t ver)
 {
     if ( !strcmp(iface, wl_seat_interface.name) )
         seat = static_cast<struct wl_seat*>(wl_registry_bind(r, name, &wl_seat_interface, 1));
+    else if ( !strcmp(iface, wl_output_interface.name) && !output )
+    {
+        output = static_cast<struct wl_output*>(
+                wl_registry_bind(r, name, &wl_output_interface,
+                                 ver < 4 ? ver : 4));
+
+        // Listen here rather than after the next roundtrip: the output's
+        // mode arrives in the first dispatch after the bind, and a listener
+        // added later never sees it.
+        wl_output_add_listener(output, &out_l, NULL);
+    }
     else if ( !strcmp(iface, zwlr_virtual_pointer_manager_v1_interface.name) )
         mgr = static_cast<struct zwlr_virtual_pointer_manager_v1*>(
                 wl_registry_bind(r, name,
@@ -52,8 +88,20 @@ int main(int argc, char** argv)
         zwlr_virtual_pointer_manager_v1_create_virtual_pointer(mgr, seat);
     wl_display_roundtrip(d);
 
+    if ( output )
+        wl_display_roundtrip(d);
+
+    // An override stays available for a compositor whose output does not
+    // announce a mode, but it is no longer how the size is normally learnt.
     if ( const char* e = getenv("WLDRAG_EXTENT") )
         sscanf(e, "%dx%d", &outW, &outH);
+
+    if ( outW <= 0 || outH <= 0 )
+    {
+        fprintf(stderr, "no output size: set WLDRAG_EXTENT=WxH\n");
+        return 1;
+    }
+    fprintf(stderr, "wldrag: extent %dx%d\n", outW, outH);
 
     for ( int i = 1; i < argc; ++i )
     {

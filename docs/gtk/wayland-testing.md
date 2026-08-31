@@ -200,9 +200,62 @@ and during a drag the pointer is over the **floating pane**, not over
 main frame, and the hit test decides against a position nobody is pointing at.
 
 Note what is *not* wrong, since two earlier readings of this said otherwise:
-the `wxMoveEvent` does arrive (`wxTopLevelWindowGTK` sends it whenever `m_x`
-or `m_y` change, whether or not the compositor honoured the move), so
-`OnFloatingPaneMoving()` does run. It simply runs on a bad coordinate.
+`OnFloatingPaneMoving()` does run. It simply runs on a bad coordinate. (It
+used to run off a `wxMoveEvent` that `wxTopLevelWindowGTK` sent whether or
+not the compositor had honoured the move. That event is no longer sent when
+nothing moved -- see #166 -- so the path into it is now the drag's own motion
+rather than a fabricated move.)
+
+## Screen coordinates are toplevel coordinates, and mostly get away with it
+
+`probes/wayland-screen-coords.sh` asks what `ClientToScreen()` makes of a
+frame, and asks the X server and the compositor the same question from
+outside:
+
+```
+X server says the frame is at: (441,392)      compositor: (438,362) 404x302
+WX frame-client-origin (440,370)              WX frame-client-origin (0,0)
+WX roundtrip (17,23) -> (457,393) -> (17,23)  WX roundtrip (17,23) -> (17,23)
+```
+
+Under Wayland the mapping is the identity, short by the whole position of the
+window. Everything goes through `wxGTKGetOriginInRoot()`, which adds the
+surface's position on screen only inside its `GDK_WINDOWING_X11` branch --
+`gdk_window_get_origin()` has no GTK4 successor, because a client is not told
+where its surface is. That is issue #214, and it is a *different code path*
+from #166: nothing here reads `m_x`/`m_y`, so the fix for that one changes
+none of these numbers.
+
+### Why almost nothing is visibly broken by it
+
+Because the other Wayland coordinate defect cancels it. `wxGetMousePosition()`
+answers in the coordinates of whichever surface the pointer is over, and wx's
+"screen" space *is* that surface's space, so the round trip lands right:
+
+```
+WX motion event (80,108) | ScreenToClient(GetMousePosition) (80,108) | agree
+```
+
+That is measured with the pointer driven to a known place, against the motion
+event as ground truth, and it agrees on X11 too. Two wrongs, one space.
+
+**The rule this gives.** A wx "screen" coordinate is usable as long as it is
+only ever compared with another obtained the same way, from the same toplevel.
+It stops being usable the moment something from outside that space is mixed
+in:
+
+* a **second toplevel** -- `wxGetMousePosition()` then answers in the other
+  surface's coordinates and nothing cancels. This is exactly wxAUI's dock hit
+  test during a drag, which is why that is the one place the defect is
+  plainly visible (#134, #167);
+* **`wxDisplay`**, or anything else naming a position on the desktop;
+* a **compositor** rectangle, as every probe here uses for its control.
+
+So the impact is not the ~110 `ScreenToClient()`/`ClientToScreen()` call sites
+in the library. It is the far smaller set that crosses one of those three
+lines. Nothing can make the mapping right -- the position is unknowable -- so
+the limit is the rule above, written down here and in the `@note` on
+`wxWindow::ClientToScreen()` for application authors who will meet it.
 
 ## Move() does nothing to a toplevel, and wx does not notice
 
@@ -220,6 +273,9 @@ EVENT  wxEVT_MOVE says (700,120)
 MOVE   asked for (700,120) -- wx said (400,300) before, (700,120) after
 EVENT  wxEVT_MOVE says (150,600)
 MOVE   asked for (150,600) -- wx said (700,120) before, (150,600) after
+DONE   wxEVT_MOVE seen so far: 3
+WATCH  t+2s wx says (150,600), wxEVT_MOVE total 3
+WATCH  t+6s wx says (150,600), wxEVT_MOVE total 3
 ```
 
 Three moves, and the window never left the spot the compositor put it in. The
@@ -235,13 +291,27 @@ which is not obvious from reading the code: `GetPosition()` afterwards returns
 the position that was *asked for*, and a `wxMoveEvent` is sent carrying it. wx
 reports a move that did not happen.
 
+The `WATCH` lines carry the running event count while the compositor moves the
+window itself, so the reverse holds by measurement and not by an absence of
+output: **three events for three moves that did not happen, none for the one
+that did.** Afterwards wx goes on reporting (150,600) for a window sitting at
+(900,725).
+
 This is the whole of the first half of the docking bug. wxAUI drags a floating
 pane by calling `Move()` on its frame once per motion event
 (`wxAuiManager::OnMotion`, the `actionDragFloatingPane` branch), so under
 Wayland the pane stays wherever the compositor first placed it -- which, for a
-newly mapped toplevel, is usually the middle of the screen. It is also why the
-cached `m_x`/`m_y` that `ScreenToClient()` subtracts are meaningless, so the
-two halves of the bug are one cause seen twice.
+newly mapped toplevel, is usually the middle of the screen.
+
+`ScreenToClient()` on a toplevel is wrong here too, but **not for this
+reason**, and the two are worth keeping apart because fixing one does not
+touch the other. `wxWindowGTK::DoScreenToClient()` takes its `IsTopLevel()`
+path into `wxGTKGetOriginInRoot()`, which never reads `m_x`/`m_y` at all: it
+works out the widget's offset within its root, adds the client-side-decoration
+shadow, and adds the surface's position on screen only inside an
+`#ifdef GDK_WINDOWING_X11` block. Wayland skips that block, so the origin
+stays toplevel-relative -- near zero for a toplevel itself, which is why the
+call looks like an identity. One cause, two code paths.
 
 Nothing can fix that half. `Move()` cannot be made to work, so a pane can only
 be made to follow the pointer by handing the drag to the compositor with
@@ -249,6 +319,28 @@ be made to follow the pointer by handing the drag to the compositor with
 loses docking, the half that actually matters. It is recorded here as a
 limitation rather than a bug: an undocked pane not following the mouse is
 cosmetic, being unable to dock it again is not.
+
+### What was decided, and the trade it is part of
+
+Wayland withholds a window's position from its own client deliberately. A
+client that could position itself, or read back where it sits, could place a
+window over another application's and follow it around, and knowing where a
+window is on screen is itself a small leak about the session. That is a safety
+property, not a gap waiting to be filled -- and it makes some genuinely useful
+features impossible rather than merely difficult. `Move()` is one of them.
+
+What is not forced is wx claiming the move happened. `wx_gtk_window_move()`
+knows whether it issued the request, so it now says so, and
+`wxTopLevelWindowGTK::DoSetSize()` sends `wxEVT_MOVE` only when it did. The
+consumers of that event are three, and two of them act on it in ways a user
+sees: `wxComboFrameEventHandler::OnMove()` closes an open popup, and
+`wxSTCPopupWindow::OnParentMove()` repositions the autocompletion list. Before
+this, a `Move()` that moved nothing still shut the combobox popup.
+
+`GetPosition()` is deliberately left alone. It still answers with the position
+it was asked for, which is not truthful either -- but the true answer is
+unknowable, and returning something else would break callers without making
+any of them right. Issue #166 has the reasoning.
 
 ## Confirmed away from this machine
 

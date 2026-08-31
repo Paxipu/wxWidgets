@@ -43,9 +43,15 @@ public:
 
     // Implementation only.
 
+#ifdef __WXGTK4__
+    // Called from the asynchronous callback in ShowModal() with what the user
+    // chose.
+    void GTKSetChosenPaths(const wxArrayString& paths);
+#else
     void GTKOnAccept();
     void GTKOnCancel();
     void GTKDropNative();
+#endif
 
 protected:
     // override this from wxTLW since the native
@@ -56,8 +62,21 @@ protected:
 
 
 private:
+#ifndef __WXGTK4__
     void GTKAccept();
+#endif
+
+    // The part of accepting that is not about getting the paths out of GTK.
+    void GTKFinishAccept();
+
+#ifdef __WXGTK4__
+    // There is no chooser object between ShowModal() calls under GTK4: a
+    // GtkFileDialog is a controller, built and thrown away inside ShowModal().
+    // So what the caller sets beforehand has to be remembered here instead.
+    wxString m_initialPath;
+#else
     GtkFileChooser* m_fileChooser = nullptr;
+#endif
 
     wxDECLARE_DYNAMIC_CLASS(wxDirDialog);
 };

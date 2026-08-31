@@ -64,7 +64,9 @@ private:
     bool m_ignoreNextFilterEvent;
 };
 
-#if wxUSE_FILECTRL
+// Not under GTK4: see the comment in src/gtk/filectrl.cpp. wxGtkFileChooser
+// above is unaffected -- wxFileDialog still uses it.
+#if wxUSE_FILECTRL && !defined(__WXGTK4__)
 
 class WXDLLIMPEXP_CORE wxGtkFileCtrl: public wxControl,
             public wxFileCtrlBase
@@ -137,7 +139,7 @@ private:
     wxDECLARE_DYNAMIC_CLASS(wxGtkFileCtrl);
 };
 
-#endif // wxUSE_FILECTRL
+#endif // wxUSE_FILECTRL && !defined(__WXGTK4__)
 
 #endif // _WX_GTK_FILECTRL_H_
 

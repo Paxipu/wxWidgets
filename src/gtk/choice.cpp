@@ -20,6 +20,7 @@
 #include "wx/gtk/private/event.h"
 #include "wx/gtk/private/eventsdisabler.h"
 #include "wx/gtk/private/list.h"
+#include "wx/gtk/private/object.h"
 #include "wx/gtk/private/value.h"
 #include "wx/gtk/private/gtk3-compat.h"
 
@@ -27,13 +28,96 @@
 // GTK callbacks
 // ----------------------------------------------------------------------------
 
+#ifdef __WXGTK4__
+
+// GtkComboBox is deprecated since GTK 4.10 and GtkDropDown replaces it. The
+// two differ in more than their names, and these helpers hold the differences
+// in one place.
+namespace
+{
+
+// GTK counts "nothing selected" as GTK_INVALID_LIST_POSITION, wx as
+// wxNOT_FOUND, and neither is representable in the other's type by accident.
+inline guint wxGTKSelectionToGTK(int n)
+{
+    return n == wxNOT_FOUND ? GTK_INVALID_LIST_POSITION : guint(n);
+}
+
+inline int wxGTKSelectionFromGTK(guint n)
+{
+    return n == GTK_INVALID_LIST_POSITION ? wxNOT_FOUND : int(n);
+}
+
+inline GtkStringList* wxGTKChoiceList(GtkWidget* widget)
+{
+    return GTK_STRING_LIST(gtk_drop_down_get_model(GTK_DROP_DOWN(widget)));
+}
+
+// The popover and the toggle button are both direct children of a
+// GtkDropDown, unlike GtkComboBox where the button sat three levels down
+// behind a cell view. Measured in docs/gtk/probes/gtk4-dropdown-parts.c.
+GtkWidget* wxGTKChoiceChildOfType(GtkWidget* widget, GType type)
+{
+    for ( GtkWidget* c = gtk_widget_get_first_child(widget); c;
+          c = gtk_widget_get_next_sibling(c) )
+    {
+        if ( G_TYPE_CHECK_INSTANCE_TYPE(c, type) )
+            return c;
+    }
+
+    return nullptr;
+}
+
+} // anonymous namespace
+
+#endif // __WXGTK4__
+
 extern "C" {
+
+#ifdef __WXGTK4__
+
+// GtkDropDown has no "changed" signal: the selection is a plain property.
+static void
+gtk_choice_changed_callback( GObject *WXUNUSED(widget),
+                             GParamSpec *WXUNUSED(pspec),
+                             wxChoice *choice )
+{
+    choice->SendSelectionChangedEvent(wxEVT_CHOICE);
+}
+
+// GtkDropDown's own label does not ellipsize, and a choice whose strings do
+// not fit then shows the tail of one rather than the head -- which for a short
+// string can be nothing at all. GtkComboBoxText needed the same treatment
+// through its cell renderer; here it takes a list item factory.
+static void
+wx_gtk_choice_label_setup(GtkListItemFactory* WXUNUSED(factory),
+                          GtkListItem* item, gpointer WXUNUSED(data))
+{
+    GtkWidget* const label = gtk_label_new(nullptr);
+    gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_END);
+    gtk_label_set_xalign(GTK_LABEL(label), 0.0);
+    gtk_list_item_set_child(item, label);
+}
+
+static void
+wx_gtk_choice_label_bind(GtkListItemFactory* WXUNUSED(factory),
+                         GtkListItem* item, gpointer WXUNUSED(data))
+{
+    GtkStringObject* const obj =
+        GTK_STRING_OBJECT(gtk_list_item_get_item(item));
+    gtk_label_set_text(GTK_LABEL(gtk_list_item_get_child(item)),
+                       gtk_string_object_get_string(obj));
+}
+
+#else // !__WXGTK4__
 
 static void
 gtk_choice_changed_callback( GtkWidget *WXUNUSED(widget), wxChoice *choice )
 {
     choice->SendSelectionChangedEvent(wxEVT_CHOICE);
 }
+
+#endif // __WXGTK4__/!__WXGTK4__
 
 #ifdef __WXGTK4__
 
@@ -82,16 +166,17 @@ wx_gtk_choice_leave_notify(GtkWidget* widget,
 
 }
 
+#ifndef __WXGTK4__
+
 // GtkComboBox stopped being a GtkBin under GTK4, but it kept a direct
-// accessor for the child which used to be reached through one.
+// accessor for the child which used to be reached through one. Under GTK4
+// there is no GtkComboBox here at all any more.
 static inline GtkWidget* wxGTKComboBoxGetChild(GtkWidget* combo)
 {
-#ifdef __WXGTK4__
-    return gtk_combo_box_get_child(GTK_COMBO_BOX(combo));
-#else
     return gtk_bin_get_child(GTK_BIN(combo));
-#endif
 }
+
+#endif // !__WXGTK4__
 
 //-----------------------------------------------------------------------------
 // wxChoice
@@ -135,7 +220,28 @@ bool wxChoice::Create( wxWindow *parent, wxWindowID id,
         m_strings = new wxGtkCollatedArrayString;
     }
 
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    // GtkDropDown takes its model at construction and owns it from then on.
+    m_widget = gtk_drop_down_new(G_LIST_MODEL(gtk_string_list_new(nullptr)),
+                                 nullptr);
+
+    // See wx_gtk_choice_label_setup() for why the default label will not do.
+    {
+        wxGtkObject<GtkListItemFactory>
+            factory(gtk_signal_list_item_factory_new());
+        g_signal_connect(factory, "setup",
+                         G_CALLBACK(wx_gtk_choice_label_setup), nullptr);
+        g_signal_connect(factory, "bind",
+                         G_CALLBACK(wx_gtk_choice_label_bind), nullptr);
+        gtk_drop_down_set_factory(GTK_DROP_DOWN(m_widget), factory);
+    }
+
+    // A fresh wxChoice has nothing selected. GtkDropDown would select the
+    // first item as soon as one exists, so say so here and again after every
+    // insertion; see DoInsertItems().
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(m_widget),
+                               GTK_INVALID_LIST_POSITION);
+#elif defined(__WXGTK3__)
     m_widget = gtk_combo_box_text_new();
 
     // If any choices don't fit into the available space (in the always visible
@@ -159,10 +265,28 @@ bool wxChoice::Create( wxWindow *parent, wxWindowID id,
 
     PostCreation(size);
 
+#ifdef __WXGTK4__
+    g_signal_connect_after (m_widget, "notify::selected",
+                            G_CALLBACK (gtk_choice_changed_callback), this);
+#else
     g_signal_connect_after (m_widget, "changed",
                             G_CALLBACK (gtk_choice_changed_callback), this);
+#endif
 
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    // GtkDropDown is much plainer than GtkComboBoxText was: the button that
+    // takes the pointer is a direct child, not three levels down behind a cell
+    // view. Measured in docs/gtk/probes/gtk4-dropdown-parts.c.
+    auto button = wxGTKChoiceChildOfType(m_widget, GTK_TYPE_TOGGLE_BUTTON);
+    wxCHECK_MSG( button, true, "No toggle button in GtkDropDown?" );
+
+    GtkEventController* const motion = gtk_event_controller_motion_new();
+    g_signal_connect(motion, "enter",
+                     G_CALLBACK(wx_gtk_choice_enter_notify), this);
+    g_signal_connect(motion, "leave",
+                     G_CALLBACK(wx_gtk_choice_leave_notify), this);
+    gtk_widget_add_controller(button, motion);
+#elif defined(__WXGTK3__)
     // Internal structure of GtkComboBoxText is complicated: it contains a
     // GtkBox which contains a GtkToggleButton which contains another GtkBox
     // which, in turn, contains GtkCellView (and more).
@@ -176,9 +300,6 @@ bool wxChoice::Create( wxWindow *parent, wxWindowID id,
     // which is simpler because GtkComboBoxText sets things up in such a way
     // that its only child is the GtkCellView (even if, again, this is not how
     // things really are internally).
-    //
-    // This layout is unchanged in GTK4, which is checked for by the
-    // gtk4-invariants CI test as it is not part of any documented API.
     auto cellView = wxGTKComboBoxGetChild(m_widget);
     wxCHECK_MSG( cellView, true, "No cell view in GtkComboBoxText?" );
 
@@ -188,20 +309,11 @@ bool wxChoice::Create( wxWindow *parent, wxWindowID id,
     wxCHECK_MSG( GTK_IS_TOGGLE_BUTTON(button), true,
                  "Unexpected grandparent of GtkCellView in GtkComboBoxText" );
 
-#ifdef __WXGTK4__
-    GtkEventController* const motion = gtk_event_controller_motion_new();
-    g_signal_connect(motion, "enter",
-                     G_CALLBACK(wx_gtk_choice_enter_notify), this);
-    g_signal_connect(motion, "leave",
-                     G_CALLBACK(wx_gtk_choice_leave_notify), this);
-    gtk_widget_add_controller(button, motion);
-#else
     g_signal_connect(button, "enter_notify_event",
                      G_CALLBACK(wx_gtk_choice_enter_notify), this);
     g_signal_connect(button, "leave_notify_event",
                      G_CALLBACK(wx_gtk_choice_leave_notify), this);
-#endif
-#endif // __WXGTK3__
+#endif // __WXGTK4__/__WXGTK3__
 
     return true;
 }
@@ -223,6 +335,20 @@ wxChoice::~wxChoice()
 
 bool wxChoice::GTKHandleFocusOut()
 {
+#ifdef __WXGTK4__
+    // GtkDropDown has no "popup-shown" property -- its full property list is
+    // printed by docs/gtk/probes/gtk4-dropdown-parts.c -- but its popover is a
+    // direct child and knows whether it is up.
+    //
+    // Don't send "focus lost" events if the focus is grabbed by our own popup:
+    // it counts as part of this window, even though wx doesn't know about it.
+    if ( GtkWidget* const popover =
+            wxGTKChoiceChildOfType(m_widget, GTK_TYPE_POPOVER) )
+    {
+        if ( gtk_widget_get_visible(popover) )
+            return true;
+    }
+#else
     if ( wx_is_at_least_gtk2(10) )
     {
         gboolean isShown;
@@ -234,6 +360,7 @@ bool wxChoice::GTKHandleFocusOut()
         if ( isShown )
             return true;
     }
+#endif // __WXGTK4__/!__WXGTK4__
 
     return wxChoiceBase::GTKHandleFocusOut();
 }
@@ -251,6 +378,38 @@ int wxChoice::DoInsertItems(const wxArrayStringsAdapter & items,
 
     int n = wxNOT_FOUND;
 
+#ifdef __WXGTK4__
+    GtkStringList* const list = wxGTKChoiceList(m_widget);
+
+    // Adding the first item to an empty GtkDropDown makes GTK select it, and a
+    // wxChoice must not do that: a freshly filled one has nothing selected.
+    // So remember what was selected and put it back.  That GTK behaves this
+    // way is pinned in build/tools/gtk4-invariants.c.
+    const int selOld = GetSelection();
+
+    {
+        wxGtkEventsDisabler<wxChoice> noEvents(this);
+
+        for ( int i = 0; i < count; ++i )
+        {
+            n = pos + i;
+            // If sorted, use this wxSortedArrayStrings to determine
+            // the right insertion point
+            if (m_strings)
+                n = m_strings->Add(items[i]);
+
+            const char* const additions[] =
+                { items[i].utf8_str().data(), nullptr };
+            gtk_string_list_splice(list, guint(n), 0, additions);
+
+            m_clientData.Insert( nullptr, n );
+            AssignNewItemClientData(n, clientData, i, type);
+        }
+
+        gtk_drop_down_set_selected(GTK_DROP_DOWN(m_widget),
+                                   wxGTKSelectionToGTK(selOld));
+    }
+#else
     GtkTreeIter iter;
     GtkTreeModel *model = gtk_combo_box_get_model( GTK_COMBO_BOX( m_widget ) );
     GtkListStore *store = GTK_LIST_STORE( model );
@@ -273,7 +432,7 @@ int wxChoice::DoInsertItems(const wxArrayStringsAdapter & items,
     }
 
     gtk_widget_thaw_child_notify(m_widget);
-
+#endif // __WXGTK4__/!__WXGTK4__
 
     InvalidateBestSize();
 
@@ -296,10 +455,19 @@ void wxChoice::DoClear()
 
     wxGtkEventsDisabler<wxChoice> noEvents(this);
 
+#ifdef __WXGTK4__
+    if ( GtkStringList* const list = wxGTKChoiceList(m_widget) )
+    {
+        gtk_string_list_splice(list, 0,
+                               g_list_model_get_n_items(G_LIST_MODEL(list)),
+                               nullptr);
+    }
+#else
     GtkComboBox* combobox = GTK_COMBO_BOX( m_widget );
     GtkTreeModel* model = gtk_combo_box_get_model( combobox );
     if (model)
         gtk_list_store_clear(GTK_LIST_STORE(model));
+#endif
 
     m_clientData.Clear();
 
@@ -314,6 +482,12 @@ void wxChoice::DoDeleteOneItem(unsigned int n)
     wxCHECK_RET( m_widget != nullptr, wxT("invalid control") );
     wxCHECK_RET( IsValid(n), wxT("invalid index in wxChoice::Delete") );
 
+#ifdef __WXGTK4__
+    {
+        wxGtkEventsDisabler<wxChoice> noEvents(this);
+        gtk_string_list_remove(wxGTKChoiceList(m_widget), guint(n));
+    }
+#else
     GtkComboBox* combobox = GTK_COMBO_BOX( m_widget );
     GtkTreeModel* model = gtk_combo_box_get_model( combobox );
     GtkListStore* store = GTK_LIST_STORE(model);
@@ -325,6 +499,7 @@ void wxChoice::DoDeleteOneItem(unsigned int n)
         return;
     }
     gtk_list_store_remove( store, &iter );
+#endif
 
     m_clientData.RemoveAt( n );
     if ( m_strings )
@@ -337,6 +512,19 @@ int wxChoice::FindString( const wxString &item, bool bCase ) const
 {
     wxCHECK_MSG( m_widget != nullptr, wxNOT_FOUND, wxT("invalid control") );
 
+#ifdef __WXGTK4__
+    GtkStringList* const list = wxGTKChoiceList(m_widget);
+    const guint items = g_list_model_get_n_items(G_LIST_MODEL(list));
+    for ( guint i = 0; i < items; i++ )
+    {
+        const wxString str = wxString::FromUTF8Unchecked(
+                                gtk_string_list_get_string(list, i));
+        if (item.IsSameAs( str, bCase ) )
+            return int(i);
+    }
+
+    return wxNOT_FOUND;
+#else
     GtkComboBox* combobox = GTK_COMBO_BOX( m_widget );
     GtkTreeModel* model = gtk_combo_box_get_model( combobox );
     GtkTreeIter iter;
@@ -358,20 +546,38 @@ int wxChoice::FindString( const wxString &item, bool bCase ) const
     while ( gtk_tree_model_iter_next(model, &iter) );
 
     return wxNOT_FOUND;
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 int wxChoice::GetSelection() const
 {
+#ifdef __WXGTK4__
+    return wxGTKSelectionFromGTK(
+                gtk_drop_down_get_selected(GTK_DROP_DOWN(m_widget)));
+#else
     return gtk_combo_box_get_active( GTK_COMBO_BOX( m_widget ) );
+#endif
 }
 
 void wxChoice::SetString(unsigned int n, const wxString &text)
 {
     wxCHECK_RET( m_widget != nullptr, wxT("invalid control") );
-
-    GtkComboBox* combobox = GTK_COMBO_BOX( m_widget );
     wxCHECK_RET( IsValid(n), wxT("invalid index") );
 
+#ifdef __WXGTK4__
+    // A GtkStringList cannot replace one string, so splice one out and one in.
+    // A model change is where GTK moves the selection, so put it back.
+    {
+        wxGtkEventsDisabler<wxChoice> noEvents(this);
+
+        const int selOld = GetSelection();
+        const char* const additions[] = { text.utf8_str().data(), nullptr };
+        gtk_string_list_splice(wxGTKChoiceList(m_widget), guint(n), 1, additions);
+        gtk_drop_down_set_selected(GTK_DROP_DOWN(m_widget),
+                                   wxGTKSelectionToGTK(selOld));
+    }
+#else
+    GtkComboBox* combobox = GTK_COMBO_BOX( m_widget );
     GtkTreeModel *model = gtk_combo_box_get_model( combobox );
     GtkTreeIter iter;
     if (gtk_tree_model_iter_nth_child (model, &iter, nullptr, n))
@@ -380,6 +586,7 @@ void wxChoice::SetString(unsigned int n, const wxString &text)
         g_value_set_string( value, text.utf8_str() );
         gtk_list_store_set_value( GTK_LIST_STORE(model), &iter, m_stringCellIndex, value );
     }
+#endif
 
     InvalidateBestSize();
 }
@@ -388,6 +595,16 @@ wxString wxChoice::GetString(unsigned int n) const
 {
     wxCHECK_MSG( m_widget != nullptr, wxEmptyString, wxT("invalid control") );
 
+#ifdef __WXGTK4__
+    GtkStringList* const list = wxGTKChoiceList(m_widget);
+    if ( n >= g_list_model_get_n_items(G_LIST_MODEL(list)) )
+    {
+        wxFAIL_MSG( "invalid index" );
+        return wxString();
+    }
+
+    return wxString::FromUTF8Unchecked(gtk_string_list_get_string(list, n));
+#else
     GtkComboBox* combobox = GTK_COMBO_BOX( m_widget );
     GtkTreeModel *model = gtk_combo_box_get_model( combobox );
     GtkTreeIter iter;
@@ -400,14 +617,19 @@ wxString wxChoice::GetString(unsigned int n) const
     wxGtkValue value;
     gtk_tree_model_get_value( model, &iter, m_stringCellIndex, value );
     return wxString::FromUTF8Unchecked( g_value_get_string( value ) );
+#endif
 }
 
 unsigned int wxChoice::GetCount() const
 {
     wxCHECK_MSG( m_widget != nullptr, 0, wxT("invalid control") );
 
+#ifdef __WXGTK4__
+    return g_list_model_get_n_items(G_LIST_MODEL(wxGTKChoiceList(m_widget)));
+#else
     GtkComboBox* combobox = GTK_COMBO_BOX( m_widget );
     GtkTreeModel* model = gtk_combo_box_get_model( combobox );
+
     GtkTreeIter iter;
     gtk_tree_model_get_iter_first( model, &iter );
     if (!gtk_list_store_iter_is_valid(GTK_LIST_STORE(model), &iter ))
@@ -416,6 +638,7 @@ unsigned int wxChoice::GetCount() const
     while (gtk_tree_model_iter_next( model, &iter ))
         ret++;
     return ret;
+#endif
 }
 
 void wxChoice::SetSelection( int n )
@@ -424,8 +647,13 @@ void wxChoice::SetSelection( int n )
 
     wxGtkEventsDisabler<wxChoice> noEvents(this);
 
+#ifdef __WXGTK4__
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(m_widget),
+                               wxGTKSelectionToGTK(n));
+#else
     GtkComboBox* combobox = GTK_COMBO_BOX( m_widget );
     gtk_combo_box_set_active( combobox, n );
+#endif
 }
 
 void wxChoice::SetColumns(int n)
@@ -481,7 +709,15 @@ wxSize wxChoice::DoGetSizeFromTextSize(int xlen, int ylen) const
     wxASSERT_MSG( m_widget, wxS("GetSizeFromTextSize called before creation") );
 
     // a GtkEntry for wxComboBox and a GtkCellView for wxChoice
+#ifdef __WXGTK4__
+    // WIP: under GTK4 a wxChoice is a GtkDropDown, whose analogue of the cell
+    // view is the label the factory puts inside the toggle button.
+    GtkWidget* childPart = wxGTKChoiceChildOfType(m_widget, GTK_TYPE_TOGGLE_BUTTON);
+    if ( !childPart )
+        childPart = m_widget;
+#else
     GtkWidget* childPart = wxGTKComboBoxGetChild(m_widget);
+#endif
 
 #ifdef __WXGTK3__
     // Preferred size for wxChoice can be incorrect when control is empty,
@@ -538,7 +774,13 @@ wxSize wxChoice::DoGetSizeFromTextSize(int xlen, int ylen) const
 void wxChoice::DoApplyWidgetStyle(GtkRcStyle *style)
 {
     GTKApplyStyle(m_widget, style);
+#ifdef __WXGTK4__
+    if ( GtkWidget* const button =
+            wxGTKChoiceChildOfType(m_widget, GTK_TYPE_TOGGLE_BUTTON) )
+        GTKApplyStyle(button, style);
+#else
     GTKApplyStyle(wxGTKComboBoxGetChild(m_widget), style);
+#endif
 }
 
 // static

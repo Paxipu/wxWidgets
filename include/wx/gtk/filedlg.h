@@ -61,7 +61,19 @@ public:
     virtual void EndModal(int retCode) override;
 
     virtual bool AddShortcut(const wxString& directory, int flags = 0) override;
+    // GTK4 removed gtk_file_chooser_set_extra_widget(): a chooser can only be
+    // extended with the fixed set of controls gtk_file_chooser_add_choice()
+    // offers, not with an arbitrary widget. Saying "yes" here anyway made
+    // SetExtraControlCreator() succeed, the application's creator run, and the
+    // control it returned be owned and never shown -- so the application was
+    // told it had an extra control and had none. Say no instead, so that
+    // SetExtraControlCreator() and SetCustomizeHook() fail and the caller can
+    // do something else.
+#ifdef __WXGTK4__
+    virtual bool SupportsExtraControl() const override { return false; }
+#else
     virtual bool SupportsExtraControl() const override { return true; }
+#endif
 
     // Implementation only.
     void GTKSelectionChanged(const wxString& filename);

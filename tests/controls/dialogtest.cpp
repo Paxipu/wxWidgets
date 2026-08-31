@@ -70,6 +70,43 @@ TEST_CASE("Modal::FontDialog", "[modal]")
 
 #endif // wxUSE_FONTDLG
 
+#if wxUSE_FILEDLG
+
+// wxFileDialog::SetExtraControlCreator() reports whether the port can show an
+// extra control, and an application is entitled to act on the answer. Under
+// GTK4 it cannot: gtk_file_chooser_set_extra_widget() is gone and a chooser
+// only takes the fixed choices gtk_file_chooser_add_choice() offers.
+//
+// Saying "yes" anyway ran the application's creator and then owned the control
+// it returned without ever showing it, so the application was told it had an
+// extra control and had none. This pins the answer to the truth on every
+// platform rather than only noticing when someone looks at a dialog.
+static wxWindow* CreateExtraControlForTest(wxWindow* parent)
+{
+    return new wxWindow(parent, wxID_ANY);
+}
+
+TEST_CASE("wxFileDialog::ExtraControl", "[filedlg]")
+{
+    wxFileDialog dlg(nullptr, "Test", "", "",
+                     wxFileSelectorDefaultWildcardStr, wxFD_OPEN);
+
+    const bool accepted = dlg.SetExtraControlCreator(&CreateExtraControlForTest);
+
+#ifdef __WXGTK4__
+    INFO("GTK4 cannot host an arbitrary widget in a file chooser");
+    CHECK( !accepted );
+#else
+    INFO("this port can host an extra control, so it must accept one");
+    CHECK( accepted );
+#endif
+
+    // Whatever the answer, it has to be the same one the port reports.
+    CHECK( accepted == dlg.SupportsExtraControl() );
+}
+
+#endif // wxUSE_FILEDLG
+
 #if wxUSE_WIZARDDLG && defined(__WXGTK4__)
     #include "wx/sizer.h"
     #include "wx/stattext.h"

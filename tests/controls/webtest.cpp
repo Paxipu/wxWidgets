@@ -99,12 +99,26 @@ protected:
 
 TEST_CASE_METHOD(WebViewTestCase, "WebView", "[wxWebView]")
 {
-#if defined(__WXGTK__) && !defined(__WXGTK3__)
+#if defined(__WXGTK__) && !defined(__WXGTK3__) && !defined(__WXGTK4__)
     wxString value;
     if ( !wxGetEnv("wxTEST_WEBVIEW_GTK2", &value) || value != "1" )
     {
         WARN("Skipping WebView tests known to fail with wxGTK 2, set "
              "wxTEST_WEBVIEW_GTK2=1 to force running them.");
+        return;
+    }
+#endif
+
+#ifdef __WXGTK4__
+    // Creating the view aborts the whole process rather than failing a check
+    // -- an invalid WebKitWebContext reaches g_object_new -- so the rest of
+    // the suite never runs either. See #217.
+    wxString forceGTK4;
+    if ( !wxGetEnv("wxTEST_WEBVIEW_GTK4", &forceGTK4) || forceGTK4 != "1" )
+    {
+        WARN("Skipping WebView tests: wxWebView aborts on construction under "
+             "GTK4, see #217. Set wxTEST_WEBVIEW_GTK4=1 to force running "
+             "them.");
         return;
     }
 #endif

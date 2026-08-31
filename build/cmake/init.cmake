@@ -820,7 +820,20 @@ if(wxUSE_GUI)
         set(wxUSE_LIBGNOMEVFS OFF)
     endif()
 
-    if(WXGTK3 AND wxUSE_SPELLCHECK)
+    if(WXGTK4 AND wxUSE_SPELLCHECK)
+        # gspell-1 is a GTK+ 3 library, so a GTK4 build uses libspelling
+        # instead -- the same split configure.ac makes.  Without this branch
+        # wxUSE_SPELLCHECK stayed on with no library found at all, and
+        # src/gtk/textctrl.cpp then failed on #include <libspelling.h>.
+        find_package(SPELLING)
+        if(SPELLING_FOUND)
+            list(APPEND wxTOOLKIT_INCLUDE_DIRS ${SPELLING_INCLUDE_DIRS})
+            list(APPEND wxTOOLKIT_LIBRARIES ${SPELLING_LIBRARIES})
+        else()
+            message(STATUS "libspelling-1 not found, spell checking in wxTextCtrl won't be available")
+            wx_option_force_value(wxUSE_SPELLCHECK OFF)
+        endif()
+    elseif(WXGTK3 AND wxUSE_SPELLCHECK)
         find_package(GSPELL)
         if(GSPELL_FOUND)
             list(APPEND wxTOOLKIT_INCLUDE_DIRS ${GSPELL_INCLUDE_DIRS})

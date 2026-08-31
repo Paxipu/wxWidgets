@@ -1317,6 +1317,7 @@ set(GTK_LOWLEVEL_SRC
     src/gtk/window.cpp
     src/gtk/power.cpp
     src/gtk/wayland.cpp
+    src/gtk/accessgtk.cpp
 )
 
 set(GTK2_LOWLEVEL_SRC
@@ -1354,6 +1355,7 @@ set(GTK_LOWLEVEL_HDR
     wx/gtk/tooltip.h
     wx/gtk/toplevel.h
     wx/gtk/window.h
+    wx/gtk/access.h
 )
 
 set(GTK_SRC

@@ -121,3 +121,15 @@ jobs:
       - name: Check that all headers are listed in tests/allheaders.h
         run: |
             ./misc/scripts/check_allheaders.sh
+
+  check-files-lists:
+    runs-on: ubuntu-latest
+    name: Check Generated File Lists
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check that the generated file lists match build/files
+        run: |
+            ./misc/scripts/check_files_lists.sh

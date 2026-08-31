@@ -15,6 +15,7 @@
 #include "wx/filedlg.h"
 #include "wx/colordlg.h"
 #include "wx/fontdlg.h"
+#include "wx/dirdlg.h"
 
 #if wxUSE_COLOURDLG
 
@@ -70,6 +71,26 @@ TEST_CASE("Modal::FontDialog", "[modal]")
 
 #endif // wxUSE_FONTDLG
 
+#if wxUSE_DIRDLG
+
+// See the comment on Modal::ColourDialog above: under GTK4 this no longer goes
+// through the base class ShowModal() either, because GtkFileDialog is a
+// controller object rather than a widget.
+TEST_CASE("Modal::DirDialog", "[modal]")
+{
+    wxDirDialog dlg(nullptr, "Pick a folder", wxGetCwd());
+
+    int rc = wxID_NONE;
+    wxTEST_DIALOG
+    (
+        rc = dlg.ShowModal(),
+        wxExpectDismissableModal<wxDirDialog>(wxID_CANCEL)
+    );
+
+    CHECK( rc == wxID_CANCEL );
+}
+
+#endif // wxUSE_DIRDLG
 #if wxUSE_FILEDLG
 
 // wxFileDialog::SetExtraControlCreator() reports whether the port can show an

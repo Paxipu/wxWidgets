@@ -110,15 +110,16 @@ TEST_CASE_METHOD(WebViewTestCase, "WebView", "[wxWebView]")
 #endif
 
 #ifdef __WXGTK4__
-    // Creating the view aborts the whole process rather than failing a check
-    // -- an invalid WebKitWebContext reaches g_object_new -- so the rest of
-    // the suite never runs either. See #217.
+    // The view can be created now, but the web process extension never
+    // connects back, so everything reading page content -- GetPageText(),
+    // GetSelectedText(), HasSelection() -- answers empty. Six checks fail.
+    // See #217.
     wxString forceGTK4;
     if ( !wxGetEnv("wxTEST_WEBVIEW_GTK4", &forceGTK4) || forceGTK4 != "1" )
     {
-        WARN("Skipping WebView tests: wxWebView aborts on construction under "
-             "GTK4, see #217. Set wxTEST_WEBVIEW_GTK4=1 to force running "
-             "them.");
+        WARN("Skipping WebView tests: the web process extension does not "
+             "connect under GTK4, so page content reads empty, see #217. "
+             "Set wxTEST_WEBVIEW_GTK4=1 to force running them.");
         return;
     }
 #endif

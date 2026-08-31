@@ -220,6 +220,9 @@ EVENT  wxEVT_MOVE says (700,120)
 MOVE   asked for (700,120) -- wx said (400,300) before, (700,120) after
 EVENT  wxEVT_MOVE says (150,600)
 MOVE   asked for (150,600) -- wx said (700,120) before, (150,600) after
+DONE   wxEVT_MOVE seen so far: 3
+WATCH  t+2s wx says (150,600), wxEVT_MOVE total 3
+WATCH  t+6s wx says (150,600), wxEVT_MOVE total 3
 ```
 
 Three moves, and the window never left the spot the compositor put it in. The
@@ -235,13 +238,27 @@ which is not obvious from reading the code: `GetPosition()` afterwards returns
 the position that was *asked for*, and a `wxMoveEvent` is sent carrying it. wx
 reports a move that did not happen.
 
+The `WATCH` lines carry the running event count while the compositor moves the
+window itself, so the reverse holds by measurement and not by an absence of
+output: **three events for three moves that did not happen, none for the one
+that did.** Afterwards wx goes on reporting (150,600) for a window sitting at
+(900,725).
+
 This is the whole of the first half of the docking bug. wxAUI drags a floating
 pane by calling `Move()` on its frame once per motion event
 (`wxAuiManager::OnMotion`, the `actionDragFloatingPane` branch), so under
 Wayland the pane stays wherever the compositor first placed it -- which, for a
-newly mapped toplevel, is usually the middle of the screen. It is also why the
-cached `m_x`/`m_y` that `ScreenToClient()` subtracts are meaningless, so the
-two halves of the bug are one cause seen twice.
+newly mapped toplevel, is usually the middle of the screen.
+
+`ScreenToClient()` on a toplevel is wrong here too, but **not for this
+reason**, and the two are worth keeping apart because fixing one does not
+touch the other. `wxWindowGTK::DoScreenToClient()` takes its `IsTopLevel()`
+path into `wxGTKGetOriginInRoot()`, which never reads `m_x`/`m_y` at all: it
+works out the widget's offset within its root, adds the client-side-decoration
+shadow, and adds the surface's position on screen only inside an
+`#ifdef GDK_WINDOWING_X11` block. Wayland skips that block, so the origin
+stays toplevel-relative -- near zero for a toplevel itself, which is why the
+call looks like an identity. One cause, two code paths.
 
 Nothing can fix that half. `Move()` cannot be made to work, so a pane can only
 be made to follow the pointer by handing the drag to the compositor with
@@ -249,6 +266,28 @@ be made to follow the pointer by handing the drag to the compositor with
 loses docking, the half that actually matters. It is recorded here as a
 limitation rather than a bug: an undocked pane not following the mouse is
 cosmetic, being unable to dock it again is not.
+
+### What was decided, and the trade it is part of
+
+Wayland withholds a window's position from its own client deliberately. A
+client that could position itself, or read back where it sits, could place a
+window over another application's and follow it around, and knowing where a
+window is on screen is itself a small leak about the session. That is a safety
+property, not a gap waiting to be filled -- and it makes some genuinely useful
+features impossible rather than merely difficult. `Move()` is one of them.
+
+What is not forced is wx claiming the move happened. `wx_gtk_window_move()`
+knows whether it issued the request, so it now says so, and
+`wxTopLevelWindowGTK::DoSetSize()` sends `wxEVT_MOVE` only when it did. The
+consumers of that event are three, and two of them act on it in ways a user
+sees: `wxComboFrameEventHandler::OnMove()` closes an open popup, and
+`wxSTCPopupWindow::OnParentMove()` repositions the autocompletion list. Before
+this, a `Move()` that moved nothing still shut the combobox popup.
+
+`GetPosition()` is deliberately left alone. It still answers with the position
+it was asked for, which is not truthful either -- but the true answer is
+unknowable, and returning something else would break callers without making
+any of them right. Issue #166 has the reasoning.
 
 ## Confirmed away from this machine
 

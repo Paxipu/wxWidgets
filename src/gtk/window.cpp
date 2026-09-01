@@ -8638,7 +8638,13 @@ static wxString wxGTKCssScopeClass(GtkWidget* mainWidget)
 // class and its descendants, and anything else becomes a descendant selector
 // under the scope class. That reproduces what a provider on a widget's own
 // style context did.
-static wxString wxGTKScopeCssData(const char* css, const wxString& scopeClass)
+//
+// With selfOnly, "*" becomes the scope class alone. A GTK+ 3 provider could
+// not reach out of the widget it belonged to, but a GTK4 one lives on the
+// display and "descendants" there includes the windows a container holds, so
+// a rule meant for a container's own frame has to say so.
+static wxString wxGTKScopeCssData(const char* css, const wxString& scopeClass,
+                                  bool selfOnly = false)
 {
     const wxString scope = "." + scopeClass;
 
@@ -8665,7 +8671,11 @@ static wxString wxGTKScopeCssData(const char* css, const wxString& scopeClass)
                 scoped += ",";
 
             if ( one == "*" )
-                scoped << scope << "," << scope << " *";
+            {
+                scoped << scope;
+                if ( !selfOnly )
+                    scoped << "," << scope << " *";
+            }
             else
                 scoped << scope << " " << one;
         }
@@ -8730,21 +8740,38 @@ static void wxGTKAddScopedCssProvider(GtkWidget* widget, GtkCssProvider* provide
 
 #endif // __WXGTK4__
 
+#ifdef __WXGTK4__
+
+// Load the rules under a class of this widget's own and put the provider on
+// the display, which is the only place GTK4 has for one.
+static void wxGTKApplyScopedCss(GtkWidget* widget, GtkWidget* clientWidget,
+                                GtkCssProvider* provider, const char* style,
+                                bool selfOnly)
+{
+    const wxString scopeClass = wxGTKCssScopeClass(widget);
+
+    wxGTKLoadCssData(provider,
+                     wxGTKScopeCssData(style, scopeClass, selfOnly).utf8_str());
+
+    gtk_widget_add_css_class(widget, scopeClass.utf8_str());
+
+    // The client area is a separate widget, so it needs the class too for the
+    // descendant half of the selector to reach what it holds -- but not when
+    // the rules are meant for this widget's own node only.
+    if ( !selfOnly && clientWidget && clientWidget != widget )
+        gtk_widget_add_css_class(clientWidget, scopeClass.utf8_str());
+
+    wxGTKAddScopedCssProvider(widget, provider);
+}
+
+#endif // __WXGTK4__
+
 void wxWindowGTK::GTKApplyCssStyle(GtkCssProvider* provider, const char* style)
 {
     wxCHECK_RET(m_widget, "invalid window");
 
 #ifdef __WXGTK4__
-    const wxString scopeClass = wxGTKCssScopeClass(m_widget);
-
-    wxGTKLoadCssData(provider,
-                     wxGTKScopeCssData(style, scopeClass).utf8_str());
-
-    gtk_widget_add_css_class(m_widget, scopeClass.utf8_str());
-    if ( m_wxwindow && m_wxwindow != m_widget )
-        gtk_widget_add_css_class(m_wxwindow, scopeClass.utf8_str());
-
-    wxGTKAddScopedCssProvider(m_widget, provider);
+    wxGTKApplyScopedCss(m_widget, m_wxwindow, provider, style, false);
 #else
     gtk_style_context_remove_provider(gtk_widget_get_style_context(m_widget),
                                       GTK_STYLE_PROVIDER(provider));
@@ -8762,6 +8789,21 @@ void wxWindowGTK::GTKApplyCssStyle(const char* style)
     GtkCssProvider* provider = gtk_css_provider_new();
     GTKApplyCssStyle(provider, style);
     g_object_unref(provider);
+}
+
+void wxWindowGTK::GTKApplyCssStyleToSelf(const char* style)
+{
+#ifdef __WXGTK4__
+    wxCHECK_RET(m_widget, "invalid window");
+
+    GtkCssProvider* provider = gtk_css_provider_new();
+    wxGTKApplyScopedCss(m_widget, m_wxwindow, provider, style, true);
+    g_object_unref(provider);
+#else
+    // A GTK+ 3 provider hangs on the widget's own style context and cannot
+    // reach another widget in the first place, so this is already the case.
+    GTKApplyCssStyle(style);
+#endif
 }
 #else // GTK+ < 3
 GtkRcStyle* wxWindowGTK::GTKCreateWidgetStyle()

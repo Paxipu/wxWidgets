@@ -700,18 +700,6 @@ void wxGtkStyleContext::PopulateForStyleQuery(GtkWidget* widget)
         gtk_notebook_append_page(GTK_NOTEBOOK(widget),
                                  gtk_label_new(""), gtk_label_new(""));
     }
-    else if (GTK_IS_TREE_VIEW(widget))
-    {
-        // Three columns, to match the three-sibling widget path the GTK3 code
-        // built in AddTreeviewHeaderButton(): themes style header buttons with
-        // :first-child/:last-child, so the sibling count is significant.
-        for (int i = 0; i < 3; i++)
-        {
-            GtkTreeViewColumn* const column = gtk_tree_view_column_new();
-            gtk_tree_view_column_set_title(column, "");
-            gtk_tree_view_append_column(GTK_TREE_VIEW(widget), column);
-        }
-    }
 }
 
 void wxGtkStyleContext::AddWidget(GType type)
@@ -996,35 +984,11 @@ wxGtkStyleContext& wxGtkStyleContext::AddTreeview()
 #if GTK_CHECK_VERSION(3,20,0)
 #ifdef __WXGTK4__
 
-wxGtkStyleContext& wxGtkStyleContext::AddTreeviewHeaderButton(int pos)
-{
-    // GTK3 described this as "the pos'th of three sibling buttons" with
-    // gtk_widget_path_append_with_siblings(), so that themes styling
-    // :first-child/:last-child resolved correctly. Here the treeview is a real
-    // widget which PopulateForStyleQuery() has already given three columns, so
-    // the three header buttons genuinely exist as siblings and we just descend
-    // to the right one -- and :first-child/:last-child are real rather than
-    // simulated. (GTK4's treeview has no separate "header" node, so the Add()
-    // below finds nothing and stays put, which is what we want.)
-    AddTreeview().Add("header");
-
-    int index = 0;
-    for (GtkWidget* child = gtk_widget_get_first_child(m_current);
-         child; child = gtk_widget_get_next_sibling(child))
-    {
-        const char* const cssName = gtk_widget_get_css_name(child);
-        if (cssName && strcmp(cssName, "button") == 0)
-        {
-            if (index++ == pos)
-            {
-                m_current = child;
-                break;
-            }
-        }
-    }
-
-    return *this;
-}
+// Nothing here: renderer.cpp's GTK4 branch draws a header from the "button"
+// node of a GtkColumnView and never asks this class for one, so the only
+// caller of AddTreeviewHeaderButton() is the GTK+ 3 code below. Building the
+// three GtkTreeViewColumns it needed -- deprecated, and the last GtkTreeView
+// calls in this file -- would be work done for no reader.
 
 #else // !__WXGTK4__
 

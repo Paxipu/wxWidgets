@@ -113,7 +113,12 @@ void wxControl::PostCreation(const wxSize& size)
 void wxControl::GTKRemoveBorder()
 {
 #ifdef __WXGTK3__
-    GTKApplyCssStyle("*{ border:none; border-radius:0; padding:0 }");
+    // This window's own frame goes, and only that: wxBORDER_NONE on a
+    // container says nothing about the controls it holds. Under GTK+ 3 that
+    // was implicit, because the provider lived on this widget's style context;
+    // under GTK4 it has to be said, as a display-wide "*" otherwise reaches
+    // every node inside, down to a contained check box's indicator.
+    GTKApplyCssStyleToSelf("*{ border:none; border-radius:0; padding:0 }");
 #endif
 }
 

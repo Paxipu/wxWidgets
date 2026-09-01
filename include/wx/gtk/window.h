@@ -559,6 +559,12 @@ protected:
     // allocated, and remains owned, by the caller.
     void GTKApplyCssStyle(GtkCssProvider* provider, const char* style);
     void GTKApplyCssStyle(const char* style);
+
+    // Same, but for rules that describe this window's own frame rather than
+    // anything inside it. Under GTK4 the two are not the same thing: providers
+    // are display-wide there, so without this a container styles the controls
+    // it holds as well.
+    void GTKApplyCssStyleToSelf(const char* style);
 #else // GTK+ < 3
     // Called by ApplyWidgetStyle (which is called by SetFont() and
     // SetXXXColour etc to apply style changed to native widgets) to create

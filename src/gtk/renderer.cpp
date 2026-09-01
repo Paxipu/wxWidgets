@@ -380,7 +380,24 @@ struct wxGTKScratchWidget
         if ( !win )
             return nullptr;
 
-        GtkWidget* const host = win->m_wxwindow;
+        // The top level's client area, not the control's.
+        //
+        // There is one scratch widget per process, and re-parenting it during
+        // a draw is the thing this design has to avoid: several controls
+        // painting in one frame would each pull it out of the last one, and
+        // every one after the first then draws nothing at all. Hosting it in
+        // the top level means it moves only when the drawing moves to another
+        // window, which does not happen part-way through a frame.
+        //
+        // Where it is parented does not affect what is drawn:
+        // gtk_widget_snapshot_child() gives the node in the child's own
+        // coordinates, and this function translates it to the target
+        // rectangle.
+        wxWindow* const tlw = wxGetTopLevelParent(win);
+        if ( !tlw )
+            return nullptr;
+
+        GtkWidget* const host = tlw->m_wxwindow;
         if ( !host || !WX_IS_PIZZA(host) )
             return nullptr;
 
@@ -401,6 +418,10 @@ struct wxGTKScratchWidget
             // where the control's own clicks land and swallows them.
             gtk_widget_set_can_target(m_widget, FALSE);
             gtk_widget_set_can_focus(m_widget, FALSE);
+
+            // Invisible as a child except while it is being photographed; see
+            // wxGTKDrawThemedWidget().
+            gtk_widget_set_child_visible(m_widget, FALSE);
         }
 
         GtkWidget* const parent = gtk_widget_get_parent(m_widget);
@@ -428,6 +449,11 @@ struct wxGTKScratchWidget
         GtkWidget* const deep = wxGTKFindNodeDeep(m_widget, m_childNode);
         return deep ? deep : m_widget;
     }
+
+    // The widget that is parented and allocated, which is the one whose child
+    // visibility a draw has to turn on -- not the interior node a caller may
+    // have asked for.
+    GtkWidget* GetRoot() const { return m_widget; }
 
     GtkWidget* (*const m_factory)();
     const char* const m_childNode = nullptr;
@@ -506,11 +532,19 @@ wxGTKDrawThemedWidget(wxWindow* win,
     if ( state )
         gtk_widget_set_state_flags(widget, state, TRUE);
 
+    // Visible only for the length of the snapshot. A child-invisible widget
+    // produces no render node at all, which is what keeps the container --
+    // pizza_snapshot() draws every child that has a size -- from painting this
+    // one over the window's own contents on the frames in between.
+    gtk_widget_set_child_visible(scratch.GetRoot(), TRUE);
+
     gtk_widget_allocate(widget, rect.width, rect.height, -1, nullptr);
 
     GtkSnapshot* const snapshot = gtk_snapshot_new();
     gtk_widget_snapshot_child(host, widget, snapshot);
     GskRenderNode* const node = gtk_snapshot_free_to_node(snapshot);
+
+    gtk_widget_set_child_visible(scratch.GetRoot(), FALSE);
     const bool drew = node != nullptr;
 
     if ( node )
@@ -525,18 +559,6 @@ wxGTKDrawThemedWidget(wxWindow* win,
 
     if ( state )
         gtk_widget_unset_state_flags(widget, state);
-
-    // Put it back where wxPizza parked it. The allocation above left it at the
-    // container's origin, covering the very rectangle that was just drawn, and
-    // pizza_snapshot() draws every child that has a size -- so a frame that
-    // snapshots the container without a size_allocate in between would paint
-    // this scratch widget over the window's contents. The next layout pass
-    // would undo it, which is exactly what makes it an intermittent fault
-    // rather than an obvious one.
-    graphene_point_t park;
-    graphene_point_init(&park, wxGTK_SCRATCH_OFFSET, wxGTK_SCRATCH_OFFSET);
-    gtk_widget_allocate(widget, 1, 1, -1,
-                        gsk_transform_translate(nullptr, &park));
 
     return drew;
 }

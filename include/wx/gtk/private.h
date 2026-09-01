@@ -208,4 +208,13 @@ WXDLLIMPEXP_CORE GtkWidget *GetExpanderWidget();
 
 } // wxGTKPrivate
 
+#ifdef __WXGTK4__
+// A GtkDropDown or GtkListView factory building one ellipsizing GtkLabel per
+// item of a GtkStringList. GTK4's default factory makes a plain GtkLabel, and
+// a plain GtkLabel does not ellipsize -- which the cell renderer wxChoice used
+// under GTK+ 3 did, deliberately. Defined in choice.cpp, shared with
+// combobox.cpp.
+WXDLLIMPEXP_CORE GtkListItemFactory* wxGTKCreateEllipsizingLabelFactory();
+#endif
+
 #endif // _WX_GTK_PRIVATE_H_

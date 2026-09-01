@@ -1602,12 +1602,23 @@ static void test_indicator_nodes(void)
  */
 static void test_dropdown_selection_semantics(void)
 {
-    printf("GtkDropDown selection semantics (#183):\n");
+    printf("Item selection semantics (#183):\n");
 
     const char* const choices[] = { "one", "two", "three", NULL };
 
-    /* The state wxChoice is actually in when SetSelection(wxNOT_FOUND) is
-     * called: items present, one of them selected. */
+    /* What this used to assert, and why it no longer does.
+     *
+     * wxChoice's whole migration was planned around GtkDropDown, on the
+     * strength of a probe showing that gtk_drop_down_set_selected() accepts
+     * GTK_INVALID_LIST_POSITION with items present -- which is what
+     * SetSelection(wxNOT_FOUND) needs. That probe was linked against the
+     * distribution's GTK 4.14. Against GTK 4.22 the same call is refused:
+     * a GtkDropDown with any items in it cannot be returned to "nothing
+     * selected".
+     *
+     * So this is reported rather than failed. It is a real difference between
+     * GTK versions, it is worth knowing which one is in front of you, and wx
+     * no longer depends on either answer. */
     GtkWidget* dd = gtk_drop_down_new_from_strings(choices);
     g_object_ref_sink(dd);
 
@@ -1617,48 +1628,61 @@ static void test_dropdown_selection_semantics(void)
           "set_selected(1) did not take");
 
     gtk_drop_down_set_selected(GTK_DROP_DOWN(dd), GTK_INVALID_LIST_POSITION);
-    check(gtk_drop_down_get_selected(GTK_DROP_DOWN(dd))
+    soft(gtk_drop_down_get_selected(GTK_DROP_DOWN(dd))
             == GTK_INVALID_LIST_POSITION,
-          "GtkDropDown can be deselected with items present",
-          "set_selected(GTK_INVALID_LIST_POSITION) was refused, so wxChoice "
+         "GtkDropDown can be deselected with items present",
+         "this GTK refuses it -- true from 4.22 on, and the reason wxChoice "
+         "uses a GtkSingleSelection of its own rather than a GtkDropDown");
+    printf("           running against GTK %u.%u.%u\n",
+           gtk_get_major_version(), gtk_get_minor_version(),
+           gtk_get_micro_version());
+
+    /* What wx does depend on, and what therefore has to hold.
+     *
+     * A GtkSingleSelection with autoselect off and can-unselect on must be
+     * clearable with items present, because that is what carries every
+     * wxChoice, wxComboBox and wxBitmapComboBox selection now. */
+    GtkStringList* items = gtk_string_list_new(choices);
+    GtkSingleSelection* sel =
+        gtk_single_selection_new(G_LIST_MODEL(items));
+    gtk_single_selection_set_autoselect(sel, FALSE);
+    gtk_single_selection_set_can_unselect(sel, TRUE);
+
+    gtk_single_selection_set_selected(sel, 1);
+    check(gtk_single_selection_get_selected(sel) == 1,
+          "GtkSingleSelection selects the item it is asked for",
+          "set_selected(1) did not take");
+
+    gtk_single_selection_set_selected(sel, GTK_INVALID_LIST_POSITION);
+    check(gtk_single_selection_get_selected(sel) == GTK_INVALID_LIST_POSITION,
+          "GtkSingleSelection can be cleared with items present",
+          "autoselect=FALSE, can-unselect=TRUE was not enough, so wxChoice "
           "cannot honour SetSelection(wxNOT_FOUND) on this GTK");
 
-    /* And once more with the model attached after construction, which is how
-     * wxChoice builds itself. */
-    GtkWidget* late = gtk_drop_down_new(NULL, NULL);
-    g_object_ref_sink(late);
-    GtkStringList* list = gtk_string_list_new(choices);
-    gtk_drop_down_set_model(GTK_DROP_DOWN(late), G_LIST_MODEL(list));
-    gtk_drop_down_set_selected(GTK_DROP_DOWN(late), 2);
-    gtk_drop_down_set_selected(GTK_DROP_DOWN(late), GTK_INVALID_LIST_POSITION);
-    check(gtk_drop_down_get_selected(GTK_DROP_DOWN(late))
-            == GTK_INVALID_LIST_POSITION,
-          "GtkDropDown can be deselected with a model set afterwards",
-          "deselection works only when the model is given at construction");
-
-    /* The real catch, and the reason a port cannot simply forward wx's calls:
-     * adding the first item to an empty model makes GTK select it. wx has to
-     * put its own idea of the selection back afterwards.
+    /* And the catch a port cannot avoid either way: adding the first item to
+     * an empty model makes GTK select it, so wx has to put its own idea of
+     * the selection back after every model change.
      *
      * Reported rather than failed: if a later GTK stopped doing this, wx's
      * compensation would merely be redundant, not wrong. */
-    GtkWidget* growing = gtk_drop_down_new(NULL, NULL);
-    g_object_ref_sink(growing);
     GtkStringList* empty = gtk_string_list_new(NULL);
-    gtk_drop_down_set_model(GTK_DROP_DOWN(growing), G_LIST_MODEL(empty));
-    gtk_drop_down_set_selected(GTK_DROP_DOWN(growing), GTK_INVALID_LIST_POSITION);
+    GtkSingleSelection* growing =
+        gtk_single_selection_new(G_LIST_MODEL(empty));
+    gtk_single_selection_set_autoselect(growing, FALSE);
+    gtk_single_selection_set_can_unselect(growing, TRUE);
+    gtk_single_selection_set_selected(growing, GTK_INVALID_LIST_POSITION);
     gtk_string_list_append(empty, "first");
 
-    const guint afterAppend = gtk_drop_down_get_selected(GTK_DROP_DOWN(growing));
+    const guint afterAppend = gtk_single_selection_get_selected(growing);
     soft(afterAppend == GTK_INVALID_LIST_POSITION,
-         "appending to an empty model leaves the drop-down deselected",
+         "appending to an empty model leaves the selection alone",
          "GTK selected the new item by itself, so a port has to restore its "
          "own selection after every model change");
     printf("           selection after appending to an empty model: %u\n",
            afterAppend);
 
     g_object_unref(growing);
-    g_object_unref(late);
+    g_object_unref(sel);
     g_object_unref(dd);
 }
 

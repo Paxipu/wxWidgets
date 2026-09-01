@@ -118,7 +118,15 @@ public:
     virtual void SetSelection(long from, long to) override;
     virtual void GetSelection(long *from, long *to) const override;
 
+#ifdef __WXGTK4__
+    virtual void SetSelection(int n) override
+    {
+        wxComboBox::SetSelection(n);
+        GTKUpdateEntryBitmap();
+    }
+#else
     virtual void SetSelection(int n) override { wxComboBox::SetSelection(n); }
+#endif
     virtual int GetSelection() const override { return wxComboBox::GetSelection(); }
 
     virtual bool IsEditable() const override;
@@ -136,7 +144,34 @@ protected:
     virtual wxSize DoGetBestSize() const override;
 
     wxSize                  m_bitmapSize;
+#ifdef __WXGTK4__
+    // Under GTK+ 3 the bitmaps live in the GtkListStore next to the strings.
+    // GTK4 shows the items from a GtkStringList, which carries strings and
+    // nothing else, so the bitmaps are kept here and the list's factory reads
+    // them by row. Keeping the bundle rather than a texture also means
+    // GetItemBitmap() gives back exactly what was set, scale factor included,
+    // which the GTK4 texture round trip could not.
+    wxVector<wxBitmapBundle> m_bitmaps;
+
+    // Keep m_bitmaps the same length as the item list.
+    virtual int DoInsertItems(const wxArrayStringsAdapter& items,
+                              unsigned int pos,
+                              void **clientData,
+                              wxClientDataType type) override;
+    virtual void DoDeleteOneItem(unsigned int n) override;
+    virtual void DoClear() override;
+
+public:
+    // Reached from the list factory, which is a C callback: fill in one row's
+    // image and show the bitmap of the selected item in the entry.
+    void GTKSetRowImage(void* image, unsigned int n) const;
+protected:
+    // Show the selected item's bitmap as the entry's primary icon, which is
+    // where a GTK+ 3 cell view showed it.
+    void GTKUpdateEntryBitmap();
+#else
     int                     m_bitmapCellIndex;
+#endif
 
 private:
     void Init();

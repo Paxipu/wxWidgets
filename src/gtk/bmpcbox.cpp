@@ -47,8 +47,10 @@ wxIMPLEMENT_DYNAMIC_CLASS(wxBitmapComboBox, wxComboBox);
 
 void wxBitmapComboBox::Init()
 {
+#ifndef __WXGTK4__
     m_bitmapCellIndex = 0;
     m_stringCellIndex = 1;
+#endif
     m_bitmapSize = wxSize(-1, -1);
 }
 
@@ -109,6 +111,120 @@ bool wxBitmapComboBox::Create(wxWindow *parent,
 
     return true;
 }
+
+#ifdef __WXGTK4__
+
+extern "C" {
+
+static void
+wx_gtk_bmpcombo_setup(GtkSignalListItemFactory*, GtkListItem* item, gpointer)
+{
+    GtkWidget* const box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    GtkWidget* const image = gtk_image_new();
+    GtkWidget* const label = gtk_label_new(nullptr);
+
+    gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_END);
+    gtk_label_set_xalign(GTK_LABEL(label), 0.0);
+
+    gtk_box_append(GTK_BOX(box), image);
+    gtk_box_append(GTK_BOX(box), label);
+    gtk_list_item_set_child(item, box);
+}
+
+static void
+wx_gtk_bmpcombo_bind(GtkSignalListItemFactory*, GtkListItem* item, gpointer data)
+{
+    wxBitmapComboBox* const combo = static_cast<wxBitmapComboBox*>(data);
+
+    GtkWidget* const box = gtk_list_item_get_child(item);
+    GtkWidget* const image = gtk_widget_get_first_child(box);
+    GtkWidget* const label = gtk_widget_get_next_sibling(image);
+
+    GtkStringObject* const obj =
+        GTK_STRING_OBJECT(gtk_list_item_get_item(item));
+    gtk_label_set_label(GTK_LABEL(label),
+                        obj ? gtk_string_object_get_string(obj) : "");
+
+    combo->GTKSetRowImage(image, gtk_list_item_get_position(item));
+}
+
+} // extern "C"
+
+void wxBitmapComboBox::GTKSetRowImage(void* image, unsigned int n) const
+{
+    GtkImage* const gtkImage = GTK_IMAGE(image);
+
+    if ( n >= m_bitmaps.size() || !m_bitmaps[n].IsOk() )
+    {
+        gtk_image_clear(gtkImage);
+        return;
+    }
+
+    const wxBitmap bmp = m_bitmaps[n].GetBitmapFor(this);
+    if ( !bmp.IsOk() )
+    {
+        gtk_image_clear(gtkImage);
+        return;
+    }
+
+    GdkTexture* const texture = gdk_texture_new_for_pixbuf(bmp.GetPixbuf());
+    gtk_image_set_from_paintable(gtkImage, GDK_PAINTABLE(texture));
+    g_object_unref(texture);
+
+    const wxSize size = bmp.GetLogicalSize();
+    gtk_widget_set_size_request(GTK_WIDGET(gtkImage), size.x, size.y);
+}
+
+void wxBitmapComboBox::GTKCreateComboBoxWidget()
+{
+    // The entry and the popover list are wxComboBox's; only what a row looks
+    // like differs, so this takes that widget and gives its list a factory
+    // that puts an image beside the label.
+    wxComboBox::GTKCreateComboBoxWidget();
+
+    GtkListItemFactory* const factory = gtk_signal_list_item_factory_new();
+    g_signal_connect(factory, "setup",
+                     G_CALLBACK(wx_gtk_bmpcombo_setup), nullptr);
+    g_signal_connect(factory, "bind",
+                     G_CALLBACK(wx_gtk_bmpcombo_bind), this);
+
+    gtk_list_view_set_factory(GTK_LIST_VIEW(m_listView), factory);
+    g_object_unref(factory);
+}
+
+int wxBitmapComboBox::DoInsertItems(const wxArrayStringsAdapter& items,
+                                    unsigned int pos,
+                                    void **clientData,
+                                    wxClientDataType type)
+{
+    const int n = wxComboBox::DoInsertItems(items, pos, clientData, type);
+
+    // Sorted controls put each item where it belongs rather than at pos, so
+    // the bitmaps follow the strings rather than the requested position.
+    const unsigned int count = GetCount();
+    while ( m_bitmaps.size() < count )
+        m_bitmaps.insert(m_bitmaps.begin() + wxMin(pos, m_bitmaps.size()),
+                         wxBitmapBundle());
+
+    return n;
+}
+
+void wxBitmapComboBox::DoDeleteOneItem(unsigned int n)
+{
+    if ( n < m_bitmaps.size() )
+        m_bitmaps.erase(m_bitmaps.begin() + n);
+
+    wxComboBox::DoDeleteOneItem(n);
+}
+
+void wxBitmapComboBox::DoClear()
+{
+    m_bitmaps.clear();
+
+    wxComboBox::DoClear();
+}
+
+#else // !__WXGTK4__
 
 void wxBitmapComboBox::GTKCreateComboBoxWidget()
 {
@@ -183,6 +299,8 @@ void wxBitmapComboBox::GTKCreateComboBoxWidget()
                                    textRenderer, "text", 1);
 }
 
+#endif // __WXGTK4__/!__WXGTK4__
+
 wxBitmapComboBox::~wxBitmapComboBox()
 {
 }
@@ -219,6 +337,67 @@ wxSize wxBitmapComboBox::DoGetBestSize() const
 // ----------------------------------------------------------------------------
 // Item manipulation
 // ----------------------------------------------------------------------------
+
+#ifdef __WXGTK4__
+
+void wxBitmapComboBox::SetItemBitmap(unsigned int n, const wxBitmapBundle& bitmap)
+{
+    wxCHECK_RET( n < GetCount(), wxT("invalid index") );
+
+    if ( m_bitmaps.size() < GetCount() )
+        m_bitmaps.resize(GetCount());
+
+    m_bitmaps[n] = bitmap;
+
+    const wxBitmap bmp = bitmap.GetBitmapFor(this);
+    if ( bmp.IsOk() && m_bitmapSize.x < 0 )
+        m_bitmapSize = bmp.GetLogicalSize();
+
+    // The bitmaps are not in the list's model, so changing one tells the list
+    // nothing. Writing the row's string back, unchanged, is what makes GTK
+    // rebind that row and ask the factory for the image again.
+    SetString(n, GetString(n));
+
+    if ( int(n) == GetSelection() )
+        GTKUpdateEntryBitmap();
+}
+
+wxBitmap wxBitmapComboBox::GetItemBitmap(unsigned int n) const
+{
+    if ( n >= m_bitmaps.size() )
+        return wxBitmap();
+
+    // Unlike the GTK+ 3 build, which round-trips the bitmap through the model
+    // and loses its scale factor on the way, this gives back what was set.
+    return m_bitmaps[n].GetBitmapFor(this);
+}
+
+void wxBitmapComboBox::GTKUpdateEntryBitmap()
+{
+    GtkEntry* const entry = GetEntry();
+    if ( !entry )
+        return;
+
+    // A GtkDropDown showed the selected item with the same cell renderers as
+    // the list, bitmap included. This control's closed state is an entry, and
+    // what an entry has in that place is an icon.
+    const int sel = GetSelection();
+    const wxBitmap bmp = sel == wxNOT_FOUND ? wxBitmap()
+                                            : GetItemBitmap(unsigned(sel));
+    if ( !bmp.IsOk() )
+    {
+        gtk_entry_set_icon_from_paintable(entry, GTK_ENTRY_ICON_PRIMARY,
+                                          nullptr);
+        return;
+    }
+
+    GdkTexture* const texture = gdk_texture_new_for_pixbuf(bmp.GetPixbuf());
+    gtk_entry_set_icon_from_paintable(entry, GTK_ENTRY_ICON_PRIMARY,
+                                      GDK_PAINTABLE(texture));
+    g_object_unref(texture);
+}
+
+#else // !__WXGTK4__
 
 void wxBitmapComboBox::SetItemBitmap(unsigned int n, const wxBitmapBundle& bitmap)
 {
@@ -334,6 +513,8 @@ wxBitmap wxBitmapComboBox::GetItemBitmap(unsigned int n) const
 
     return bitmap;
 }
+
+#endif // __WXGTK4__/!__WXGTK4__
 
 int wxBitmapComboBox::Append(const wxString& item, const wxBitmapBundle& bitmap)
 {

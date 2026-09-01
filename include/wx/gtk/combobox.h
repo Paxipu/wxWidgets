@@ -155,6 +155,22 @@ protected:
 
     GtkEntry*   m_entry;
 
+#ifdef __WXGTK4__
+    // GTK4 has no editable combo box: GtkComboBox is deprecated and
+    // GtkDropDown cannot be typed into. So this one is built from the parts
+    // wxChoice already uses -- an item model, a list in a popover and the
+    // button showing it -- with a GtkEntry beside the button instead of the
+    // button carrying a label. m_widget is the box holding the two.
+    virtual void GTKUpdateSelectionDisplay() override;
+    virtual wxEventType GTKGetSelectionEventType() const override;
+    virtual GtkWidget* GTKGetSizeChildPart() const override;
+
+public:
+    // Reached from the popup-shown callback, which is a C function.
+    GtkWidget* GTKGetDropButton() const;
+protected:
+#endif // __WXGTK4__
+
 private:
     // From wxTextEntry:
     virtual wxWindow *GetEditableWindow() override { return this; }

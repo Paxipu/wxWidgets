@@ -1615,10 +1615,18 @@ is an assumption, not yet verified". Checked, and it is **partly wrong**:
 
 - `dc.cpp` and `graphicc.cpp` do mostly consume, **but both call
   `gdk_cairo_create(gdk_get_default_root_window())`** to build a context for
-  `wxScreenDC`. GTK4 has no root window and no way to obtain a cairo context
-  for the screen at all. Drawing on the screen is simply not a thing GTK4
-  supports, so `wxScreenDC` needs a scope decision (X11-only fallback, or
-  unsupported under GTK4) rather than a port. **New deferred item.**
+  `wxScreenDC`. GTK4 has no root window and no backend-independent way to
+  obtain a cairo context for the screen at all.
+
+  **Decided and done.** The scope decision was the X11 fallback: X11 still has
+  a root window whether or not GDK exposes one, and `cairo_xlib_surface_create()`
+  can be pointed straight at it, which is what `gdk_cairo_create()` did anyway.
+  So `wxScreenDC` works there for both reading the screen and drawing on it,
+  and Wayland keeps only the size -- there is no screen to read and no desktop
+  to draw on, by design. Measured against GTK 4.14 and 4.22 in
+  `probes/gtk4-screen-readback.c`, and covered by `tests/graphics/screendc.cpp`
+  on every port. What made this worth doing rather than documenting is the way
+  it failed: a screenshot came back black with no error at all.
 - `image_gtk.cpp` overrides `GtkImageClass::draw`, i.e. another draw→snapshot
   migration. That part is done, but the file still does not compile: `wxGtkImage`
   derives from `GtkImage` by embedding its struct, and under GTK4 both
@@ -2895,16 +2903,31 @@ be calling it.
 | Feature | Why |
 |---|---|
 | `wxDataViewCtrl` drag and drop | See below |
-| `wxFileDialog` preview (`wxFD_PREVIEW`) | The whole preview mechanism, and the `selection-changed` signal with it, was removed from `GtkFileChooser` |
-| `wxFileDialog` extra control | `gtk_file_chooser_set_extra_widget()` is gone; GTK4 allows only the fixed controls `add_choice()` offers |
+| `wxFileDialog` preview (`wxFD_PREVIEW`) | Removed from `GtkFileChooser` along with the `selection-changed` signal, and the generic dialog wxGTK4 now uses does not implement it either -- so the flag is still ignored, on both counts |
+| ~~`wxFileDialog` extra control~~ | **Recovered.** `gtk_file_chooser_set_extra_widget()` is indeed gone, but wxGTK4 no longer uses GTK's file dialog at all -- the generic one is a `wxDialog` and hosts an extra control like every other port that uses it |
 | Shaped windows (`wxNonOwnedWindow::SetShape`) | `gdk_window_shape_combine_region()` has no replacement; GTK4's answer is transparency |
 | `wxChoice::SetColumns()` | The popup's grid layout, and the wrap-width property controlling it, are gone |
-| `wxScreenDC` drawing and read-back | No root window, and no backend can read the screen |
+| ~~`wxScreenDC` drawing and read-back~~ | **Recovered on X11.** GDK exposes no root window, but X11 has one and cairo can be pointed at it directly; on Wayland there is genuinely no screen to read |
 
 `wxFileButton` and `wxDirButton` fall back to the generic implementation
 because `GtkFileChooserButton` was removed -- but that is a plain button which
 opens a file dialog, which is what GTK's own migration guide tells applications
 to do now, and what wx already did for `wxFLP_SAVE`.
+
+The dialogs those buttons open are generic under GTK4 as well, and that is
+worth being explicit about because it is not only a deprecation question.
+`GtkFileChooser` is deprecated, but its replacement `GtkFileDialog` does not
+reliably open at all: on a machine whose portal produces no dialog it builds
+its window, never shows it, and `ShowModal()` does not return -- no error, no
+warning, no timeout. The portal is running and answers; it simply shows
+nothing, so there is nothing an application can test for beforehand. Measured
+in `probes/gtk4-filedialog-portal-hang.c`, and on wx itself: a `wxDirDialog`
+on the native path hung wherever a session bus was present.
+
+So `wxFileDialog` and `wxDirDialog` join `wxInfoBar`, `wxFileCtrl`,
+`wxDataViewCtrl`, `wxComboBox` and `wxBitmapComboBox` on the implementations wx
+already had. A deprecation warning is a message to the port's authors; a dialog
+that never opens is a hang for the user.
 
 ### The one deliberate gap: dataview drag and drop
 

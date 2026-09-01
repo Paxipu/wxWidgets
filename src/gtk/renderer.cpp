@@ -577,11 +577,15 @@ wxRendererGTK::DrawHeaderButton(wxWindow *win,
                                 wxHeaderSortIconType sortArrow,
                                 wxHeaderButtonParams* params)
 {
+#ifndef __WXGTK4__
+    // These are GtkTreeView column buttons, which GTK4 has neither of. Its
+    // branch below photographs the "button" node of a GtkColumnView instead.
     GtkWidget *button = wxGTKPrivate::GetHeaderButtonWidget();
     if (flags & wxCONTROL_SPECIAL)
         button = wxGTKPrivate::GetHeaderButtonWidgetFirst();
     if (flags & wxCONTROL_DIRTY)
         button = wxGTKPrivate::GetHeaderButtonWidgetLast();
+#endif // !__WXGTK4__
 
     GtkStateType state = GTK_STATE_NORMAL;
     if (flags & wxCONTROL_DISABLED)
@@ -596,8 +600,6 @@ wxRendererGTK::DrawHeaderButton(wxWindow *win,
     cairo_t* cr = wxGetGTKDrawable(dc);
     if (cr == nullptr)
         return 0;
-
-    wxUnusedVar(button);
 
     // The heading of a list or tree control is a GtkColumnView header button;
     // GtkTreeViewColumn and its button went with the rest of GtkTreeView. The
@@ -695,6 +697,26 @@ wxRendererGTK::DrawHeaderButton(wxWindow *win,
 
 int wxRendererGTK::GetHeaderButtonHeight(wxWindow *WXUNUSED(win))
 {
+#ifdef __WXGTK4__
+    // The same header button DrawHeaderButton() draws: the one inside a
+    // GtkColumnView's title row. A GtkTreeView column button, which the other
+    // builds measure, does not exist here.
+    // Measured rather than photographed, so it needs no window to live in:
+    // gtk_widget_measure() answers for an unrealized widget.
+    static GtkWidget* s_view = nullptr;
+    if ( !s_view )
+    {
+        s_view = wxGTKCreateColumnHeader();
+        g_object_ref_sink(s_view);
+    }
+
+    GtkWidget* const node = wxGTKFindNodeDeep(s_view, "button");
+
+    int height = 0;
+    wxGTKMeasureWidget(node ? node : s_view, nullptr, &height);
+
+    return height;
+#else
     GtkWidget *button = wxGTKPrivate::GetHeaderButtonWidget();
 
     GtkRequisition req;
@@ -705,6 +727,7 @@ int wxRendererGTK::GetHeaderButtonHeight(wxWindow *WXUNUSED(win))
 #endif
 
     return req.height;
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 int wxRendererGTK::GetHeaderButtonMargin(wxWindow *WXUNUSED(win))
@@ -722,11 +745,11 @@ wxRendererGTK::DrawTreeItemButton(wxWindow* win,
     if (drawable == nullptr)
         return;
 
+#ifndef __WXGTK4__
     GtkWidget *tree = wxGTKPrivate::GetTreeWidget();
+#endif
 
 #ifdef __WXGTK4__
-    wxUnusedVar(tree);
-
     int state = GTK_STATE_FLAG_NORMAL;
     if (flags & wxCONTROL_EXPANDED)
         state |= GTK_STATE_FLAG_CHECKED;
@@ -1661,16 +1684,19 @@ void wxRendererGTK::DrawComboBox(wxWindow* win, wxDC& dc, const wxRect& rect, in
     if (drawable == nullptr)
         return;
 
+#ifndef __WXGTK4__
     GtkWidget* combo = wxGTKPrivate::GetComboBoxWidget();
+#endif
 
     GtkStateType state = GTK_STATE_NORMAL;
     if ( flags & wxCONTROL_DISABLED )
        state = GTK_STATE_INSENSITIVE;
 
+#ifndef __WXGTK4__
     wx_gtk_widget_set_focusable(combo, (flags & wxCONTROL_CURRENT) != 0);
+#endif
 
 #ifdef __WXGTK4__
-    wxUnusedVar(combo);
     wxUnusedVar(state);
 
     int stateFlags = GTK_STATE_FLAG_NORMAL;

@@ -917,6 +917,9 @@ void wxAccessible::NotifyEvent(int eventType, wxWindow* window,
             // itself: a wxDataViewCtrl is associated with its model by the
             // class deriving from it, after wxDataViewCtrl::Create() is done,
             // and asking a model-less one for its role dereferences null.
+            // Not a dataview problem either -- any control that finishes
+            // itself after its base Create() returns can be asked too early
+            // in the same way.
             // Anything reading this comes through the event loop, which does
             // not run until construction has finished, so nothing can look
             // before the queued call has caught up.
@@ -936,7 +939,9 @@ void wxAccessible::NotifyEvent(int eventType, wxWindow* window,
             // be trusted. GTK 4.14 has no way to say so -- there is no
             // equivalent of MSAA's "the children changed" -- so the objects
             // are rebuilt and an assistive technology will see the new ones
-            // the next time it walks.
+            // the next time it walks.  Unlike the creation above, these two
+            // reach a control that has been alive for a while, so asking it
+            // about itself is safe.
             acc->m_impl->Detach();
             acc->m_impl->UpdateAll();
             break;

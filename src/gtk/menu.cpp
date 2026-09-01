@@ -1722,6 +1722,49 @@ void wxMenu::GTKUninstallActions(GtkWidget* widget)
     }
 }
 
+namespace
+{
+
+// What a menu accelerator needs to know at the moment its key is pressed.
+// GtkShortcutFunc is not given the event, so the trigger is remembered here
+// alongside the action to activate.
+struct wxMenuShortcut
+{
+    wxMenuShortcut(const wxString& action, int key, int mods)
+        : m_action(action.utf8_str()), m_key(key), m_mods(mods)
+    {
+    }
+
+    const wxCharBuffer m_action;
+    const int m_key;
+    const int m_mods;
+};
+
+void wx_menu_shortcut_free(gpointer data)
+{
+    delete static_cast<wxMenuShortcut*>(data);
+}
+
+// Run the menu item's action, unless the focused window binds this key for
+// itself: GTK4 runs a window shortcut whatever the focused widget does with
+// the key, in every scope it offers, so this is the only place the two can be
+// told apart. See #221.
+gboolean
+wx_menu_shortcut_activate(GtkWidget* widget, GVariant* args, gpointer data)
+{
+    const wxMenuShortcut* const shortcut = static_cast<wxMenuShortcut*>(data);
+
+    if ( wxWindow* const focus = wxWindow::FindFocus() )
+    {
+        if ( focus->GTKShouldPreProcessKey(shortcut->m_key, shortcut->m_mods) )
+            return FALSE;
+    }
+
+    return gtk_widget_activate_action_variant(widget, shortcut->m_action, args);
+}
+
+} // anonymous namespace
+
 void wxMenu::GTKAddShortcuts(GtkShortcutController* controller)
 {
 #if wxUSE_ACCEL
@@ -1757,7 +1800,12 @@ void wxMenu::GTKAddShortcuts(GtkShortcutController* controller)
         {
             GtkShortcut* const shortcut =
                 gtk_shortcut_new(gtk_keyval_trigger_new(a.GetKey(), a.GetMods()),
-                                 gtk_named_action_new(fullName.utf8_str()));
+                                 gtk_callback_action_new(
+                                     wx_menu_shortcut_activate,
+                                     new wxMenuShortcut(fullName,
+                                                        a.GetKey(),
+                                                        a.GetMods()),
+                                     wx_menu_shortcut_free));
 
             if ( !target.empty() )
             {

@@ -1682,4 +1682,100 @@ bool wxTextEntry::ClickDefaultButtonIfPossible()
     return false;
 }
 
+#ifdef __WXGTK4__
+
+/* static */
+bool wxTextEntry::GTKEntryWantsKey(bool editable, int keyval, int modifiers)
+{
+    // Only keys carrying a modifier can collide with a menu accelerator, and
+    // claiming the unmodified ones would take ordinary typing away from the
+    // menu bar's mnemonics.
+    const int mods = modifiers & (GDK_CONTROL_MASK | GDK_SHIFT_MASK |
+                                  GDK_ALT_MASK);
+    if ( !mods )
+        return false;
+
+    const bool ctrl = (mods & GDK_CONTROL_MASK) != 0;
+    const bool shift = (mods & GDK_SHIFT_MASK) != 0;
+
+    // Selection and navigation, which a read-only control still does.
+    if ( ctrl )
+    {
+        switch ( keyval )
+        {
+            case GDK_KEY_a:
+            case GDK_KEY_A:
+            case GDK_KEY_c:
+            case GDK_KEY_C:
+            case GDK_KEY_Insert:
+            case GDK_KEY_KP_Insert:
+            case GDK_KEY_Left:
+            case GDK_KEY_KP_Left:
+            case GDK_KEY_Right:
+            case GDK_KEY_KP_Right:
+            case GDK_KEY_Home:
+            case GDK_KEY_KP_Home:
+            case GDK_KEY_End:
+            case GDK_KEY_KP_End:
+                return true;
+        }
+    }
+
+    if ( shift )
+    {
+        switch ( keyval )
+        {
+            case GDK_KEY_Left:
+            case GDK_KEY_KP_Left:
+            case GDK_KEY_Right:
+            case GDK_KEY_KP_Right:
+            case GDK_KEY_Home:
+            case GDK_KEY_KP_Home:
+            case GDK_KEY_End:
+            case GDK_KEY_KP_End:
+                return true;
+        }
+    }
+
+    // The rest change the text, so a control which cannot be edited does not
+    // want them and the menu should keep them.
+    if ( !editable )
+        return false;
+
+    if ( ctrl )
+    {
+        switch ( keyval )
+        {
+            case GDK_KEY_v:
+            case GDK_KEY_V:
+            case GDK_KEY_x:
+            case GDK_KEY_X:
+            case GDK_KEY_z:
+            case GDK_KEY_Z:
+            case GDK_KEY_y:
+            case GDK_KEY_Y:
+            case GDK_KEY_BackSpace:
+            case GDK_KEY_Delete:
+            case GDK_KEY_KP_Delete:
+                return true;
+        }
+    }
+
+    if ( shift )
+    {
+        switch ( keyval )
+        {
+            case GDK_KEY_Insert:
+            case GDK_KEY_KP_Insert:
+            case GDK_KEY_Delete:
+            case GDK_KEY_KP_Delete:
+                return true;
+        }
+    }
+
+    return false;
+}
+
+#endif // __WXGTK4__
+
 #endif // wxUSE_TEXTCTRL || wxUSE_COMBOBOX

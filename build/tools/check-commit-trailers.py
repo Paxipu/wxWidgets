@@ -43,6 +43,18 @@ def run(*args):
     return subprocess.run(args, capture_output=True, text=True).stdout
 
 
+def trailers(sha):
+    """The commit's trailer block, as git itself understands it.
+
+    Not the whole message: a commit that explains the convention quotes the
+    trailer in its body, and counting occurrences anywhere finds that quote.
+    This checker's own first commit did exactly that.
+    """
+    body = run('git', 'log', '-1', '--format=%B', sha)
+    return subprocess.run(['git', 'interpret-trailers', '--parse'],
+                          input=body, capture_output=True, text=True).stdout
+
+
 def commits(base):
     out = run('git', 'rev-list', '%s..HEAD' % base)
     return [c for c in out.split('\n') if c]
@@ -58,7 +70,7 @@ def main():
     problems = []
 
     for sha in commits(base):
-        body = run('git', 'log', '-1', '--format=%B', sha)
+        body = trailers(sha)
         subject = run('git', 'log', '-1', '--format=%s', sha).strip()
 
         # Merge commits carry no work of their own.

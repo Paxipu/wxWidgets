@@ -21,6 +21,7 @@
 #endif
 
 #include "wx/private/spinctrl.h"
+#include "wx/textentry.h"
 
 #include "wx/gtk/private.h"
 #include "wx/gtk/private/gtk3-compat.h"
@@ -732,5 +733,20 @@ void wxSpinCtrlDouble::GTKValueChanged()
     event.SetString(GetTextValue());
     HandleWindowEvent( event );
 }
+
+#ifdef __WXGTK4__
+
+bool
+wxSpinCtrlGTKBase::GTKShouldPreProcessKey(int keyval, int modifiers) const
+{
+    // The spin button is the editable here, so ask it rather than assume: an
+    // entry the user cannot type into should leave the menu its accelerators.
+    const bool editable = m_widget &&
+        gtk_editable_get_editable(GTK_EDITABLE(m_widget));
+
+    return wxTextEntry::GTKEntryWantsKey(editable, keyval, modifiers);
+}
+
+#endif // __WXGTK4__
 
 #endif // wxUSE_SPINCTRL

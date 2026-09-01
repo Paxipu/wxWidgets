@@ -130,6 +130,16 @@ public:
 
     virtual const wxTextEntry* WXGetTextEntry() const override { return this; }
 
+
+#ifdef __WXGTK4__
+    // Keep the keys our text entry binds; see #221.
+    virtual bool GTKShouldPreProcessKey(int keyval,
+                                        int modifiers) const override
+    {
+        return GTKEntryWantsKey(IsEditable(), keyval, modifiers);
+    }
+#endif // __WXGTK4__
+
 protected:
     // From wxWindowGTK:
 #ifndef __WXGTK4__

@@ -59,6 +59,14 @@ public:
     virtual void SetMaxLength(unsigned long len) override;
     virtual void ForceUpper() override;
 
+#ifdef __WXGTK4__
+    // The keys a GTK text entry binds for itself, which a menu accelerator
+    // sharing one must therefore not take. Every control embedding an entry
+    // answers GTKShouldPreProcessKey() with this, so the list lives once.
+    // See wxWindowGTK::GTKShouldPreProcessKey() and #221.
+    static bool GTKEntryWantsKey(bool editable, int keyval, int modifiers);
+#endif // __WXGTK4__
+
 #ifdef __WXGTK3__
     virtual bool SetHint(const wxString& hint) override;
     virtual wxString GetHint() const override;

@@ -73,6 +73,14 @@ public:
     virtual void GTKValueChanged() = 0;
     void GTKTextChanged();
 
+#ifdef __WXGTK4__
+    // A spin control's entry binds the editing keys as any other does, so a
+    // menu accelerator sharing one must not fire while it has the focus.
+    // See #221.
+    virtual bool GTKShouldPreProcessKey(int keyval,
+                                        int modifiers) const override;
+#endif // __WXGTK4__
+
 protected:
     wxSpinCtrlGTKBase();
     ~wxSpinCtrlGTKBase();

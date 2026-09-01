@@ -393,6 +393,14 @@ struct wxGTKScratchWidget
         {
             m_widget = m_factory();
             g_object_ref_sink(m_widget);
+
+            // This widget exists to be photographed, never to be used. It
+            // lives inside a real window, so without this it is a real
+            // candidate for gtk_widget_pick() and for the focus chain -- and
+            // after being allocated to a draw's rectangle it sits exactly
+            // where the control's own clicks land and swallows them.
+            gtk_widget_set_can_target(m_widget, FALSE);
+            gtk_widget_set_can_focus(m_widget, FALSE);
         }
 
         GtkWidget* const parent = gtk_widget_get_parent(m_widget);
@@ -517,6 +525,18 @@ wxGTKDrawThemedWidget(wxWindow* win,
 
     if ( state )
         gtk_widget_unset_state_flags(widget, state);
+
+    // Put it back where wxPizza parked it. The allocation above left it at the
+    // container's origin, covering the very rectangle that was just drawn, and
+    // pizza_snapshot() draws every child that has a size -- so a frame that
+    // snapshots the container without a size_allocate in between would paint
+    // this scratch widget over the window's contents. The next layout pass
+    // would undo it, which is exactly what makes it an intermittent fault
+    // rather than an obvious one.
+    graphene_point_t park;
+    graphene_point_init(&park, wxGTK_SCRATCH_OFFSET, wxGTK_SCRATCH_OFFSET);
+    gtk_widget_allocate(widget, 1, 1, -1,
+                        gsk_transform_translate(nullptr, &park));
 
     return drew;
 }

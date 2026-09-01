@@ -17,6 +17,12 @@
 #endif // WX_PRECOMP
 
 #include "wx/renderer.h"
+#include "wx/dcclient.h"
+#include "wx/dcbuffer.h"
+#include "wx/panel.h"
+#include "wx/uiaction.h"
+
+#include "testableframe.h"
 
 // ----------------------------------------------------------------------------
 // helpers
@@ -122,3 +128,80 @@ TEST_CASE("wxRendererNative::DrawsSomething", "[renderer]")
         CHECK( CountDrawnPixels(bmp) > 0 );
     }
 }
+
+// Drawing must not leave anything behind in the window it drew into.
+//
+// Under GTK4 wxRendererGTK draws by parenting a themed widget into the window,
+// allocating it to the rectangle being drawn and photographing it. Both halves
+// of that leave a trap, and neither is visible in what was drawn:
+//
+//  - the widget is a real widget inside a real window, so GTK will happily
+//    pick it for input, and after the allocation it sits exactly over the
+//    rectangle that was just drawn, swallowing that area's clicks;
+//  - it also keeps that allocation, and a container which draws all of its
+//    children draws this one too, over the window's own contents, until the
+//    next layout pass moves it back.
+//
+// The first of those is what this checks, because it is the one a test can see
+// at all. It was found only when every bordered window started drawing its
+// border through the renderer and seven unrelated test cases stopped receiving
+// their clicks; before that, the fault was present but nothing exercised it.
+#if wxUSE_UIACTIONSIMULATOR
+
+namespace
+{
+
+// A window that draws itself the way a custom control does, from its paint
+// handler, so that the click below arrives after a real paint rather than
+// after a wxClientDC. That distinction is the whole point: a layout pass
+// undoes the misplacement, and yielding for a wxClientDC draw gives it one.
+class DrawingPanel : public wxPanel
+{
+public:
+    DrawingPanel(wxWindow* parent)
+        : wxPanel(parent, wxID_ANY, wxPoint(0, 0), wxSize(120, 40),
+                  wxBORDER_THEME)
+    {
+        Bind(wxEVT_PAINT, &DrawingPanel::OnPaint, this);
+    }
+
+private:
+    void OnPaint(wxPaintEvent&)
+    {
+        wxPaintDC dc(this);
+        wxRendererNative::Get().DrawPushButton(this, dc,
+                                               wxRect(GetClientSize()), 0);
+    }
+};
+
+} // anonymous namespace
+
+TEST_CASE("wxRendererNative::LeavesNoWidgetBehind", "[renderer]")
+{
+    wxWindow* const parent = wxTheApp->GetTopWindow();
+    REQUIRE( parent );
+
+    std::unique_ptr<DrawingPanel> panel(new DrawingPanel(parent));
+    panel->Show();
+    wxYield();
+
+    EventCounter clicked(panel.get(), wxEVT_LEFT_DOWN);
+
+    const wxSize size = panel->GetClientSize();
+    wxUIActionSimulator sim;
+    sim.MouseMove(panel->ClientToScreen(wxPoint(size.x / 2, size.y / 2)));
+    wxYield();
+
+    // Paint immediately before the click, with nothing in between that would
+    // ask for a layout: a layout pass puts the scratch widget back where it
+    // belongs and hides the fault.
+    panel->Refresh();
+    panel->Update();
+
+    sim.MouseClick();
+    wxYield();
+
+    CHECK( clicked.GetCount() == 1 );
+}
+
+#endif // wxUSE_UIACTIONSIMULATOR

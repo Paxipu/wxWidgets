@@ -57,6 +57,9 @@
 #include "wx/gtk/private/wayland.h"
 #include "wx/gtk/private/win_gtk.h"
 #include "wx/gtk/private/stylecontext.h"
+#ifdef __WXGTK4__
+    #include "wx/renderer.h"
+#endif
 #include "wx/gtk/private/backend.h"
 #include "wx/private/textmeasure.h"
 using namespace wxGTKImpl;
@@ -8154,10 +8157,28 @@ void wxWindowGTK::GTKDrawBorder(cairo_t* cr)
     {
         //TODO: wxBORDER_RAISED and wxBORDER_SUNKEN are not distinguished,
         //      matching what the GTK3 code did.
-        GtkStyleContext* const
-            sc = gtk_widget_get_style_context(wxGTKPrivate::GetEntryWidget());
 
-        gtk_render_frame(sc, cr, 0, 0, w, h);
+        // The GTK+ 3 code drew an entry's frame and nothing else, through
+        // gtk_render_frame(). GTK4 has no way to draw one part of a widget's
+        // style; what it can do is snapshot the whole widget, which
+        // wxRendererNative::DrawTextCtrl() now does. Clipping to the ring the
+        // border occupies keeps the entry's background out of the window's
+        // interior, which leaves exactly the frame the GTK+ 3 code drew.
+        GtkBorder border;
+        wxGTKGetStyleMetrics(wxGTKPrivate::GetEntryWidget(), nullptr, &border);
+
+        const int iw = w - border.left - border.right;
+        const int ih = h - border.top - border.bottom;
+        if ( iw > 0 && ih > 0 )
+        {
+            cairo_rectangle(cr, 0, 0, w, h);
+            cairo_rectangle(cr, border.left, border.top, iw, ih);
+            cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);
+            cairo_clip(cr);
+        }
+
+        wxGTKCairoDC dc(cr, static_cast<wxWindow*>(this), GetLayoutDirection());
+        wxRendererNative::Get().DrawTextCtrl(this, dc, wxRect(0, 0, w, h));
     }
 
     cairo_restore(cr);
@@ -8313,13 +8334,15 @@ void wxWindowGTK::GTKSendPaintEvents(const GdkRegion* region)
             if ( GetThemeEnabled() )
             {
 #ifdef __WXGTK4__
-                const int w = gtk_widget_get_width(m_wxwindow);
-                const int h = gtk_widget_get_height(m_wxwindow);
+                // Nothing to do: GTK4 paints a widget's own CSS background
+                // itself, before the widget's snapshot vfunc runs, so the
+                // deprecated gtk_render_background() call the GTK+ 3 code
+                // makes here is redundant as well as deprecated. Measured in
+                // docs/gtk/probes/gtk4-widget-css-background.c.
 #else
                 GdkWindow* gdkWindow = GTKGetDrawingWindow();
                 const int w = gdk_window_get_width(gdkWindow);
                 const int h = gdk_window_get_height(gdkWindow);
-#endif
 #ifdef __WXGTK3__
                 GtkStyleContext* sc = gtk_widget_get_style_context(m_wxwindow);
                 gtk_render_background(sc, cr, 0, 0, w, h);
@@ -8338,7 +8361,8 @@ void wxWindowGTK::GTKSendPaintEvents(const GdkRegion* region)
                                     parent->m_widget,
                                     const_cast<char*>("base"),
                                     0, 0, w, h);
-#endif // !__WXGTK3__
+#endif // __WXGTK3__/!__WXGTK3__
+#endif // __WXGTK4__/!__WXGTK4__
             }
 #ifdef __WXGTK3__
             else if (m_backgroundColour.IsOk() && gtk_check_version(3,20,0) == nullptr)

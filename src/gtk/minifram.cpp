@@ -27,6 +27,11 @@
 #include "wx/gtk/private/wrapgtk.h"
 #include "wx/gtk/private/gtk3-compat.h"
 #include "wx/gtk/private/backend.h"
+#ifdef __WXGTK4__
+    #include "wx/renderer.h"
+    #include "wx/gtk/private.h"
+    #include "wx/gtk/private/stylecontext.h"
+#endif
 
 //-----------------------------------------------------------------------------
 // data
@@ -88,18 +93,35 @@ extern "C" {
 // A GtkDrawingArea draw function rather than a signal handler: GTK4 has no
 // "draw" signal on an arbitrary widget, and the decorations are painted by a
 // drawing area sitting behind the frame's contents. See Create().
-static void draw(GtkDrawingArea* area, cairo_t* cr, int, int, gpointer data)
+static void draw(GtkDrawingArea*, cairo_t* cr, int, int, gpointer data)
 {
-    GtkWidget* const widget = GTK_WIDGET(area);
     wxMiniFrame* const win = static_cast<wxMiniFrame*>(data);
 
-    GtkStyleContext* sc = gtk_widget_get_style_context(widget);
-    gtk_style_context_save(sc);
-    gtk_style_context_add_class(sc, GTK_STYLE_CLASS_BUTTON);
-    gtk_render_frame(sc, cr, 0, 0, win->m_width, win->m_height);
-    gtk_style_context_restore(sc);
-
     wxGTKCairoDC dc(cr, win);
+
+    // The GTK+ 3 code drew a button's frame here and nothing else, with
+    // gtk_render_frame() on a context carrying the button style class; GTK+ 2
+    // drew a raised shadow, to the same end. GTK4 cannot draw one part of a
+    // widget's style, only snapshot the whole widget, so this draws wx's push
+    // button and clips to the ring the button's border occupies. What is left
+    // is the frame, which is what the other two toolkits draw.
+    GtkBorder border;
+    wxGTKGetStyleMetrics(wxGTKPrivate::GetButtonWidget(), nullptr, &border);
+
+    const int iw = win->m_width - border.left - border.right;
+    const int ih = win->m_height - border.top - border.bottom;
+
+    cairo_save(cr);
+    if ( iw > 0 && ih > 0 )
+    {
+        cairo_rectangle(cr, 0, 0, win->m_width, win->m_height);
+        cairo_rectangle(cr, border.left, border.top, iw, ih);
+        cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);
+        cairo_clip(cr);
+    }
+    wxRendererNative::Get().DrawPushButton(
+        win, dc, wxRect(0, 0, win->m_width, win->m_height));
+    cairo_restore(cr);
 
     wxDrawMiniFrameDecorations(dc, win);
 }

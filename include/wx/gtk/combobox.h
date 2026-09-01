@@ -14,6 +14,83 @@
 
 typedef struct _GtkEntry GtkEntry;
 
+#ifdef __WXGTK4__
+
+#include "wx/odcombo.h"
+
+//-----------------------------------------------------------------------------
+// wxComboBox: the generic, wxComboCtrl-based one under GTK4
+//-----------------------------------------------------------------------------
+
+// GTK4 has no editable combo box at all: GtkComboBox is deprecated, its
+// replacement GtkDropDown cannot be typed into, and
+// gtk_combo_box_text_new_with_entry() has no successor. wxOwnerDrawnComboBox
+// is one, is built from wxComboCtrl, is compiled into every port already and
+// passes both the wxTextEntry and the wxItemContainer test suites here, so
+// wxGTK4 uses it rather than carrying a deprecated widget or growing a third
+// implementation. Its drop button is still drawn by GTK, through
+// wxRendererNative. See #183.
+class WXDLLIMPEXP_CORE wxComboBox : public wxOwnerDrawnComboBox
+{
+public:
+    wxComboBox() { }
+
+    wxComboBox(wxWindow *parent,
+               wxWindowID id,
+               const wxString& value = wxEmptyString,
+               const wxPoint& pos = wxDefaultPosition,
+               const wxSize& size = wxDefaultSize,
+               int n = 0,
+               const wxString choices[] = nullptr,
+               long style = 0,
+               const wxValidator& validator = wxDefaultValidator,
+               const wxString& name = wxASCII_STR(wxComboBoxNameStr))
+        : wxOwnerDrawnComboBox(parent, id, value, pos, size, n, choices,
+                               style, validator, name)
+    {
+    }
+
+    wxComboBox(wxWindow *parent,
+               wxWindowID id,
+               const wxString& value,
+               const wxPoint& pos,
+               const wxSize& size,
+               const wxArrayString& choices,
+               long style = 0,
+               const wxValidator& validator = wxDefaultValidator,
+               const wxString& name = wxASCII_STR(wxComboBoxNameStr))
+        : wxOwnerDrawnComboBox(parent, id, value, pos, size, choices,
+                               style, validator, name)
+    {
+    }
+
+    // Inherited from both wxItemContainerImmutable and wxTextEntry, so say
+    // which: the same one the native implementation below answers with.
+    virtual wxString GetStringSelection() const override
+    {
+        return wxItemContainer::GetStringSelection();
+    }
+
+    // wxComboBoxBase gives every other port this; wxOwnerDrawnComboBox does
+    // not derive from it, so it is spelled out here with the same meaning.
+    virtual int GetCurrentSelection() const
+    {
+        return GetSelection();
+    }
+
+    // Keep the keys our text entry binds; see #221.
+    virtual bool GTKShouldPreProcessKey(int keyval,
+                                        int modifiers) const override
+    {
+        return GTKEntryWantsKey(IsEditable(), keyval, modifiers);
+    }
+
+private:
+    wxDECLARE_DYNAMIC_CLASS_NO_COPY(wxComboBox);
+};
+
+#else // !__WXGTK4__
+
 //-----------------------------------------------------------------------------
 // wxComboBox
 //-----------------------------------------------------------------------------
@@ -175,5 +252,7 @@ private:
     wxDECLARE_DYNAMIC_CLASS_NO_COPY(wxComboBox);
     wxDECLARE_EVENT_TABLE();
 };
+
+#endif // __WXGTK4__/!__WXGTK4__
 
 #endif // _WX_GTK_COMBOBOX_H_

@@ -22,6 +22,16 @@
 
 #include "wx/gtk/private.h"
 
+#ifdef __WXGTK4__
+
+// Under GTK4 wxComboBox is the generic, wxOwnerDrawnComboBox-based one
+// declared in wx/gtk/combobox.h, and its runtime class comes from
+// combocmn.cpp like every other port's, so there is nothing left to define
+// here. Everything below is the GtkComboBox implementation, which GTK4
+// deprecated and which is not compiled there.
+
+#else // !__WXGTK4__
+
 // ----------------------------------------------------------------------------
 // GTK callbacks
 // ----------------------------------------------------------------------------
@@ -431,5 +441,7 @@ wxSize wxComboBox::DoGetSizeFromTextSize(int xlen, int ylen) const
 
     return tsize;
 }
+
+#endif // __WXGTK4__/!__WXGTK4__
 
 #endif // wxUSE_COMBOBOX

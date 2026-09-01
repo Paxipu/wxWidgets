@@ -20,6 +20,7 @@
 #include "asserthelper.h"
 #include "testableframe.h"
 #include "testwindow.h"
+#include "testpaint.h"
 #include "waitfor.h"
 
 #include "wx/uiaction.h"
@@ -27,7 +28,13 @@
 #include "wx/cshelp.h"
 #include "wx/dcclient.h"
 #include "wx/overlay.h"
+#include "wx/panel.h"
+#include "wx/textctrl.h"
 #include "wx/timer.h"
+
+#ifdef __WXGTK3__
+    #include "wx/gtk/private/backend.h"
+#endif
 #include "wx/tooltip.h"
 #include "wx/wupdlock.h"
 
@@ -884,6 +891,59 @@ TEST_CASE_METHOD(WindowTestCase, "wxWindow::SetSizeIsHonoured", "[window][size]"
     YieldForAWhile();
 
     CHECK( button->GetSize() == wxSize(10, 4) );
+}
+
+// A window's background colour is its own, and the controls it holds keep
+// theirs.
+//
+// The invariant is not GTK4's, but this is where it broke. GTK4 has no
+// per-widget CSS providers, so wx puts its rules on the display under a class
+// of the window's own, and "*" was expanded to that class and its descendants
+// -- which is every node below the window, the controls it contains included.
+// A panel given a colour painted every unstyled control on it: entries stopped
+// being white, buttons stopped looking like buttons. See #243.
+//
+// The check is on the screen because that is where the fault was: the wx-side
+// values were right throughout, and every geometry and value assertion in this
+// file passed while a panel was repainting the controls on it.
+TEST_CASE_METHOD(WindowTestCase, "wxWindow::BackgroundStaysInTheWindow",
+                 "[window][colour]")
+{
+    // Nothing to read on a display that does not let a client see the screen.
+    if ( wxGTKImpl::IsWayland(nullptr) )
+        return;
+
+    wxWindow* const parent = wxTheApp->GetTopWindow();
+
+    // Unmissable, and nothing a theme would arrive at on its own.
+    const wxColour garish(255, 0, 255);
+
+    wxPanel* const panel = new wxPanel(parent, wxID_ANY,
+                                       wxPoint(0, 0), wxSize(200, 60));
+    panel->SetBackgroundColour(garish);
+
+    // Left alone, so that what it shows is the theme's or the panel's and
+    // nothing of its own.
+    wxTextCtrl* const text = new wxTextCtrl(panel, wxID_ANY, wxString(),
+                                            wxPoint(20, 15), wxSize(120, 30));
+
+    panel->Show();
+    wxTestWaitForPaint(text);
+
+    const wxBitmap shot = wxTestCaptureWindow(text);
+    REQUIRE( shot.IsOk() );
+
+    const wxImage img = shot.ConvertToImage();
+    REQUIRE( img.IsOk() );
+
+    const int x = img.GetWidth() / 2;
+    const int y = img.GetHeight() / 2;
+    const wxColour read(img.GetRed(x, y), img.GetGreen(x, y), img.GetBlue(x, y));
+
+    INFO("read back " << read.GetAsString(wxC2S_HTML_SYNTAX)
+         << ", the panel is " << garish.GetAsString(wxC2S_HTML_SYNTAX));
+
+    CHECK( read != garish );
 }
 
 #endif // __WXGTK4__

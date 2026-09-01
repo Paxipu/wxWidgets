@@ -114,13 +114,12 @@ TEST_CASE("wxFileDialog::ExtraControl", "[filedlg]")
 
     const bool accepted = dlg.SetExtraControlCreator(&CreateExtraControlForTest);
 
-#ifdef __WXGTK4__
-    INFO("GTK4 cannot host an arbitrary widget in a file chooser");
-    CHECK( !accepted );
-#else
+    // This used to except GTK4, whose native file chooser is a GtkFileDialog
+    // -- a controller object rather than a widget, with nowhere to put an
+    // arbitrary control. wxGTK4 now uses the generic dialog instead, which is
+    // a wxDialog and can host one like every other port that uses it.
     INFO("this port can host an extra control, so it must accept one");
     CHECK( accepted );
-#endif
 
     // Whatever the answer, it has to be the same one the port reports.
     CHECK( accepted == dlg.SupportsExtraControl() );

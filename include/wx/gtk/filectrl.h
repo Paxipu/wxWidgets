@@ -27,6 +27,8 @@ typedef struct _GtkFileChooser GtkFileChooser;
 
 // A wx wrapper for any Gtk object implementing the interface GtkFileChooser
 
+#ifndef __WXGTK4__
+
 class WXDLLIMPEXP_CORE wxGtkFileChooser
 {
 public:
@@ -140,6 +142,8 @@ private:
 };
 
 #endif // wxUSE_FILECTRL && !defined(__WXGTK4__)
+
+#endif // !__WXGTK4__
 
 #endif // _WX_GTK_FILECTRL_H_
 

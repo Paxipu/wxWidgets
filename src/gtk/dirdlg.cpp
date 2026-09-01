@@ -19,7 +19,11 @@
 
 
 
-#if wxUSE_DIRDLG
+// Nothing here under GTK4: wxDirDialog is the generic one there, because
+// GTK4's GtkFileDialog does not reliably open at all -- see wx/dirdlg.h and
+// docs/gtk/probes/gtk4-filedialog-portal-hang.c. The file still builds the
+// native dialog for GTK+ 2 and GTK+ 3.
+#if wxUSE_DIRDLG && !defined(__WXGTK4__)
 
 #include "wx/dirdlg.h"
 
@@ -485,4 +489,4 @@ void wxDirDialog::SetPath(const wxString& dir)
     }
 }
 
-#endif // wxUSE_DIRDLG
+#endif // wxUSE_DIRDLG && !__WXGTK4__

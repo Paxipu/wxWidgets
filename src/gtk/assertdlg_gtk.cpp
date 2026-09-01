@@ -398,6 +398,60 @@ static void gtk_assert_dialog_copy_callback(GtkWidget*, GtkAssertDialog* dlg)
 
 #endif // wxUSE_STACKWALKER
 
+#ifdef __WXGTK4__
+
+// Everything GtkDialog used to do for this dialog: carry a result out of a
+// button press and stop the loop waiting for it.
+static void gtk_assert_dialog_respond(GtkAssertDialog* dlg, int response)
+{
+    dlg->response = response;
+
+    if ( dlg->loop && g_main_loop_is_running(dlg->loop) )
+        g_main_loop_quit(dlg->loop);
+}
+
+extern "C" {
+
+static void gtk_assert_dialog_stop_callback(GtkWidget*, GtkAssertDialog* dlg)
+{
+    gtk_assert_dialog_respond(dlg, GTK_ASSERT_DIALOG_STOP);
+}
+
+// Closing the window answers "continue".
+//
+// gtk_dialog_run() returned GTK_RESPONSE_DELETE_EVENT here, which the caller
+// in utilsgtk.cpp does not expect and reports with wxFAIL_MSG -- an assertion
+// raised from inside the assertion dialog. Continuing is what the user asking
+// for the dialog to go away means, and it is the only answer that cannot make
+// things worse.
+static gboolean gtk_assert_dialog_close_callback(GtkWindow*, GtkAssertDialog* dlg)
+{
+    gtk_assert_dialog_respond(dlg, GTK_ASSERT_DIALOG_CONTINUE);
+
+    return TRUE;        // keep the window, gtk_assert_dialog_run() owns it
+}
+
+} // extern "C"
+
+int gtk_assert_dialog_run(GtkAssertDialog* dlg)
+{
+    dlg->response = GTK_ASSERT_DIALOG_CONTINUE;
+
+    gtk_window_set_modal(GTK_WINDOW(dlg), TRUE);
+    gtk_window_present(GTK_WINDOW(dlg));
+
+    dlg->loop = g_main_loop_new(nullptr, FALSE);
+    g_main_loop_run(dlg->loop);
+    g_main_loop_unref(dlg->loop);
+    dlg->loop = nullptr;
+
+    gtk_widget_set_visible(GTK_WIDGET(dlg), FALSE);
+
+    return dlg->response;
+}
+
+#endif // __WXGTK4__
+
 extern "C" {
 static void gtk_assert_dialog_continue_callback(GtkWidget*, GtkAssertDialog* dlg)
 {
@@ -412,7 +466,11 @@ static void gtk_assert_dialog_continue_callback(GtkWidget*, GtkAssertDialog* dlg
     gint response = active ? GTK_ASSERT_DIALOG_CONTINUE
                            : GTK_ASSERT_DIALOG_CONTINUE_SUPPRESSING;
 
+#ifdef __WXGTK4__
+    gtk_assert_dialog_respond(dlg, response);
+#else
     gtk_dialog_response (GTK_DIALOG(dlg), response);
+#endif
 }
 } // extern "C"
 
@@ -450,7 +508,13 @@ GType gtk_assert_dialog_get_type()
             gtk_assert_dialog_init,
             nullptr
         };
+#ifdef __WXGTK4__
+        // A GtkWindow rather than the deprecated GtkDialog: see the note on
+        // _GtkAssertDialog's parent_instance.
+        assert_dialog_type = g_type_register_static (GTK_TYPE_WINDOW, "GtkAssertDialog", &assert_dialog_info, (GTypeFlags)0);
+#else
         assert_dialog_type = g_type_register_static (GTK_TYPE_DIALOG, "GtkAssertDialog", &assert_dialog_info, (GTypeFlags)0);
+#endif
     }
 
     return assert_dialog_type;
@@ -858,7 +922,14 @@ static void gtk_assert_dialog_init(GTypeInstance* instance, void*)
 
         gtk_window_set_title(GTK_WINDOW(dlg), "wxWidgets Debug Alert");
 
-        GtkWidget* const content = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
+        // What gtk_dialog_get_content_area() used to hand out. A GtkWindow has
+        // one child, so this box is it and everything else goes inside.
+        GtkWidget* const content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+        dlg->contentArea = content;
+        gtk_window_set_child(GTK_WINDOW(dlg), content);
+
+        dlg->loop = nullptr;
+        dlg->response = GTK_ASSERT_DIALOG_CONTINUE;
 
         GtkWidget* const vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
         gtk_widget_set_margin_start(vbox, 8);
@@ -935,18 +1006,33 @@ static void gtk_assert_dialog_init(GTypeInstance* instance, void*)
         gtk_check_button_set_active(GTK_CHECK_BUTTON(dlg->shownexttime), TRUE);
         gtk_box_append(GTK_BOX(vbox), dlg->shownexttime);
 
-        gtk_dialog_add_button(GTK_DIALOG(dlg), "_Stop", GTK_ASSERT_DIALOG_STOP);
+        // The action area, which GtkDialog used to provide along with
+        // gtk_dialog_add_button() and gtk_dialog_set_default_response().
+        GtkWidget* const actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+        gtk_widget_set_halign(actions, GTK_ALIGN_END);
+        gtk_widget_set_margin_top(actions, 8);
+        gtk_box_append(GTK_BOX(vbox), actions);
 
-        GtkWidget* const continuebtn =
-            gtk_dialog_add_button(GTK_DIALOG(dlg), "_Continue",
-                                  GTK_ASSERT_DIALOG_CONTINUE);
-        gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_ASSERT_DIALOG_CONTINUE);
+        GtkWidget* const stopbtn = gtk_button_new_with_mnemonic("_Stop");
+        gtk_box_append(GTK_BOX(actions), stopbtn);
+        g_signal_connect(stopbtn, "clicked",
+                         G_CALLBACK(gtk_assert_dialog_stop_callback), dlg);
+
+        GtkWidget* const continuebtn = gtk_button_new_with_mnemonic("_Continue");
+        gtk_box_append(GTK_BOX(actions), continuebtn);
         g_signal_connect(continuebtn, "clicked",
                          G_CALLBACK(gtk_assert_dialog_continue_callback), dlg);
+
+        // What set_default_response() did: Enter answers Continue.
+        gtk_widget_set_receives_default(continuebtn, TRUE);
+        gtk_window_set_default_widget(GTK_WINDOW(dlg), continuebtn);
 
         /* the resizable property of this window is modified by the expander:
            when it's collapsed, the window must be non-resizable! */
         gtk_window_set_resizable(GTK_WINDOW(dlg), FALSE);
+
+        g_signal_connect(dlg, "close-request",
+                         G_CALLBACK(gtk_assert_dialog_close_callback), dlg);
 
         dlg->callback = nullptr;
         dlg->userdata = nullptr;

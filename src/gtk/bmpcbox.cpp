@@ -18,7 +18,9 @@
 #include "wx/wxprec.h"
 
 
-#if wxUSE_BITMAPCOMBOBOX
+// Under GTK4 wxBitmapComboBox is the generic, wxOwnerDrawnComboBox-based one
+// (see wx/bmpcbox.h), so this file has nothing to define there.
+#if wxUSE_BITMAPCOMBOBOX && !defined(__WXGTK4__)
 
 #include "wx/bmpcbox.h"
 
@@ -462,4 +464,4 @@ void wxBitmapComboBox::SetEditable(bool editable)
         wxComboBox::SetEditable(editable);
 }
 
-#endif // wxUSE_BITMAPCOMBOBOX
+#endif // wxUSE_BITMAPCOMBOBOX && !__WXGTK4__

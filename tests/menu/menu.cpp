@@ -19,7 +19,10 @@
     #include "wx/wx.h"
 #endif // WX_PRECOMP
 
+#include "wx/combobox.h"
 #include "wx/menu.h"
+#include "wx/spinctrl.h"
+#include "wx/srchctrl.h"
 #include "wx/translation.h"
 #include "wx/uiaction.h"
 
@@ -612,6 +615,13 @@ public:
         return m_event != nullptr;
     }
 
+    // Throw away whatever was received, so that the next check starts clean.
+    void Clear()
+    {
+        delete m_event;
+        m_event = nullptr;
+    }
+
 private:
     void OnMenu(wxCommandEvent& event)
     {
@@ -697,6 +707,49 @@ void MenuTestCase::Events()
     wxYield();
 
     CHECK( !handler.GotEvent() );
+
+    handler.Clear();
+    text->Destroy();
+    wxYield();
+
+    // The other controls embedding an editable text field bind this key for
+    // themselves too, so the accelerator has to lose to each of them as well.
+    // They are checked one at a time, so a failure names the control rather
+    // than only the key.
+    struct EditableControl
+    {
+        const char* name;
+        wxWindow* win;
+    };
+
+    const EditableControl editable[] =
+    {
+#if wxUSE_COMBOBOX
+        { "wxComboBox", new wxComboBox(m_frame, wxID_ANY, "Testing") },
+#endif
+#if wxUSE_SEARCHCTRL
+        { "wxSearchCtrl", new wxSearchCtrl(m_frame, wxID_ANY, "Testing") },
+#endif
+#if wxUSE_SPINCTRL
+        { "wxSpinCtrl", new wxSpinCtrl(m_frame, wxID_ANY, "17") },
+#endif
+    };
+
+    for ( const EditableControl& c : editable )
+    {
+        c.win->SetFocus();
+        wxYield();
+
+        sim.Char('A', wxMOD_CONTROL);
+        wxYield();
+
+        INFO("Accelerator fired while " << c.name << " had the focus");
+        CHECK( !handler.GotEvent() );
+
+        handler.Clear();
+        c.win->Destroy();
+        wxYield();
+    }
 #endif // wxUSE_UIACTIONSIMULATOR
 }
 

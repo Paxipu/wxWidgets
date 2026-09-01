@@ -234,22 +234,12 @@ TEST_CASE_METHOD(WebViewTestCase, "WebView", "[wxWebView]")
 
 #if wxUSE_WEBVIEW_WEBKIT2
         // With WebKit SelectAll() sends a request to perform the selection to
-        // another process via proxy, so wait for the selection to appear
-        // rather than for a fixed time: a fixed wait is enough when this test
-        // runs alone and is not when the machine is busy with the rest of the
-        // suite.  WaitFor() yields before testing the predicate, which also
-        // keeps us from calling HasSelection() right away -- doing that seems
-        // to hang the extension with webkit 2.40.0+.
-        // Wait for the selection rather than for a fixed time, so that a
-        // failure here says which step did not happen instead of leaving
-        // three later checks to fail with no explanation.
-        //
-        // This does not make the wait reliable: the selection sometimes never
-        // arrives at all, in about one run in three, and a longer bound does
-        // not help. That is #223, and it is a defect in the web process
-        // extension round trip rather than in how long this waits for it.
-        WaitFor("the selection to be made",
-                [this]() { return m_browser->HasSelection(); }, 5000);
+        // another process via proxy and there doesn't seem to be any way to
+        // wait until this request is actually handled, so loop here for some a
+        // bit before giving up.  Avoid calling HasSelection() right away
+        // without wxYielding a bit because this seems to cause the extension
+        // to hang with webkit 2.40.0+.
+        YieldForAWhile();
 #endif // wxUSE_WEBVIEW_WEBKIT2
 
         CHECK(m_browser->HasSelection());

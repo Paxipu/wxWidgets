@@ -30,6 +30,8 @@ set(TEST_GUI_SRC
     graphics/graphmatrix.cpp
     graphics/graphpath.cpp
     graphics/imagelist.cpp
+    graphics/renderer.cpp
+    graphics/screendc.cpp
     config/config.cpp
     controls/auitest.cpp
     controls/bitmapcomboboxtest.cpp

@@ -380,7 +380,24 @@ struct wxGTKScratchWidget
         if ( !win )
             return nullptr;
 
-        GtkWidget* const host = win->m_wxwindow;
+        // The top level's client area, not the control's.
+        //
+        // There is one scratch widget per process, and re-parenting it during
+        // a draw is the thing this design has to avoid: several controls
+        // painting in one frame would each pull it out of the last one, and
+        // every one after the first then draws nothing at all. Hosting it in
+        // the top level means it moves only when the drawing moves to another
+        // window, which does not happen part-way through a frame.
+        //
+        // Where it is parented does not affect what is drawn:
+        // gtk_widget_snapshot_child() gives the node in the child's own
+        // coordinates, and this function translates it to the target
+        // rectangle.
+        wxWindow* const tlw = wxGetTopLevelParent(win);
+        if ( !tlw )
+            return nullptr;
+
+        GtkWidget* const host = tlw->m_wxwindow;
         if ( !host || !WX_IS_PIZZA(host) )
             return nullptr;
 
@@ -393,6 +410,18 @@ struct wxGTKScratchWidget
         {
             m_widget = m_factory();
             g_object_ref_sink(m_widget);
+
+            // This widget exists to be photographed, never to be used. It
+            // lives inside a real window, so without this it is a real
+            // candidate for gtk_widget_pick() and for the focus chain -- and
+            // after being allocated to a draw's rectangle it sits exactly
+            // where the control's own clicks land and swallows them.
+            gtk_widget_set_can_target(m_widget, FALSE);
+            gtk_widget_set_can_focus(m_widget, FALSE);
+
+            // Invisible as a child except while it is being photographed; see
+            // wxGTKDrawThemedWidget().
+            gtk_widget_set_child_visible(m_widget, FALSE);
         }
 
         GtkWidget* const parent = gtk_widget_get_parent(m_widget);
@@ -420,6 +449,11 @@ struct wxGTKScratchWidget
         GtkWidget* const deep = wxGTKFindNodeDeep(m_widget, m_childNode);
         return deep ? deep : m_widget;
     }
+
+    // The widget that is parented and allocated, which is the one whose child
+    // visibility a draw has to turn on -- not the interior node a caller may
+    // have asked for.
+    GtkWidget* GetRoot() const { return m_widget; }
 
     GtkWidget* (*const m_factory)();
     const char* const m_childNode = nullptr;
@@ -498,11 +532,19 @@ wxGTKDrawThemedWidget(wxWindow* win,
     if ( state )
         gtk_widget_set_state_flags(widget, state, TRUE);
 
+    // Visible only for the length of the snapshot. A child-invisible widget
+    // produces no render node at all, which is what keeps the container --
+    // pizza_snapshot() draws every child that has a size -- from painting this
+    // one over the window's own contents on the frames in between.
+    gtk_widget_set_child_visible(scratch.GetRoot(), TRUE);
+
     gtk_widget_allocate(widget, rect.width, rect.height, -1, nullptr);
 
     GtkSnapshot* const snapshot = gtk_snapshot_new();
     gtk_widget_snapshot_child(host, widget, snapshot);
     GskRenderNode* const node = gtk_snapshot_free_to_node(snapshot);
+
+    gtk_widget_set_child_visible(scratch.GetRoot(), FALSE);
     const bool drew = node != nullptr;
 
     if ( node )
@@ -1085,8 +1127,16 @@ struct CheckBoxInfo
 #endif
 
             GtkBorder border, padding;
+#ifdef __WXGTK4__
+            // These went through a compatibility shim in gtk3-compat.h that
+            // suppressed the deprecation warning, so this call site did not
+            // show up in any warning count while still being deprecated GTK4
+            // code. See stylecontext.h for how the two are measured now.
+            wxGTKGetStyleMetrics(sc.GetWidget(), &padding, &border);
+#else
             gtk_style_context_get_border(sc, GTK_STATE_FLAG_NORMAL, &border);
             gtk_style_context_get_padding(sc, GTK_STATE_FLAG_NORMAL, &padding);
+#endif
 
             margin_left = border.left + padding.left;
             margin_top = border.top + padding.top;

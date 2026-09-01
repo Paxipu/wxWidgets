@@ -265,14 +265,28 @@ wxControl::GetDefaultAttributesFromGTKWidget(GtkWidget* widget,
     // the parent chain, so a widget whose theme defines no background colour
     // won't inherit an ancestor's. Not yet runtime-verified (no linkable
     // test_gui yet); see docs/gtk/gtk4-stylecontext-design.md.
-    wxUnusedVar(state);
-    GtkStyleContext* sc = gtk_widget_get_style_context(widget);
+    // Unlike the GTK+ 3 code below, this asks the widget rather than a style
+    // context. gtk_widget_get_color() answers for the widget's current state,
+    // so the state goes on the widget; it returns exactly what the deprecated
+    // gtk_style_context_get_color() did, measured in
+    // docs/gtk/probes/gtk4-style-query-replacements.c. The GTK4 path used to
+    // ignore the state parameter outright, which this fixes on the way past.
+    // The GTK+ 2 enumerator this parameter carries no longer exists under
+    // GTK4; 0 is GTK_STATE_NORMAL there and every caller but one uses it.
+    const GtkStateFlags stateFlag = state ? GTK_STATE_FLAG_ACTIVE
+                                          : GTK_STATE_FLAG_NORMAL;
+    if (stateFlag != GTK_STATE_FLAG_NORMAL)
+        gtk_widget_set_state_flags(widget, stateFlag, FALSE);
+
     GdkRGBA fg;
-    gtk_style_context_get_color(sc, &fg);
+    gtk_widget_get_color(widget, &fg);
     attr.colFg = wxColour(fg);
 
     attr.colBg = *wxWHITE;
-    wxGTKLookupThemeColour(sc, "theme_bg_color", attr.colBg);
+    wxGTKLookupThemeColour(widget, "theme_bg_color", attr.colBg);
+
+    if (stateFlag != GTK_STATE_FLAG_NORMAL)
+        gtk_widget_unset_state_flags(widget, stateFlag);
 
     PangoFontDescription* const desc = pango_context_get_font_description(
         gtk_widget_get_pango_context(widget));
@@ -402,16 +416,22 @@ wxSize wxControl::GTKGetEntryMargins(GtkEntry* entry) const
     wxSize size;
 
 #ifdef __WXGTK3__
-    GtkStyleContext* sc = gtk_widget_get_style_context(GTK_WIDGET(entry));
-
     GtkBorder padding, border;
 #ifdef __WXGTK4__
-    // gtk_style_context_get_padding()/get_border() dropped the separate
-    // GtkStateFlags parameter under GTK4 -- both always query the context's
-    // current state, so there is nothing to pass and nothing to read it into.
-    gtk_style_context_get_padding(sc, &padding);
-    gtk_style_context_get_border(sc, &border);
+    // Deliberately measured on the scratch entry rather than on this one.
+    //
+    // wxGTKGetStyleMetrics() has to requeue the widget's resize to get an
+    // answer at all (see stylecontext.h), and this function runs inside
+    // DoGetSizeFromTextSize(), which the layout calls. Requeueing a live
+    // widget's resize from there asks for another layout pass, which calls
+    // this again, and the window never stops relaying out.
+    //
+    // Nothing is lost by it: padding and border are the theme's for the entry
+    // type, and wx never sets either on an individual control.
+    wxUnusedVar(entry);
+    wxGTKGetStyleMetrics(wxGTKPrivate::GetEntryWidget(), &padding, &border);
 #else
+    GtkStyleContext* sc = gtk_widget_get_style_context(GTK_WIDGET(entry));
     const GtkStateFlags state = gtk_style_context_get_state(sc);
     gtk_style_context_get_padding(sc, state, &padding);
     gtk_style_context_get_border(sc, state, &border);

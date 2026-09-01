@@ -122,6 +122,21 @@ GtkWidget *GetCheckButtonWidget()
     return s_button;
 }
 
+GtkWidget *GetSpinButtonWidget()
+{
+    static GtkWidget *s_spinButton = nullptr;
+
+    if ( !s_spinButton )
+    {
+        s_spinButton = gtk_spin_button_new(nullptr, 1, 0);
+        g_object_add_weak_pointer(G_OBJECT(s_spinButton), (void**)&s_spinButton);
+        AddToContainer(s_spinButton);
+        gtk_widget_realize(s_spinButton);
+    }
+
+    return s_spinButton;
+}
+
 GtkWidget * GetComboBoxWidget()
 {
     static GtkWidget *s_button = nullptr;

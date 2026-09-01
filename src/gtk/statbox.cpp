@@ -239,20 +239,18 @@ void wxStaticBox::GetBordersForSizer(int *borderTop, int *borderOther) const
 #endif
     GtkBorder border;
 #ifdef __WXGTK4__
-    // These take no state under GTK4, querying the context's current state,
-    // which is the normal one for a context just obtained from a widget.
-    gtk_style_context_get_border(sc, &border);
-    *borderOther += border.left;
-    *borderTop += border.top;
-    gtk_style_context_get_padding(sc, &border);
+    GtkBorder padding;
+    wxGTKGetStyleMetrics(sc.GetWidget(), &padding, &border);
+    *borderOther += border.left + padding.left;
+    *borderTop += border.top + padding.top;
 #else
     gtk_style_context_get_border(sc, GTK_STATE_FLAG_NORMAL, &border);
     *borderOther += border.left;
     *borderTop += border.top;
     gtk_style_context_get_padding(sc, GTK_STATE_FLAG_NORMAL, &border);
-#endif
     *borderOther += border.left;
     *borderTop += border.top;
+#endif
 #else
     gtk_widget_ensure_style(m_widget);
     const int border_width = GTK_CONTAINER(m_widget)->border_width;

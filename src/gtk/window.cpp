@@ -57,6 +57,10 @@
 #include "wx/gtk/private/wayland.h"
 #include "wx/gtk/private/win_gtk.h"
 #include "wx/gtk/private/stylecontext.h"
+#ifdef __WXGTK4__
+    #include "wx/renderer.h"
+    #include "wx/tokenzr.h"
+#endif
 #include "wx/gtk/private/backend.h"
 #include "wx/private/textmeasure.h"
 using namespace wxGTKImpl;
@@ -8138,8 +8142,7 @@ void wxWindowGTK::GTKDrawBorder(cairo_t* cr)
         // gtk_style_context_get(); use the theme's conventional colour name
         // through the same shared helper as the rest of the port.
         wxColour colBorder;
-        GtkStyleContext* const sc = gtk_widget_get_style_context(m_wxwindow);
-        if ( !wxGTKLookupThemeColour(sc, "borders", colBorder) )
+        if ( !wxGTKLookupThemeColour(m_wxwindow, "borders", colBorder) )
             colBorder = *wxBLACK;
 
         cairo_set_source_rgba(cr,
@@ -8155,10 +8158,28 @@ void wxWindowGTK::GTKDrawBorder(cairo_t* cr)
     {
         //TODO: wxBORDER_RAISED and wxBORDER_SUNKEN are not distinguished,
         //      matching what the GTK3 code did.
-        GtkStyleContext* const
-            sc = gtk_widget_get_style_context(wxGTKPrivate::GetEntryWidget());
 
-        gtk_render_frame(sc, cr, 0, 0, w, h);
+        // The GTK+ 3 code drew an entry's frame and nothing else, through
+        // gtk_render_frame(). GTK4 has no way to draw one part of a widget's
+        // style; what it can do is snapshot the whole widget, which
+        // wxRendererNative::DrawTextCtrl() now does. Clipping to the ring the
+        // border occupies keeps the entry's background out of the window's
+        // interior, which leaves exactly the frame the GTK+ 3 code drew.
+        GtkBorder border;
+        wxGTKGetStyleMetrics(wxGTKPrivate::GetEntryWidget(), nullptr, &border);
+
+        const int iw = w - border.left - border.right;
+        const int ih = h - border.top - border.bottom;
+        if ( iw > 0 && ih > 0 )
+        {
+            cairo_rectangle(cr, 0, 0, w, h);
+            cairo_rectangle(cr, border.left, border.top, iw, ih);
+            cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);
+            cairo_clip(cr);
+        }
+
+        wxGTKCairoDC dc(cr, static_cast<wxWindow*>(this), GetLayoutDirection());
+        wxRendererNative::Get().DrawTextCtrl(this, dc, wxRect(0, 0, w, h));
     }
 
     cairo_restore(cr);
@@ -8314,13 +8335,15 @@ void wxWindowGTK::GTKSendPaintEvents(const GdkRegion* region)
             if ( GetThemeEnabled() )
             {
 #ifdef __WXGTK4__
-                const int w = gtk_widget_get_width(m_wxwindow);
-                const int h = gtk_widget_get_height(m_wxwindow);
+                // Nothing to do: GTK4 paints a widget's own CSS background
+                // itself, before the widget's snapshot vfunc runs, so the
+                // deprecated gtk_render_background() call the GTK+ 3 code
+                // makes here is redundant as well as deprecated. Measured in
+                // docs/gtk/probes/gtk4-widget-css-background.c.
 #else
                 GdkWindow* gdkWindow = GTKGetDrawingWindow();
                 const int w = gdk_window_get_width(gdkWindow);
                 const int h = gdk_window_get_height(gdkWindow);
-#endif
 #ifdef __WXGTK3__
                 GtkStyleContext* sc = gtk_widget_get_style_context(m_wxwindow);
                 gtk_render_background(sc, cr, 0, 0, w, h);
@@ -8339,7 +8362,8 @@ void wxWindowGTK::GTKSendPaintEvents(const GdkRegion* region)
                                     parent->m_widget,
                                     const_cast<char*>("base"),
                                     0, 0, w, h);
-#endif // !__WXGTK3__
+#endif // __WXGTK3__/!__WXGTK3__
+#endif // __WXGTK4__/!__WXGTK4__
             }
 #ifdef __WXGTK3__
             else if (m_backgroundColour.IsOk() && gtk_check_version(3,20,0) == nullptr)
@@ -8576,10 +8600,152 @@ static void wxGTKLoadCssData(GtkCssProvider* provider, const char* style)
 #endif
 }
 
+
+#ifdef __WXGTK4__
+
+// GTK4 has no per-widget style providers: gtk_style_context_add_provider() is
+// deprecated and a provider belongs to a display. Keeping a provider's rules
+// to one window therefore takes two things -- a CSS class that only that
+// window's widgets wear, and every selector in the rules scoped to it.
+//
+// The name belongs to a window rather than to a widget, because one window's
+// style is applied to several of them (its own widget, its client area, a
+// label, a button's child...) and they all have to match the same rules. It
+// is kept on the window's main widget, which is the one thing every caller
+// has, and dies with it -- deriving it from an address instead would hand a
+// new window the rules of a destroyed one that happened to be allocated at
+// the same place.
+static wxString wxGTKCssScopeClass(GtkWidget* mainWidget)
+{
+    if ( const char* const existing = static_cast<const char*>(
+             g_object_get_data(G_OBJECT(mainWidget), "wx-css-scope")) )
+    {
+        return wxString::FromUTF8(existing);
+    }
+
+    static unsigned s_next = 0;
+    gchar* const name = g_strdup_printf("wx-css-%u", s_next++);
+    g_object_set_data_full(G_OBJECT(mainWidget), "wx-css-scope", name, g_free);
+
+    return wxString::FromUTF8(name);
+}
+
+// Prefix every selector in the rule set with the scope class.
+//
+// The rules wx writes look like "*{color:...}", "entry { min-width:0 }" or
+// "button.down { border-style:none }": the first means the widget itself and
+// what it contains, the others name nodes inside it. So "*" becomes the scope
+// class and its descendants, and anything else becomes a descendant selector
+// under the scope class. That reproduces what a provider on a widget's own
+// style context did.
+static wxString wxGTKScopeCssData(const char* css, const wxString& scopeClass)
+{
+    const wxString scope = "." + scopeClass;
+
+    wxString out;
+    for ( const char* p = css; *p; )
+    {
+        const char* const brace = strchr(p, '{');
+        if ( !brace )
+        {
+            out += p;               // trailing junk, leave it to the parser
+            break;
+        }
+
+        // Selectors, comma separated, up to the '{'.
+        wxString scoped;
+        wxStringTokenizer selectors(wxString(p, brace - p), ",");
+        while ( selectors.HasMoreTokens() )
+        {
+            const wxString one = selectors.GetNextToken().Trim(true).Trim(false);
+            if ( one.empty() )
+                continue;
+
+            if ( !scoped.empty() )
+                scoped += ",";
+
+            if ( one == "*" )
+                scoped << scope << "," << scope << " *";
+            else
+                scoped << scope << " " << one;
+        }
+
+        const char* const end = strchr(brace, '}');
+        if ( !end )
+        {
+            out << scoped << brace;
+            break;
+        }
+
+        out << scoped << wxString(brace, end - brace + 1);
+        p = end + 1;
+    }
+
+    return out;
+}
+
+// Add a provider to the display, and see that it is taken off again when the
+// widget it was made for goes away. Under GTK+ 3 the provider belonged to the
+// widget's style context and died with it; a display keeps its own reference
+// for ever, so without this every wxWindow that ever set a colour would leave
+// its rules behind.
+static void wxGTKAddScopedCssProvider(GtkWidget* widget, GtkCssProvider* provider)
+{
+    GdkDisplay* const display = gtk_widget_get_display(widget);
+    if ( !display )
+        return;
+
+    gtk_style_context_add_provider_for_display(
+        display, GTK_STYLE_PROVIDER(provider),
+        GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+
+    GPtrArray* owned = static_cast<GPtrArray*>(
+        g_object_get_data(G_OBJECT(widget), "wx-css-providers"));
+    if ( !owned )
+    {
+        owned = g_ptr_array_new_with_free_func(
+            [](gpointer data)
+            {
+                GtkCssProvider* const p = static_cast<GtkCssProvider*>(data);
+                if ( GdkDisplay* const d = gdk_display_get_default() )
+                {
+                    gtk_style_context_remove_provider_for_display(
+                        d, GTK_STYLE_PROVIDER(p));
+                }
+                g_object_unref(p);
+            });
+
+        g_object_set_data_full(G_OBJECT(widget), "wx-css-providers", owned,
+                               [](gpointer data)
+                               {
+                                   g_ptr_array_unref(static_cast<GPtrArray*>(data));
+                               });
+    }
+
+    // Only once per provider: the same one is reloaded whenever the style
+    // changes, and reloading it does not take it off the display.
+    if ( !g_ptr_array_find(owned, provider, nullptr) )
+        g_ptr_array_add(owned, g_object_ref(provider));
+}
+
+#endif // __WXGTK4__
+
 void wxWindowGTK::GTKApplyCssStyle(GtkCssProvider* provider, const char* style)
 {
     wxCHECK_RET(m_widget, "invalid window");
 
+#ifdef __WXGTK4__
+    const wxString scopeClass = wxGTKCssScopeClass(m_widget);
+
+    wxGTKLoadCssData(provider,
+                     wxGTKScopeCssData(style, scopeClass).utf8_str());
+
+    gtk_widget_add_css_class(m_widget, scopeClass.utf8_str());
+    if ( m_wxwindow && m_wxwindow != m_widget )
+        gtk_widget_add_css_class(m_wxwindow, scopeClass.utf8_str());
+
+    wxGTKAddScopedCssProvider(m_widget, provider);
+#else
     gtk_style_context_remove_provider(gtk_widget_get_style_context(m_widget),
                                       GTK_STYLE_PROVIDER(provider));
 
@@ -8588,6 +8754,7 @@ void wxWindowGTK::GTKApplyCssStyle(GtkCssProvider* provider, const char* style)
     gtk_style_context_add_provider(gtk_widget_get_style_context(m_widget),
                                    GTK_STYLE_PROVIDER(provider),
                                    GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+#endif
 }
 
 void wxWindowGTK::GTKApplyCssStyle(const char* style)
@@ -8825,7 +8992,25 @@ void wxWindowGTK::GTKApplyWidgetStyle(bool forceStyle)
         wxGtkString s(g_string_free(css, false));
         if (m_styleProvider)
         {
+#ifdef __WXGTK4__
+            // Same treatment as in GTKApplyCssStyle(): the rules are scoped to
+            // this window's own CSS class and the provider goes on the display,
+            // because GTK4 has no per-widget providers. GTKApplyStyle(), which
+            // DoApplyWidgetStyle() reaches, puts the class on each widget the
+            // style is meant for.
+            if (m_widget)
+            {
+                wxGTKLoadCssData(
+                    GTK_CSS_PROVIDER(m_styleProvider),
+                    wxGTKScopeCssData(s,
+                                      wxGTKCssScopeClass(m_widget)).utf8_str());
+
+                wxGTKAddScopedCssProvider(m_widget,
+                                          GTK_CSS_PROVIDER(m_styleProvider));
+            }
+#else
             wxGTKLoadCssData(GTK_CSS_PROVIDER(m_styleProvider), s);
+#endif
             DoApplyWidgetStyle(nullptr);
         }
 #else
@@ -8844,7 +9029,13 @@ void wxWindowGTK::DoApplyWidgetStyle(GtkRcStyle *style)
 
 void wxWindowGTK::GTKApplyStyle(GtkWidget* widget, GtkRcStyle* WXUNUSED_IN_GTK3(style))
 {
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    // The provider is already on the display (see GTKApplyCssStyle above);
+    // what marks this widget as one of the ones its rules apply to is the
+    // scope class.
+    if (m_styleProvider && widget && m_widget)
+        gtk_widget_add_css_class(widget, wxGTKCssScopeClass(m_widget).utf8_str());
+#elif defined(__WXGTK3__)
     if (m_styleProvider)
     {
         GtkStyleContext* context = gtk_widget_get_style_context(widget);

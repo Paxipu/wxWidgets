@@ -198,6 +198,7 @@ WXDLLIMPEXP_CORE GtkWidget *GetHeaderButtonWidgetLast();
 WXDLLIMPEXP_CORE GtkWidget *GetHeaderButtonWidget();
 WXDLLIMPEXP_CORE GtkWidget *GetNotebookWidget();
 WXDLLIMPEXP_CORE GtkWidget *GetRadioButtonWidget();
+WXDLLIMPEXP_CORE GtkWidget *GetSpinButtonWidget();
 WXDLLIMPEXP_CORE GtkWidget *GetSplitterWidget(wxOrientation orient = wxHORIZONTAL);
 WXDLLIMPEXP_CORE GtkWidget *GetTreeWidget();
 #ifdef __WXGTK4__

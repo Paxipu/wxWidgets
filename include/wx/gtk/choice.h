@@ -12,6 +12,11 @@
 class WXDLLIMPEXP_FWD_BASE wxSortedArrayString;
 class WXDLLIMPEXP_FWD_BASE wxArrayString;
 
+#ifdef __WXGTK4__
+    typedef struct _GtkStringList GtkStringList;
+    typedef struct _GtkSingleSelection GtkSingleSelection;
+#endif
+
 //-----------------------------------------------------------------------------
 // wxChoice
 //-----------------------------------------------------------------------------
@@ -88,8 +93,69 @@ protected:
     // contains the client data for the items
     wxArrayPtrVoid m_clientData;
 
+#ifdef __WXGTK4__
+    // The items live here rather than in the widget.
+    //
+    // GTK4 shows a list from a GListModel rather than filling a widget with
+    // rows, so the items are a model this class owns and the widget below only
+    // displays. Owned; a reference is held.
+    GtkStringList* m_itemModel;
+
+    // The list the items are chosen from, and the selection in it.
+    //
+    // This is deliberately not a GtkDropDown, which is what GTK4 offers in
+    // place of the deprecated GtkComboBox. A GtkDropDown owns its selection
+    // and, from GTK 4.22, refuses to be cleared once it has any items:
+    // SetSelection(wxNOT_FOUND) simply does not take. That is a change from
+    // GTK 4.14, where it worked, and build/tools/gtk4-invariants.c reports
+    // both. wx needs "nothing selected", so the selection model is ours.
+    //
+    // Both are borrowed; the popover owns them.
+    GtkSingleSelection* m_listSelection;
+    GtkWidget* m_listView;
+
+    // The button that shows the popover. It is m_widget itself for a
+    // wxChoice, and one of two children of it for a wxComboBox.
+    GtkWidget* m_dropButton;
+
+    int GTKGetSelection() const;
+    void GTKSetSelection(int n);
+
+    // Show the current selection on the button.
+    void GTKUpdateSelectionDisplay();
+
+    // The part of the widget that shows one item, which is what
+    // DoGetSizeFromTextSize() measures against to find how much of the width
+    // is arrow, separator and padding.
+    GtkWidget* GTKGetSizeChildPart() const;
+
+public:
+    // A row in the popover was chosen. Public because a C callback calls it.
+    void GTKOnListActivated(unsigned int pos);
+protected:
+
+    // Called after the item model has changed, because GTK does not leave the
+    // selection alone across a change: appending the first item to an empty
+    // model selects it, and removing an item moves it.
+    void GTKRestoreSelection(int sel);
+
+    // Build the popover holding the list, and the selection model with it.
+    // Fills in m_listSelection and m_listView.
+    GtkWidget* GTKCreateItemPopover();
+
+    // Let Up, Down, Home and End move the selection while the popover is
+    // closed, which is what a GtkComboBox did and what wxUIActionSimulator
+    // drives the control with.
+    void GTKConnectSelectionKeys(GtkWidget* widget);
+
+public:
+    // Reached from the key controller, which is a C callback.
+    bool GTKMoveSelection(unsigned int keyval);
+protected:
+#else
     // index to GtkListStore cell which displays the item text
     int m_stringCellIndex;
+#endif // __WXGTK4__
 
     virtual wxSize DoGetBestSize() const override;
     virtual wxSize DoGetSizeFromTextSize(int xlen, int ylen = -1) const override;

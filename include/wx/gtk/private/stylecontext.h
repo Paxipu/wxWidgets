@@ -32,9 +32,11 @@ public:
     wxGtkStyleContext& AddTextview(const char* child1 = nullptr, const char* child2 = nullptr);
     wxGtkStyleContext& AddTooltip();
     wxGtkStyleContext& AddTreeview();
-#if GTK_CHECK_VERSION(3,20,0)
+#if GTK_CHECK_VERSION(3,20,0) && !defined(__WXGTK4__)
+    // Only the GTK+ 3 renderer asks for one: the GTK4 one draws a header from
+    // the "button" node of a GtkColumnView instead.
     wxGtkStyleContext& AddTreeviewHeaderButton(int pos);
-#endif // GTK >= 3.20
+#endif // GTK >= 3.20 && !GTK4
     wxGtkStyleContext& AddWindow(const char* className2 = nullptr);
     void Bg(wxColour& color, int state = GTK_STATE_FLAG_NORMAL) const;
     void Fg(wxColour& color, int state = GTK_STATE_FLAG_NORMAL) const;

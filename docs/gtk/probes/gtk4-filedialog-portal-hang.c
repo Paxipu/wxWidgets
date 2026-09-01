@@ -2,13 +2,23 @@
    GtkFileChooser interface, and #209 has already moved wxDirDialog onto it.
    #182 would move wxFileDialog too. Before that: does it actually open?
  *
- * It does not, on a machine with a D-Bus session bus and no portal answering
- * on it. GtkFileDialog builds its GtkFileChooserDialog and then never shows
- * it -- no error, no warning, no timeout. The same widget presented directly
- * appears at once, so this is not the display, the theme or the harness.
+ * It does not, on a machine with a D-Bus session bus whose portal never
+ * produces a dialog. GtkFileDialog builds its GtkFileChooserDialog and then
+ * never shows it -- no error, no warning, no timeout. The same widget
+ * presented directly appears at once, so this is not the display, the theme
+ * or the harness.
  *
  * Clearing DBUS_SESSION_BUS_ADDRESS makes it appear immediately, which is
  * what names the cause. GTK_USE_PORTAL=0 does not help.
+ *
+ * Note what the cause is *not*. The portal is running and owns
+ * org.freedesktop.portal.Desktop -- asking the bus for the name owner
+ * returns one -- so "is the portal there" does not tell an application
+ * whether the dialog will appear, and cannot be used to choose between the
+ * two paths. The dialog does not turn up on the session's own display
+ * either: the window count there is unchanged while the call is outstanding.
+ * The portal answers and then shows nothing, and GTK waits for it with no
+ * timeout.
  *
  * This is the same shape as the printing finding in #161: "GTK 4.22 takes the
  * portal route outside a sandbox, where a present-but-silent portal blocks

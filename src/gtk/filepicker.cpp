@@ -22,6 +22,12 @@
     #include "wx/log.h"
 #endif
 
+// Before wx/filepicker.h, which forward declares both: under GTK4 wxDirDialog
+// is a macro for wxGenericDirDialog, and a forward declaration parsed before
+// that macro exists names a class that never gets defined.
+#include "wx/dirdlg.h"
+#include "wx/filedlg.h"
+
 #include "wx/filepicker.h"
 #include "wx/tooltip.h"
 

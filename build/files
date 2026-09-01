@@ -1370,6 +1370,8 @@ GTK_LOWLEVEL_HDR =
 GTK_SRC =
     # Generic implementations used by wxGTK:
     src/generic/accel.cpp
+    # Used by GTK4, whose own folder chooser cannot be relied on to open:
+    src/generic/dirdlgg.cpp
     src/generic/fdrepdlg.cpp
     # Needed as long as we support GTK+ < 2.6
     src/generic/filepickerg.cpp
@@ -1443,6 +1445,7 @@ GTK2_SRC =
 
 GTK_HDR =
     wx/generic/activityindicator.h
+    wx/generic/dirdlgg.h
     wx/generic/fdrepdlg.h
     wx/generic/filepickerg.h
     wx/generic/imaglist.h

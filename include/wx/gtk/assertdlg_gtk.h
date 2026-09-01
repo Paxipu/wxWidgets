@@ -22,7 +22,16 @@ typedef void (*GtkAssertDialogStackFrameCallback)(void *);
 
 struct _GtkAssertDialog
 {
+#ifdef __WXGTK4__
+    /* GtkDialog is deprecated in GTK 4.10, along with the whole of its
+       convenience API -- the content area, the action buttons and the
+       ::response signal. What replaces it for a dialog of one's own is a plain
+       GtkWindow carrying its own content and its own buttons, which is what
+       this is, so the parent type differs here. */
+    GtkWindow parent_instance;
+#else
     GtkDialog parent_instance;
+#endif
 
     /* GtkAssertDialog widgets */
     GtkWidget *expander;
@@ -38,6 +47,14 @@ struct _GtkAssertDialog
 
     GtkWidget *shownexttime;
 
+#ifdef __WXGTK4__
+    /* What GtkDialog used to hold: where the content goes, and the result of
+       the nested loop gtk_assert_dialog_run() spins. */
+    GtkWidget *contentArea;
+    GMainLoop *loop;
+    int response;
+#endif
+
     /* callback for processing the stack frame */
     GtkAssertDialogStackFrameCallback callback;
     void *userdata;
@@ -45,7 +62,11 @@ struct _GtkAssertDialog
 
 struct _GtkAssertDialogClass
 {
+#ifdef __WXGTK4__
+    GtkWindowClass parent_class;
+#else
     GtkDialogClass parent_class;
+#endif
 };
 
 typedef enum
@@ -60,6 +81,17 @@ typedef enum
 
 GType gtk_assert_dialog_get_type(void);
 GtkWidget *gtk_assert_dialog_new(void);
+
+#ifdef __WXGTK4__
+/* Show the dialog and block until the user answers, returning one of the
+   GtkAssertDialogResponseID values. What gtk_dialog_run() did, for a dialog
+   that is no longer a GtkDialog.
+
+   The nested loop is a plain GMainLoop rather than a wxGUIEventLoop, for the
+   same reason as the one in gtk3-compat.h: this runs when an assertion has
+   already fired and wx's own event loop may not be in a usable state. */
+int gtk_assert_dialog_run(GtkAssertDialog *assertdlg);
+#endif
 
 /* get the assert message */
 gchar *gtk_assert_dialog_get_message(GtkAssertDialog *assertdlg);

@@ -312,7 +312,12 @@ bool wxGUIAppTraits::ShowAssertDialog(const wxString& msg)
         );
 #endif // wxUSE_STACKWALKER
 
+#ifdef __WXGTK4__
+        // Not a GtkDialog there: see wx/gtk/assertdlg_gtk.h.
+        gint result = gtk_assert_dialog_run(GTK_ASSERT_DIALOG(dialog));
+#else
         gint result = gtk_dialog_run(GTK_DIALOG (dialog));
+#endif
         bool returnCode = false;
         switch (result)
         {

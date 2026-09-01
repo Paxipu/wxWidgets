@@ -191,11 +191,17 @@ namespace wxGTKPrivate
 // shutdown
 WXDLLIMPEXP_CORE GtkWidget *GetButtonWidget();
 WXDLLIMPEXP_CORE GtkWidget *GetCheckButtonWidget();
+#ifndef __WXGTK4__
+// Both are GtkTreeView/GtkComboBox based, which GTK4 does not have: see the
+// comments beside their definitions.
 WXDLLIMPEXP_CORE GtkWidget *GetComboBoxWidget();
+#endif
 WXDLLIMPEXP_CORE GtkWidget *GetEntryWidget();
+#ifndef __WXGTK4__
 WXDLLIMPEXP_CORE GtkWidget *GetHeaderButtonWidgetFirst();
 WXDLLIMPEXP_CORE GtkWidget *GetHeaderButtonWidgetLast();
 WXDLLIMPEXP_CORE GtkWidget *GetHeaderButtonWidget();
+#endif
 WXDLLIMPEXP_CORE GtkWidget *GetNotebookWidget();
 WXDLLIMPEXP_CORE GtkWidget *GetRadioButtonWidget();
 WXDLLIMPEXP_CORE GtkWidget *GetSpinButtonWidget();

@@ -23,6 +23,11 @@
 #include "wx/uiaction.h"
 
 #include "testableframe.h"
+#include "testpaint.h"
+
+#ifdef __WXGTK3__
+    #include "wx/gtk/private/backend.h"
+#endif
 
 // ----------------------------------------------------------------------------
 // helpers
@@ -146,8 +151,6 @@ TEST_CASE("wxRendererNative::DrawsSomething", "[renderer]")
 // at all. It was found only when every bordered window started drawing its
 // border through the renderer and seven unrelated test cases stopped receiving
 // their clicks; before that, the fault was present but nothing exercised it.
-#if wxUSE_UIACTIONSIMULATOR
-
 namespace
 {
 
@@ -175,6 +178,9 @@ private:
 };
 
 } // anonymous namespace
+
+#if wxUSE_UIACTIONSIMULATOR
+
 
 TEST_CASE("wxRendererNative::LeavesNoWidgetBehind", "[renderer]")
 {
@@ -205,3 +211,45 @@ TEST_CASE("wxRendererNative::LeavesNoWidgetBehind", "[renderer]")
 }
 
 #endif // wxUSE_UIACTIONSIMULATOR
+
+// Several controls drawing through the renderer in one window must all draw.
+//
+// One did not catch either fault this file is about. The scratch widget the
+// GTK4 renderer photographs is one per process: parented into the control
+// being drawn, it is pulled out of the last one by the next, and every control
+// after the first draws nothing at all -- while the whole suite stays green,
+// because nothing else looks at what was drawn. See testpaint.h.
+TEST_CASE("wxRendererNative::EveryControlDraws", "[renderer]")
+{
+    // The check reads the pixels back from the screen, which is not something
+    // a client may do under Wayland -- see tests/graphics/screendc.cpp.
+#ifdef __WXGTK3__
+    if ( wxGTKImpl::IsWayland(nullptr) )
+        return;
+#endif
+
+    wxWindow* const parent = wxTheApp->GetTopWindow();
+    REQUIRE( parent );
+
+    // Four of them, because the fault this guards against needs more than one
+    // and showed up at the second.
+    std::unique_ptr<DrawingPanel> panels[4];
+    for ( int i = 0; i < 4; ++i )
+    {
+        panels[i].reset(new DrawingPanel(parent));
+        panels[i]->SetSize(wxRect(0, i * 50, 120, 40));
+        panels[i]->Show();
+    }
+
+    parent->Update();
+    wxYield();
+
+    for ( int i = 0; i < 4; ++i )
+    {
+        INFO("panel " << i);
+
+        // A window that draws nothing shows its parent's flat background, so
+        // its capture is one colour; a push button is not.
+        CHECK_WINDOW_PAINTS( panels[i].get() );
+    }
+}

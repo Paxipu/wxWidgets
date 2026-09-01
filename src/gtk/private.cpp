@@ -137,6 +137,10 @@ GtkWidget *GetSpinButtonWidget()
     return s_spinButton;
 }
 
+#ifndef __WXGTK4__
+
+// GtkComboBox is deprecated under GTK4 and nothing there asks for one: the
+// renderer photographs a GtkDropDown instead.
 GtkWidget * GetComboBoxWidget()
 {
     static GtkWidget *s_button = nullptr;
@@ -151,6 +155,8 @@ GtkWidget * GetComboBoxWidget()
 
     return s_button;
 }
+
+#endif // !__WXGTK4__
 
 
 GtkWidget *GetEntryWidget()
@@ -168,9 +174,15 @@ GtkWidget *GetEntryWidget()
     return s_entry;
 }
 
+#ifndef __WXGTK4__
+
 // This one just gets the button used by the column header. Although it's
 // still a gtk_button the themes will typically differentiate and draw them
 // differently if the button is in a treeview.
+//
+// GTK4 has no GtkTreeView column to take a button from. Its header button is
+// the "button" node inside a GtkColumnView's title row, which renderer.cpp
+// builds and measures for itself.
 static GtkWidget *s_first_button = nullptr;
 static GtkWidget *s_other_button = nullptr;
 static GtkWidget *s_last_button = nullptr;
@@ -233,6 +245,8 @@ GtkWidget *GetHeaderButtonWidget()
 
     return s_other_button;
 }
+
+#endif // !__WXGTK4__
 
 GtkWidget * GetRadioButtonWidget()
 {
@@ -313,7 +327,19 @@ GtkWidget *GetTreeWidget()
 
     if ( !s_tree )
     {
+#ifdef __WXGTK4__
+        // GtkTreeView is deprecated. The one thing still asked of this widget
+        // under GTK4 is what border a scrolling control has -- win_gtk.cpp
+        // draws wxBORDER_THEME with it -- and a GtkScrolledWindow is what a
+        // scrolling control is made of there.
+        //
+        // The values do not change: both report a border of zero on GTK 4.14
+        // and 4.22, measured. That the answer is zero at all is a separate
+        // question, and an older one than this port.
+        s_tree = gtk_scrolled_window_new();
+#else
         s_tree = gtk_tree_view_new();
+#endif
         g_object_add_weak_pointer(G_OBJECT(s_tree), (void**)&s_tree);
         AddToContainer(s_tree);
         gtk_widget_realize(s_tree);

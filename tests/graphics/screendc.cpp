@@ -11,9 +11,7 @@
     #include "wx/app.h"
     #include "wx/bitmap.h"
     #include "wx/dcmemory.h"
-    #include "wx/frame.h"
     #include "wx/image.h"
-    #include "wx/panel.h"
 #endif // WX_PRECOMP
 
 #include "wx/dcscreen.h"
@@ -22,7 +20,38 @@
     #include "wx/gtk/private/backend.h"
 #endif
 
-#include "waitfor.h"
+#include "testpaint.h"
+
+namespace
+{
+
+// The colour of the middle of a window, read back from the screen. The middle,
+// to stay clear of any border the theme may draw. Invalid if it could not be
+// read.
+wxColour ReadWindowCentreFromScreen(wxWindow* win)
+{
+    const wxSize size = win->GetSize();
+    const wxPoint pos = win->GetScreenPosition();
+
+    wxBitmap bmp(size);
+    {
+        wxScreenDC screen;
+        wxMemoryDC mem(bmp);
+        if ( !mem.Blit(0, 0, size.x, size.y, &screen, pos.x, pos.y) )
+            return wxColour();
+    }
+
+    const wxImage img = bmp.ConvertToImage();
+    if ( !img.IsOk() )
+        return wxColour();
+
+    const int x = size.x / 2;
+    const int y = size.y / 2;
+
+    return wxColour(img.GetRed(x, y), img.GetGreen(x, y), img.GetBlue(x, y));
+}
+
+} // anonymous namespace
 
 // Can wxScreenDC read the screen back?
 //
@@ -51,45 +80,29 @@ TEST_CASE("wxScreenDC::ReadBack", "[screendc]")
         return;
 #endif
 
-    wxWindow* const parent = wxTheApp->GetTopWindow();
-    REQUIRE( parent );
+    // The application's own window is what gets read: it is on the screen for
+    // the whole run, which a window put up for this test is not necessarily --
+    // with no window manager there is nothing to keep one in front of whatever
+    // the tests before it left behind, and a test that reads somebody else's
+    // window measures the window manager rather than wxScreenDC.
+    wxWindow* const win = wxTheApp->GetTopWindow();
+    REQUIRE( win );
+    REQUIRE( win->IsShownOnScreen() );
 
-    const wxColour marker(255, 0, 255);
+    // It has to have been painted before it can be read: that happens when the
+    // toolkit next paints, not when the window is shown. See tests/testpaint.h.
+    wxTestWaitForPaint(win);
 
-    std::unique_ptr<wxPanel> panel(new wxPanel(parent, wxID_ANY,
-                                               wxPoint(0, 0), wxSize(40, 20)));
-    panel->SetBackgroundColour(marker);
-    panel->Show();
-    parent->Update();
+    const wxColour read = ReadWindowCentreFromScreen(win);
+    REQUIRE( read.IsOk() );
 
-    // The window has to have reached the screen before it can be read from it.
-    YieldForAWhile();
+    INFO("read back " << read.GetAsString(wxC2S_HTML_SYNTAX));
 
-    if ( !panel->IsShownOnScreen() )
-        return;
-
-    const wxSize size = panel->GetSize();
-    const wxPoint pos = panel->GetScreenPosition();
-
-    wxBitmap bmp(size);
-    {
-        wxScreenDC screen;
-        wxMemoryDC mem(bmp);
-        REQUIRE( mem.Blit(0, 0, size.x, size.y, &screen, pos.x, pos.y) );
-    }
-
-    const wxImage img = bmp.ConvertToImage();
-    REQUIRE( img.IsOk() );
-
-    // The middle, to stay clear of any border the theme may draw.
-    const int x = size.x / 2;
-    const int y = size.y / 2;
-
-    INFO("read back (" << (int)img.GetRed(x, y) << ","
-                       << (int)img.GetGreen(x, y) << ","
-                       << (int)img.GetBlue(x, y) << ")");
-
-    CHECK( img.GetRed(x, y) == marker.Red() );
-    CHECK( img.GetGreen(x, y) == marker.Green() );
-    CHECK( img.GetBlue(x, y) == marker.Blue() );
+    // Black is the answer to look for, and it means one of exactly two things,
+    // both of them faults: the screen could not be reached, which is what the
+    // GTK4 build did before it grew the X11 path -- every pixel came back
+    // (0,0,0), with no error -- or the read went somewhere other than the
+    // window, since under X11 the root window behind it is black and the
+    // window is not.
+    CHECK( read != wxColour(0, 0, 0) );
 }

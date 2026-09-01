@@ -1085,8 +1085,16 @@ struct CheckBoxInfo
 #endif
 
             GtkBorder border, padding;
+#ifdef __WXGTK4__
+            // These went through a compatibility shim in gtk3-compat.h that
+            // suppressed the deprecation warning, so this call site did not
+            // show up in any warning count while still being deprecated GTK4
+            // code. See stylecontext.h for how the two are measured now.
+            wxGTKGetStyleMetrics(sc.GetWidget(), &padding, &border);
+#else
             gtk_style_context_get_border(sc, GTK_STATE_FLAG_NORMAL, &border);
             gtk_style_context_get_padding(sc, GTK_STATE_FLAG_NORMAL, &padding);
+#endif
 
             margin_left = border.left + padding.left;
             margin_top = border.top + padding.top;

@@ -14,6 +14,10 @@
 #include "wx/spinbutt.h"
 
 #include "wx/gtk/private/wrapgtk.h"
+#ifdef __WXGTK3__
+    #include "wx/gtk/private.h"
+    #include "wx/gtk/private/stylecontext.h"
+#endif
 
 //-----------------------------------------------------------------------------
 // data
@@ -255,11 +259,16 @@ wxSize wxSpinButton::DoGetBestSize() const
 {
     wxSize best = base_type::DoGetBestSize();
 #ifdef __WXGTK3__
-    GtkStyleContext* sc = gtk_widget_get_style_context(m_widget);
     GtkBorder pad = { 0, 0, 0, 0 };
 #ifdef __WXGTK4__
-    gtk_style_context_get_padding(sc, &pad);
+    // Measured on the scratch spin button rather than on this one: the
+    // measurement requeues the widget's resize, and doing that to a live
+    // widget from inside DoGetBestSize() asks the layout to run again, which
+    // calls DoGetBestSize() again. Padding is the theme's for the widget type
+    // in any case. See stylecontext.h.
+    wxGTKGetStyleMetrics(wxGTKPrivate::GetSpinButtonWidget(), &pad, nullptr);
 #else
+    GtkStyleContext* sc = gtk_widget_get_style_context(m_widget);
     gtk_style_context_get_padding(sc, gtk_style_context_get_state(sc), &pad);
 #endif
     best.x -= pad.left + pad.right;

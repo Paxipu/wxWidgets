@@ -547,14 +547,123 @@ private:
 // the probe programs establishing that this actually reproduces the theme's
 // values.
 
-bool wxGTKLookupThemeColour(GtkStyleContext* sc, const char* name, wxColour& color)
+bool wxGTKLookupThemeColour(GtkWidget* widget, const char* name, wxColour& color)
 {
+    if (!widget)
+        return false;
+
+    // The one deprecated call left in this file that has no replacement at
+    // all: GTK4 offers no way to read a theme's named colours. It is taken
+    // through this one function on purpose, so that when GTK removes it there
+    // is a single place to decide what to do instead. Everything around it --
+    // the foreground colour, the padding and the border -- has a supported
+    // query and uses it.
     GdkRGBA rgba;
-    if (!sc || !gtk_style_context_lookup_color(sc, name, &rgba))
+    if (!gtk_style_context_lookup_color(gtk_widget_get_style_context(widget),
+                                        name, &rgba))
         return false;
 
     color = wxColour(rgba);
     return true;
+}
+
+// The CSS classes wxGTKGetStyleMetrics() puts on a widget to take one side of
+// one property away, and the provider carrying them. See stylecontext.h for
+// why the priority and the requeue below are both load-bearing.
+static const char* const gs_metricClass[] =
+{
+    "wx-measure-no-padding-left",
+    "wx-measure-no-padding-right",
+    "wx-measure-no-padding-top",
+    "wx-measure-no-padding-bottom",
+    "wx-measure-no-border-left",
+    "wx-measure-no-border-right",
+    "wx-measure-no-border-top",
+    "wx-measure-no-border-bottom",
+};
+
+static void EnsureStyleMetricProvider()
+{
+    static bool s_done = false;
+    if (s_done)
+        return;
+
+    GdkDisplay* const display = gdk_display_get_default();
+    if (display == nullptr)
+        return;                 // nothing to attach to yet; try again later
+
+    GtkCssProvider* const provider = gtk_css_provider_new();
+    gtk_css_provider_load_from_data(provider,
+        ".wx-measure-no-padding-left { padding-left: 0; }\n"
+        ".wx-measure-no-padding-right { padding-right: 0; }\n"
+        ".wx-measure-no-padding-top { padding-top: 0; }\n"
+        ".wx-measure-no-padding-bottom { padding-bottom: 0; }\n"
+        ".wx-measure-no-border-left { border-left-width: 0; }\n"
+        ".wx-measure-no-border-right { border-right-width: 0; }\n"
+        ".wx-measure-no-border-top { border-top-width: 0; }\n"
+        ".wx-measure-no-border-bottom { border-bottom-width: 0; }\n",
+        -1);
+
+    // Above the theme and above the application's own CSS, so the rules
+    // actually take the property away instead of losing to it.
+    gtk_style_context_add_provider_for_display(display,
+                                               GTK_STYLE_PROVIDER(provider),
+                                               GTK_STYLE_PROVIDER_PRIORITY_USER);
+    g_object_unref(provider);   // the display holds its own reference
+
+    s_done = true;
+}
+
+// Minimum size of the widget along one axis.
+static int MeasureMin(GtkWidget* widget, GtkOrientation orientation)
+{
+    int minimum = 0;
+    gtk_widget_measure(widget, orientation, -1, &minimum, nullptr, nullptr, nullptr);
+    return minimum;
+}
+
+// How much smaller the widget gets when the given class takes one side away.
+static int MeasureWithout(GtkWidget* widget, int which)
+{
+    const GtkOrientation orientation = which % 4 < 2 ? GTK_ORIENTATION_HORIZONTAL
+                                                     : GTK_ORIENTATION_VERTICAL;
+
+    const int before = MeasureMin(widget, orientation);
+
+    gtk_widget_add_css_class(widget, gs_metricClass[which]);
+    gtk_widget_queue_resize(widget);
+    const int after = MeasureMin(widget, orientation);
+
+    gtk_widget_remove_css_class(widget, gs_metricClass[which]);
+    gtk_widget_queue_resize(widget);
+
+    return before - after;
+}
+
+void wxGTKGetStyleMetrics(GtkWidget* widget, GtkBorder* padding, GtkBorder* border)
+{
+    if (padding)
+        *padding = GtkBorder();
+    if (border)
+        *border = GtkBorder();
+
+    if (widget == nullptr)
+        return;
+
+    EnsureStyleMetricProvider();
+
+    GtkBorder* const parts[] = { padding, border };
+    for (int p = 0; p < 2; p++)
+    {
+        GtkBorder* const out = parts[p];
+        if (out == nullptr)
+            continue;
+
+        out->left   = MeasureWithout(widget, p * 4 + 0);
+        out->right  = MeasureWithout(widget, p * 4 + 1);
+        out->top    = MeasureWithout(widget, p * 4 + 2);
+        out->bottom = MeasureWithout(widget, p * 4 + 3);
+    }
 }
 
 // Depth-first search for the nearest descendant with the given CSS name.
@@ -662,10 +771,12 @@ void wxGtkStyleContext::Descend(const char* objectName)
                objectName, gtk_widget_get_css_name(m_current));
 }
 
-wxGtkStyleContext::wxGtkStyleContext(double scale)
-    : m_scale(int(scale))
+wxGtkStyleContext::wxGtkStyleContext(double WXUNUSED(scale))
 {
-    m_context = nullptr;
+    // GTK4 has no per-context scale: CSS pixels are logical there and the
+    // renderer applies the scale factor itself, which is why
+    // gtk_style_context_set_scale() went away rather than being renamed. The
+    // parameter is kept so the callers read the same in both builds.
     m_root = nullptr;
     m_current = nullptr;
     m_created = nullptr;
@@ -689,9 +800,6 @@ wxGtkStyleContext& wxGtkStyleContext::Add(GType type, const char* objectName, ..
     while ((className = va_arg(args, char*)))
         gtk_widget_add_css_class(m_current, className);
     va_end(args);
-
-    m_context = gtk_widget_get_style_context(m_current);
-    gtk_style_context_set_scale(m_context, m_scale);
 
     return *this;
 }
@@ -910,8 +1018,6 @@ wxGtkStyleContext& wxGtkStyleContext::AddTreeviewHeaderButton(int pos)
             if (index++ == pos)
             {
                 m_current = child;
-                m_context = gtk_widget_get_style_context(m_current);
-                gtk_style_context_set_scale(m_context, m_scale);
                 break;
             }
         }
@@ -961,8 +1067,6 @@ wxGtkStyleContext& wxGtkStyleContext::AddTooltip()
     gtk_widget_add_css_class(m_current, "tooltip");
     gtk_widget_set_name(m_current, "gtk-tooltip");
 
-    m_context = gtk_widget_get_style_context(m_current);
-    gtk_style_context_set_scale(m_context, m_scale);
     return *this;
 #else
     wxASSERT(m_context == nullptr);
@@ -1104,11 +1208,11 @@ void wxGtkStyleContext::Bg(wxColour& color, int state) const
         }
     }
 
-    if (!wxGTKLookupThemeColour(m_context, name, color))
+    if (!wxGTKLookupThemeColour(m_current, name, color))
     {
         // Theme doesn't define that name; fall back to the most generic one,
         // and leave the colour untouched if even that is missing.
-        wxGTKLookupThemeColour(m_context, "theme_bg_color", color);
+        wxGTKLookupThemeColour(m_current, "theme_bg_color", color);
     }
 }
 
@@ -1140,10 +1244,21 @@ void wxGtkStyleContext::Bg(wxColour& color, int state) const
 void wxGtkStyleContext::Fg(wxColour& color, int state) const
 {
     GdkRGBA rgba;
-    gtk_style_context_set_state(m_context, GtkStateFlags(state));
 #ifdef __WXGTK4__
-    gtk_style_context_get_color(m_context, &rgba);
+    // gtk_widget_get_color() answers for the widget's current state, so the
+    // state goes on the widget rather than into the call. It returns exactly
+    // what the deprecated gtk_style_context_get_color() did; measured in
+    // docs/gtk/probes/gtk4-style-query-replacements.c.
+    const GtkStateFlags flags = GtkStateFlags(state);
+    if (flags != GTK_STATE_FLAG_NORMAL)
+        gtk_widget_set_state_flags(m_current, flags, FALSE);
+
+    gtk_widget_get_color(m_current, &rgba);
+
+    if (flags != GTK_STATE_FLAG_NORMAL)
+        gtk_widget_unset_state_flags(m_current, flags);
 #else
+    gtk_style_context_set_state(m_context, GtkStateFlags(state));
     gtk_style_context_get_color(m_context, GtkStateFlags(state), &rgba);
 #endif
     color = wxColour(rgba);
@@ -1157,7 +1272,7 @@ void wxGtkStyleContext::Border(wxColour& color) const
     // conventionally use for it. Note this is only the border *colour* --
     // border widths come from gtk_style_context_get_border(), which survives
     // intact and stays exact.
-    wxGTKLookupThemeColour(m_context, "borders", color);
+    wxGTKLookupThemeColour(m_current, "borders", color);
 #else
     GdkRGBA* rgba;
     gtk_style_context_get(m_context, GTK_STATE_FLAG_NORMAL, "border-color", &rgba, nullptr);

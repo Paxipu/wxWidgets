@@ -11,6 +11,9 @@
 #include "wx/gtk/private.h"
 #include "wx/gtk/private/gtk3-compat.h"
 #include "wx/gtk/private/win_gtk.h"
+#ifdef __WXGTK3__
+    #include "wx/gtk/private/stylecontext.h"
+#endif
 #include "wx/window.h"
 
 #if wxUSE_ACCESSIBILITY
@@ -938,7 +941,17 @@ void wxPizza::get_border(GtkBorder& border)
         border.left = border.right = border.top = border.bottom = 1;
     else if (m_windowStyle & (wxBORDER_RAISED | wxBORDER_SUNKEN | wxBORDER_THEME))
     {
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+        // Only the border is wanted here -- this is the thickness of the
+        // frame wx draws, so adding the padding to it would draw too thick a
+        // one. See stylecontext.h for how it is measured now that
+        // gtk_style_context_get_border() is gone.
+        wxGTKGetStyleMetrics(
+            m_windowStyle & (wxHSCROLL | wxVSCROLL)
+                ? wxGTKPrivate::GetTreeWidget()
+                : wxGTKPrivate::GetEntryWidget(),
+            nullptr, &border);
+#elif defined(__WXGTK3__)
         GtkStyleContext* sc;
         if (m_windowStyle & (wxHSCROLL | wxVSCROLL))
             sc = gtk_widget_get_style_context(wxGTKPrivate::GetTreeWidget());
@@ -946,14 +959,7 @@ void wxPizza::get_border(GtkBorder& border)
             sc = gtk_widget_get_style_context(wxGTKPrivate::GetEntryWidget());
 
         gtk_style_context_set_state(sc, GTK_STATE_FLAG_NORMAL);
-#ifdef __WXGTK4__
-        // gtk_style_context_get_border() dropped the separate GtkStateFlags
-        // parameter under GTK4 -- it always queries the context's current
-        // state, which gtk_style_context_set_state() above already set.
-        gtk_style_context_get_border(sc, &border);
-#else
         gtk_style_context_get_border(sc, GTK_STATE_FLAG_NORMAL, &border);
-#endif
 #else // !__WXGTK3__
         GtkStyle* style;
         if (m_windowStyle & (wxHSCROLL | wxVSCROLL))

@@ -8138,8 +8138,7 @@ void wxWindowGTK::GTKDrawBorder(cairo_t* cr)
         // gtk_style_context_get(); use the theme's conventional colour name
         // through the same shared helper as the rest of the port.
         wxColour colBorder;
-        GtkStyleContext* const sc = gtk_widget_get_style_context(m_wxwindow);
-        if ( !wxGTKLookupThemeColour(sc, "borders", colBorder) )
+        if ( !wxGTKLookupThemeColour(m_wxwindow, "borders", colBorder) )
             colBorder = *wxBLACK;
 
         cairo_set_source_rgba(cr,

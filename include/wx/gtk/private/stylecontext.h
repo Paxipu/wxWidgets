@@ -12,6 +12,10 @@
 
 #ifdef __WXGTK3__
 
+// The colour queries below take a wxColour&, and this header is included by
+// files that don't otherwise need the class.
+class WXDLLIMPEXP_FWD_CORE wxColour;
+
 class wxGtkStyleContext
 {
 public:
@@ -35,10 +39,20 @@ public:
     void Bg(wxColour& color, int state = GTK_STATE_FLAG_NORMAL) const;
     void Fg(wxColour& color, int state = GTK_STATE_FLAG_NORMAL) const;
     void Border(wxColour& color) const;
+#ifdef __WXGTK4__
+    // The node this has descended to, as a widget. GTK4 answers style queries
+    // about widgets rather than about contexts, so this is what the queries
+    // outside this class are given. Never shown and never realized, so it is
+    // safe to relayout for wxGTKGetStyleMetrics() below.
+    GtkWidget* GetWidget() const { return m_current; }
+#else
     operator GtkStyleContext*() { return m_context; }
+#endif
 
 private:
+#ifndef __WXGTK4__
     GtkStyleContext* m_context;
+#endif
 #ifdef __WXGTK4__
     // GTK4 removed GtkWidgetPath, gtk_style_context_new() and
     // gtk_style_context_set_parent(): a GtkStyleContext can only be obtained
@@ -75,7 +89,9 @@ private:
 #else
     GtkWidgetPath* const m_path;
 #endif
+#ifndef __WXGTK4__
     const int m_scale;
+#endif
 
     wxDECLARE_NO_COPY_CLASS(wxGtkStyleContext);
 };
@@ -93,7 +109,35 @@ private:
 //
 // Shared with control.cpp so this gap has exactly one implementation and one
 // place to improve later.
-bool wxGTKLookupThemeColour(GtkStyleContext* sc, const char* name, wxColour& color);
+bool wxGTKLookupThemeColour(GtkWidget* widget, const char* name, wxColour& color);
+
+// Ask what padding and border a widget's style gives it.
+//
+// GTK4 removed gtk_style_context_get_padding() and get_border() with the rest
+// of GtkStyleContext and put nothing in their place. What it does still offer
+// is gtk_widget_measure(), and the padding and the border are part of what
+// that measures -- so the way to read one of them back is to take it away and
+// see by how much the widget shrinks.
+//
+// That is what this does: one CSS class per side per property, all in a single
+// provider installed once for the display. Two things about it are
+// load-bearing, and both were measured rather than assumed
+// (docs/gtk/probes/gtk4-style-metrics-replacements.c):
+//
+//  - The provider sits at GTK_STYLE_PROVIDER_PRIORITY_USER, above the theme
+//    and above anything the application loads. At equal priority the rule
+//    that comes later wins, the property never goes to zero, and every side
+//    measures 0 while looking perfectly healthy.
+//  - The widget has to be told to requeue its resize, or it answers out of
+//    its cached size request and, again, everything measures 0.
+//
+// Because of that requeue, pass a widget it is safe to relayout -- one of the
+// never-shown scratch widgets, not a live one being laid out right now. The
+// values are the theme's for that widget type, which is what every caller
+// wants; wx never sets padding or border on an individual widget.
+//
+// Either pointer may be null if only the other is wanted.
+void wxGTKGetStyleMetrics(GtkWidget* widget, GtkBorder* padding, GtkBorder* border);
 #endif
 
 #endif // __WXGTK3__

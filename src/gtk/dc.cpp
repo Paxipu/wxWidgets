@@ -24,6 +24,13 @@
 #include "wx/gtk/private/cairo.h"
 #include "wx/gtk/private/gtk3-compat.h"
 
+#if defined(__WXGTK4__) && defined(GDK_WINDOWING_X11)
+    // For the X11 fallback in wxScreenDCImpl below: GTK4 has no root window,
+    // but X11 still does, and cairo can be pointed straight at it.
+    #include <gdk/x11/gdkx.h>
+    #include <cairo-xlib.h>
+#endif
+
 wxGTKCairoDCImpl::wxGTKCairoDCImpl(wxDC* owner)
     : wxGCDCImpl(owner)
 {
@@ -625,16 +632,70 @@ wxScreenDCImpl::wxScreenDCImpl(wxScreenDC* owner)
     : wxGTKCairoDCImpl(owner, static_cast<wxWindow*>(nullptr))
 {
 #ifdef __WXGTK4__
-    // There is no root window under GTK4 -- gdk_get_default_root_window() is
-    // gone along with the rest of GdkWindow -- and no backend-independent way
-    // to either draw on the screen or read it back. Report the size of the
-    // primary monitor, which is what wxScreenDC's non-drawing users want, and
-    // leave the drawing to go nowhere.
-    const wxSize size = wxGetDisplaySize();
-    m_size.x = size.x;
-    m_size.y = size.y;
+    // There is no root window under GTK4: gdk_get_default_root_window() went
+    // with the rest of GdkWindow, and so did gdk_cairo_create(), which is how
+    // the GTK+ 3 code below gets a context for the screen. GTK4 offers nothing
+    // backend-independent in their place.
+    //
+    // Under X11 there is still a root window, though, and cairo can be pointed
+    // straight at it -- which is what gdk_cairo_create() did anyway. So that is
+    // what this does, and wxScreenDC keeps working there for both reading the
+    // screen and drawing on it.
+    //
+    // Measured in docs/gtk/probes/gtk4-screen-readback.c. Without it a
+    // screenshot comes back black with no error at all, which is worse than
+    // failing: under GTK+ 3 every pixel reads its real colour, under GTK4
+    // every pixel was (0,0,0).
+    //
+    // Wayland has no screen to read and no desktop to draw on -- that is a
+    // deliberate part of its design, not a gap in GTK -- so there the size is
+    // still all wxScreenDC can offer.
+    bool haveScreen = false;
 
-    SetGraphicsContext(wxGraphicsContext::Create());
+#ifdef GDK_WINDOWING_X11
+    GdkDisplay* const display = gdk_display_get_default();
+    if ( display && GDK_IS_X11_DISPLAY(display) )
+    {
+        Display* const xdpy = gdk_x11_display_get_xdisplay(display);
+        const Window root = DefaultRootWindow(xdpy);
+
+        XWindowAttributes attrs;
+        if ( XGetWindowAttributes(xdpy, root, &attrs) )
+        {
+            cairo_surface_t* const surface =
+                cairo_xlib_surface_create(xdpy, root, attrs.visual,
+                                          attrs.width, attrs.height);
+
+            if ( cairo_surface_status(surface) == CAIRO_STATUS_SUCCESS )
+            {
+                m_size.x = attrs.width;
+                m_size.y = attrs.height;
+
+                cairo_t* const cr = cairo_create(surface);
+                wxGraphicsContext* const gc =
+                    wxGraphicsContext::CreateFromNative(cr);
+                gc->SetContentScaleFactor(m_contentScaleFactor);
+                SetGraphicsContext(gc);
+                cairo_destroy(cr);
+
+                haveScreen = true;
+            }
+
+            cairo_surface_destroy(surface);
+        }
+    }
+#endif // GDK_WINDOWING_X11
+
+    if ( !haveScreen )
+    {
+        // Report the size of the primary monitor, which is what wxScreenDC's
+        // non-drawing users want, and leave the drawing to go nowhere.
+        const wxSize size = wxGetDisplaySize();
+        m_size.x = size.x;
+        m_size.y = size.y;
+
+        SetGraphicsContext(wxGraphicsContext::Create());
+    }
 #else // !__WXGTK4__
     GdkWindow* window = gdk_get_default_root_window();
     InitSize(window);

@@ -911,6 +911,27 @@ void wxAccessible::NotifyEvent(int eventType, wxWindow* window,
             break;
 
         case wxACC_EVENT_OBJECT_CREATE:
+            // Drop anything stale, but do not ask the object anything.
+            //
+            // This event arrives from inside the control's own Create(), and
+            // a control is not finished at that point -- its caller is still
+            // building it. wxDataViewTreeCtrl is the case that made this
+            // fatal: wxDataViewCtrl::Create() reports the creation as its last
+            // act, and the model is associated by the caller *afterwards*, so
+            // a bridge that asks for the role right then reaches
+            // wxDataViewMainWindow::IsList(), which dereferences a model that
+            // does not exist yet. That is a segfault in the constructor of any
+            // wxDataViewTreeCtrl (#220), and it is not a dataview problem: any
+            // control that finishes itself after Create() returns can be asked
+            // too early the same way.
+            //
+            // Nothing is lost by staying quiet. ATK pulls -- an assistive
+            // technology asks when it walks the tree, by which time the
+            // control is built -- so a newly created object needs no push,
+            // only for anything stale to be dropped, which Detach() does.
+            acc->m_impl->Detach();
+            break;
+
         case wxACC_EVENT_OBJECT_REORDER:
         case wxACC_EVENT_OBJECT_PARENTCHANGE:
             // The shape of the tree changed, so nothing already handed out can
@@ -918,6 +939,9 @@ void wxAccessible::NotifyEvent(int eventType, wxWindow* window,
             // equivalent of MSAA's "the children changed" -- so the objects
             // are rebuilt and an assistive technology will see the new ones
             // the next time it walks.
+            //
+            // Unlike the creation above, these two reach a control that has
+            // been alive for a while, so asking it about itself is safe.
             acc->m_impl->Detach();
             acc->m_impl->UpdateAll();
             break;

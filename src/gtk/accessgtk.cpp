@@ -911,6 +911,25 @@ void wxAccessible::NotifyEvent(int eventType, wxWindow* window,
             break;
 
         case wxACC_EVENT_OBJECT_CREATE:
+            // Queued rather than done here, unlike the two below. This event
+            // is sent from a base class Create(), so the most derived one has
+            // not returned yet and the control cannot answer questions about
+            // itself: a wxDataViewCtrl is associated with its model by the
+            // class deriving from it, after wxDataViewCtrl::Create() is done,
+            // and asking a model-less one for its role dereferences null.
+            // Anything reading this comes through the event loop, which does
+            // not run until construction has finished, so nothing can look
+            // before the queued call has caught up.
+            window->CallAfter([window]()
+                {
+                    if ( wxAccessible* const later = window->GetAccessible() )
+                    {
+                        later->m_impl->Detach();
+                        later->m_impl->UpdateAll();
+                    }
+                });
+            break;
+
         case wxACC_EVENT_OBJECT_REORDER:
         case wxACC_EVENT_OBJECT_PARENTCHANGE:
             // The shape of the tree changed, so nothing already handed out can

@@ -9,7 +9,11 @@
 // For compilers that support precompilation, includes "wx.h".
 #include "wx/wxprec.h"
 
-#if wxUSE_FILEDLG
+// Nothing here under GTK4: wxFileDialog is the generic one there, because the
+// GtkFileChooser interface this is built on is deprecated and its replacement
+// does not reliably open -- see wx/filedlg.h. Still the native dialog for
+// GTK+ 2 and GTK+ 3.
+#if wxUSE_FILEDLG && !defined(__WXGTK4__)
 
 #include "wx/filedlg.h"
 
@@ -766,4 +770,4 @@ bool wxFileDialog::AddShortcut(const wxString& directory, int WXUNUSED(flags))
     return true;
 }
 
-#endif // wxUSE_FILEDLG
+#endif // wxUSE_FILEDLG && !__WXGTK4__

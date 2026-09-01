@@ -9,7 +9,11 @@
 
 #include "wx/wxprec.h"
 
-#if wxUSE_FILECTRL && !defined(__WXUNIVERSAL__)
+// Nothing here under GTK4 any more. wxFileCtrl has been the generic one since
+// #213, and with wxFileDialog generic too there is nobody left to wrap a
+// GtkFileChooser for -- which is the deprecated interface this whole file is
+// about.
+#if wxUSE_FILECTRL && !defined(__WXUNIVERSAL__) && !defined(__WXGTK4__)
 
 #include "wx/filectrl.h"
 // Directly, because under GTK4 wx/filectrl.h picks wxGenericFileCtrl and so
@@ -500,6 +504,6 @@ void wxGtkFileCtrl::ShowHidden(bool show)
     gtk_file_chooser_set_show_hidden(m_fcWidget, show);
 }
 
-#endif // wxUSE_FILECTRL && !defined(__WXGTK4__)
+#endif // wxUSE_FILECTRL && !__WXUNIVERSAL__ && !__WXGTK4__ && !defined(__WXGTK4__)
 
-#endif // wxUSE_FILECTRL && !defined(__WXUNIVERSAL__)
+#endif // wxUSE_FILECTRL && !__WXUNIVERSAL__ && !__WXGTK4__ && !defined(__WXUNIVERSAL__)

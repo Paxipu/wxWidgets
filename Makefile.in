@@ -4590,6 +4590,7 @@ COND_USE_GUI_1_WXUNIV_1___CORE_SRC_OBJECTS =  \
 	monodll_dirdlgg.o \
 	monodll_generic_fdrepdlg.o \
 	monodll_filedlgg.o \
+	monodll_filedlgg.o \
 	monodll_filepickerg.o \
 	monodll_fontdlgg.o \
 	monodll_fontpickerg.o \
@@ -5131,6 +5132,7 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_2___GUI_SRC_OBJECTS =  \
 	monodll_generic_accel.o \
 	monodll_dirdlgg.o \
 	monodll_generic_fdrepdlg.o \
+	monodll_filedlgg.o \
 	monodll_filepickerg.o \
 	monodll_generic_listctrl.o \
 	monodll_prntdlgg.o \
@@ -5199,6 +5201,7 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_3___GUI_SRC_OBJECTS =  \
 	monodll_generic_accel.o \
 	monodll_dirdlgg.o \
 	monodll_generic_fdrepdlg.o \
+	monodll_filedlgg.o \
 	monodll_filepickerg.o \
 	monodll_generic_listctrl.o \
 	monodll_prntdlgg.o \
@@ -5265,6 +5268,7 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_4___GUI_SRC_OBJECTS =  \
 	monodll_generic_accel.o \
 	monodll_dirdlgg.o \
 	monodll_generic_fdrepdlg.o \
+	monodll_filedlgg.o \
 	monodll_filepickerg.o \
 	monodll_generic_listctrl.o \
 	monodll_prntdlgg.o \
@@ -5493,6 +5497,7 @@ COND_TOOLKIT_QT___GUI_SRC_OBJECTS =  \
 	monodll_collpaneg.o \
 	monodll_dirdlgg.o \
 	monodll_generic_fdrepdlg.o \
+	monodll_filedlgg.o \
 	monodll_filepickerg.o \
 	monodll_fontpickerg.o \
 	monodll_generic_imaglist.o \
@@ -6402,6 +6407,7 @@ COND_USE_GUI_1_WXUNIV_1___CORE_SRC_OBJECTS_1 =  \
 	monolib_dirdlgg.o \
 	monolib_generic_fdrepdlg.o \
 	monolib_filedlgg.o \
+	monolib_filedlgg.o \
 	monolib_filepickerg.o \
 	monolib_fontdlgg.o \
 	monolib_fontpickerg.o \
@@ -6943,6 +6949,7 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_2___GUI_SRC_OBJECTS_1 =  \
 	monolib_generic_accel.o \
 	monolib_dirdlgg.o \
 	monolib_generic_fdrepdlg.o \
+	monolib_filedlgg.o \
 	monolib_filepickerg.o \
 	monolib_generic_listctrl.o \
 	monolib_prntdlgg.o \
@@ -7011,6 +7018,7 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_3___GUI_SRC_OBJECTS_1 =  \
 	monolib_generic_accel.o \
 	monolib_dirdlgg.o \
 	monolib_generic_fdrepdlg.o \
+	monolib_filedlgg.o \
 	monolib_filepickerg.o \
 	monolib_generic_listctrl.o \
 	monolib_prntdlgg.o \
@@ -7077,6 +7085,7 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_4___GUI_SRC_OBJECTS_1 =  \
 	monolib_generic_accel.o \
 	monolib_dirdlgg.o \
 	monolib_generic_fdrepdlg.o \
+	monolib_filedlgg.o \
 	monolib_filepickerg.o \
 	monolib_generic_listctrl.o \
 	monolib_prntdlgg.o \
@@ -7305,6 +7314,7 @@ COND_TOOLKIT_QT___GUI_SRC_OBJECTS_1 =  \
 	monolib_collpaneg.o \
 	monolib_dirdlgg.o \
 	monolib_generic_fdrepdlg.o \
+	monolib_filedlgg.o \
 	monolib_filepickerg.o \
 	monolib_fontpickerg.o \
 	monolib_generic_imaglist.o \
@@ -8360,6 +8370,7 @@ COND_USE_GUI_1_WXUNIV_1___CORE_SRC_OBJECTS_2 =  \
 	coredll_dirdlgg.o \
 	coredll_generic_fdrepdlg.o \
 	coredll_filedlgg.o \
+	coredll_filedlgg.o \
 	coredll_filepickerg.o \
 	coredll_fontdlgg.o \
 	coredll_fontpickerg.o \
@@ -8901,6 +8912,7 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_2___GUI_SRC_OBJECTS_2 =  \
 	coredll_generic_accel.o \
 	coredll_dirdlgg.o \
 	coredll_generic_fdrepdlg.o \
+	coredll_filedlgg.o \
 	coredll_filepickerg.o \
 	coredll_generic_listctrl.o \
 	coredll_prntdlgg.o \
@@ -8969,6 +8981,7 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_3___GUI_SRC_OBJECTS_2 =  \
 	coredll_generic_accel.o \
 	coredll_dirdlgg.o \
 	coredll_generic_fdrepdlg.o \
+	coredll_filedlgg.o \
 	coredll_filepickerg.o \
 	coredll_generic_listctrl.o \
 	coredll_prntdlgg.o \
@@ -9035,6 +9048,7 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_4___GUI_SRC_OBJECTS_2 =  \
 	coredll_generic_accel.o \
 	coredll_dirdlgg.o \
 	coredll_generic_fdrepdlg.o \
+	coredll_filedlgg.o \
 	coredll_filepickerg.o \
 	coredll_generic_listctrl.o \
 	coredll_prntdlgg.o \
@@ -9263,6 +9277,7 @@ COND_TOOLKIT_QT___GUI_SRC_OBJECTS_2 =  \
 	coredll_collpaneg.o \
 	coredll_dirdlgg.o \
 	coredll_generic_fdrepdlg.o \
+	coredll_filedlgg.o \
 	coredll_filepickerg.o \
 	coredll_fontpickerg.o \
 	coredll_generic_imaglist.o \
@@ -9897,6 +9912,7 @@ COND_USE_GUI_1_WXUNIV_1___CORE_SRC_OBJECTS_3 =  \
 	corelib_dirdlgg.o \
 	corelib_generic_fdrepdlg.o \
 	corelib_filedlgg.o \
+	corelib_filedlgg.o \
 	corelib_filepickerg.o \
 	corelib_fontdlgg.o \
 	corelib_fontpickerg.o \
@@ -10438,6 +10454,7 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_2___GUI_SRC_OBJECTS_3 =  \
 	corelib_generic_accel.o \
 	corelib_dirdlgg.o \
 	corelib_generic_fdrepdlg.o \
+	corelib_filedlgg.o \
 	corelib_filepickerg.o \
 	corelib_generic_listctrl.o \
 	corelib_prntdlgg.o \
@@ -10506,6 +10523,7 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_3___GUI_SRC_OBJECTS_3 =  \
 	corelib_generic_accel.o \
 	corelib_dirdlgg.o \
 	corelib_generic_fdrepdlg.o \
+	corelib_filedlgg.o \
 	corelib_filepickerg.o \
 	corelib_generic_listctrl.o \
 	corelib_prntdlgg.o \
@@ -10572,6 +10590,7 @@ COND_TOOLKIT_GTK_TOOLKIT_VERSION_4___GUI_SRC_OBJECTS_3 =  \
 	corelib_generic_accel.o \
 	corelib_dirdlgg.o \
 	corelib_generic_fdrepdlg.o \
+	corelib_filedlgg.o \
 	corelib_filepickerg.o \
 	corelib_generic_listctrl.o \
 	corelib_prntdlgg.o \
@@ -10800,6 +10819,7 @@ COND_TOOLKIT_QT___GUI_SRC_OBJECTS_3 =  \
 	corelib_collpaneg.o \
 	corelib_dirdlgg.o \
 	corelib_generic_fdrepdlg.o \
+	corelib_filedlgg.o \
 	corelib_filepickerg.o \
 	corelib_fontpickerg.o \
 	corelib_generic_imaglist.o \
@@ -12444,6 +12464,7 @@ COND_PLATFORM_MACOSX_1___OSX_COMMON_SRC_OBJECTS =  \
 	monodll_dirdlgg.o \
 	monodll_generic_fdrepdlg.o \
 	monodll_filedlgg.o \
+	monodll_filedlgg.o \
 	monodll_filepickerg.o \
 	monodll_fontdlgg.o \
 	monodll_fontpickerg.o \
@@ -12576,6 +12597,7 @@ COND_PLATFORM_MACOSX_1___OSX_COMMON_SRC_OBJECTS_0 =  \
 	monolib_dirdlgg.o \
 	monolib_generic_fdrepdlg.o \
 	monolib_filedlgg.o \
+	monolib_filedlgg.o \
 	monolib_filepickerg.o \
 	monolib_fontdlgg.o \
 	monolib_fontpickerg.o \
@@ -12707,6 +12729,7 @@ COND_PLATFORM_MACOSX_1___OSX_COMMON_SRC_OBJECTS_8 =  \
 	coredll_dirdlgg.o \
 	coredll_generic_fdrepdlg.o \
 	coredll_filedlgg.o \
+	coredll_filedlgg.o \
 	coredll_filepickerg.o \
 	coredll_fontdlgg.o \
 	coredll_fontpickerg.o \
@@ -12837,6 +12860,7 @@ COND_PLATFORM_MACOSX_1___OSX_COMMON_SRC_OBJECTS_9 =  \
 	corelib_colrdlgg.o \
 	corelib_dirdlgg.o \
 	corelib_generic_fdrepdlg.o \
+	corelib_filedlgg.o \
 	corelib_filedlgg.o \
 	corelib_filepickerg.o \
 	corelib_fontdlgg.o \
@@ -18526,17 +18550,26 @@ monodll_sound_sdl.o: $(srcdir)/src/unix/sound_sdl.cpp $(MONODLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@monodll_generic_fdrepdlg.o: $(srcdir)/src/generic/fdrepdlg.cpp $(MONODLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(MONODLL_CXXFLAGS) $(srcdir)/src/generic/fdrepdlg.cpp
 
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@monodll_filedlgg.o: $(srcdir)/src/generic/filedlgg.cpp $(MONODLL_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(MONODLL_CXXFLAGS) $(srcdir)/src/generic/filedlgg.cpp
+
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@monodll_dirdlgg.o: $(srcdir)/src/generic/dirdlgg.cpp $(MONODLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(MONODLL_CXXFLAGS) $(srcdir)/src/generic/dirdlgg.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@monodll_generic_fdrepdlg.o: $(srcdir)/src/generic/fdrepdlg.cpp $(MONODLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(MONODLL_CXXFLAGS) $(srcdir)/src/generic/fdrepdlg.cpp
 
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@monodll_filedlgg.o: $(srcdir)/src/generic/filedlgg.cpp $(MONODLL_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(MONODLL_CXXFLAGS) $(srcdir)/src/generic/filedlgg.cpp
+
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@monodll_dirdlgg.o: $(srcdir)/src/generic/dirdlgg.cpp $(MONODLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(MONODLL_CXXFLAGS) $(srcdir)/src/generic/dirdlgg.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@monodll_generic_fdrepdlg.o: $(srcdir)/src/generic/fdrepdlg.cpp $(MONODLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(MONODLL_CXXFLAGS) $(srcdir)/src/generic/fdrepdlg.cpp
+
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@monodll_filedlgg.o: $(srcdir)/src/generic/filedlgg.cpp $(MONODLL_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(MONODLL_CXXFLAGS) $(srcdir)/src/generic/filedlgg.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@monodll_dirdlgg.o: $(srcdir)/src/generic/dirdlgg.cpp $(MONODLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(MONODLL_CXXFLAGS) $(srcdir)/src/generic/dirdlgg.cpp
@@ -23353,17 +23386,26 @@ monolib_sound_sdl.o: $(srcdir)/src/unix/sound_sdl.cpp $(MONOLIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@monolib_generic_fdrepdlg.o: $(srcdir)/src/generic/fdrepdlg.cpp $(MONOLIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(MONOLIB_CXXFLAGS) $(srcdir)/src/generic/fdrepdlg.cpp
 
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@monolib_filedlgg.o: $(srcdir)/src/generic/filedlgg.cpp $(MONOLIB_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(MONOLIB_CXXFLAGS) $(srcdir)/src/generic/filedlgg.cpp
+
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@monolib_dirdlgg.o: $(srcdir)/src/generic/dirdlgg.cpp $(MONOLIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(MONOLIB_CXXFLAGS) $(srcdir)/src/generic/dirdlgg.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@monolib_generic_fdrepdlg.o: $(srcdir)/src/generic/fdrepdlg.cpp $(MONOLIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(MONOLIB_CXXFLAGS) $(srcdir)/src/generic/fdrepdlg.cpp
 
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@monolib_filedlgg.o: $(srcdir)/src/generic/filedlgg.cpp $(MONOLIB_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(MONOLIB_CXXFLAGS) $(srcdir)/src/generic/filedlgg.cpp
+
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@monolib_dirdlgg.o: $(srcdir)/src/generic/dirdlgg.cpp $(MONOLIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(MONOLIB_CXXFLAGS) $(srcdir)/src/generic/dirdlgg.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@monolib_generic_fdrepdlg.o: $(srcdir)/src/generic/fdrepdlg.cpp $(MONOLIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(MONOLIB_CXXFLAGS) $(srcdir)/src/generic/fdrepdlg.cpp
+
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@monolib_filedlgg.o: $(srcdir)/src/generic/filedlgg.cpp $(MONOLIB_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(MONOLIB_CXXFLAGS) $(srcdir)/src/generic/filedlgg.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@monolib_dirdlgg.o: $(srcdir)/src/generic/dirdlgg.cpp $(MONOLIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(MONOLIB_CXXFLAGS) $(srcdir)/src/generic/dirdlgg.cpp
@@ -28243,17 +28285,26 @@ coredll_sound_sdl.o: $(srcdir)/src/unix/sound_sdl.cpp $(COREDLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@coredll_generic_fdrepdlg.o: $(srcdir)/src/generic/fdrepdlg.cpp $(COREDLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(COREDLL_CXXFLAGS) $(srcdir)/src/generic/fdrepdlg.cpp
 
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@coredll_filedlgg.o: $(srcdir)/src/generic/filedlgg.cpp $(COREDLL_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(COREDLL_CXXFLAGS) $(srcdir)/src/generic/filedlgg.cpp
+
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@coredll_dirdlgg.o: $(srcdir)/src/generic/dirdlgg.cpp $(COREDLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(COREDLL_CXXFLAGS) $(srcdir)/src/generic/dirdlgg.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@coredll_generic_fdrepdlg.o: $(srcdir)/src/generic/fdrepdlg.cpp $(COREDLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(COREDLL_CXXFLAGS) $(srcdir)/src/generic/fdrepdlg.cpp
 
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@coredll_filedlgg.o: $(srcdir)/src/generic/filedlgg.cpp $(COREDLL_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(COREDLL_CXXFLAGS) $(srcdir)/src/generic/filedlgg.cpp
+
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@coredll_dirdlgg.o: $(srcdir)/src/generic/dirdlgg.cpp $(COREDLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(COREDLL_CXXFLAGS) $(srcdir)/src/generic/dirdlgg.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@coredll_generic_fdrepdlg.o: $(srcdir)/src/generic/fdrepdlg.cpp $(COREDLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(COREDLL_CXXFLAGS) $(srcdir)/src/generic/fdrepdlg.cpp
+
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@coredll_filedlgg.o: $(srcdir)/src/generic/filedlgg.cpp $(COREDLL_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(COREDLL_CXXFLAGS) $(srcdir)/src/generic/filedlgg.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@coredll_dirdlgg.o: $(srcdir)/src/generic/dirdlgg.cpp $(COREDLL_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(COREDLL_CXXFLAGS) $(srcdir)/src/generic/dirdlgg.cpp
@@ -32032,17 +32083,26 @@ corelib_sound_sdl.o: $(srcdir)/src/unix/sound_sdl.cpp $(CORELIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@corelib_generic_fdrepdlg.o: $(srcdir)/src/generic/fdrepdlg.cpp $(CORELIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(CORELIB_CXXFLAGS) $(srcdir)/src/generic/fdrepdlg.cpp
 
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@corelib_filedlgg.o: $(srcdir)/src/generic/filedlgg.cpp $(CORELIB_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(CORELIB_CXXFLAGS) $(srcdir)/src/generic/filedlgg.cpp
+
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@corelib_dirdlgg.o: $(srcdir)/src/generic/dirdlgg.cpp $(CORELIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_4_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(CORELIB_CXXFLAGS) $(srcdir)/src/generic/dirdlgg.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@corelib_generic_fdrepdlg.o: $(srcdir)/src/generic/fdrepdlg.cpp $(CORELIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(CORELIB_CXXFLAGS) $(srcdir)/src/generic/fdrepdlg.cpp
 
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@corelib_filedlgg.o: $(srcdir)/src/generic/filedlgg.cpp $(CORELIB_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(CORELIB_CXXFLAGS) $(srcdir)/src/generic/filedlgg.cpp
+
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@corelib_dirdlgg.o: $(srcdir)/src/generic/dirdlgg.cpp $(CORELIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_3_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(CORELIB_CXXFLAGS) $(srcdir)/src/generic/dirdlgg.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@corelib_generic_fdrepdlg.o: $(srcdir)/src/generic/fdrepdlg.cpp $(CORELIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(CORELIB_CXXFLAGS) $(srcdir)/src/generic/fdrepdlg.cpp
+
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@corelib_filedlgg.o: $(srcdir)/src/generic/filedlgg.cpp $(CORELIB_ODEP)
+@COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(CORELIB_CXXFLAGS) $(srcdir)/src/generic/filedlgg.cpp
 
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@corelib_dirdlgg.o: $(srcdir)/src/generic/dirdlgg.cpp $(CORELIB_ODEP)
 @COND_TOOLKIT_GTK_TOOLKIT_VERSION_2_USE_GUI_1_WXUNIV_0@	$(CXXC) -c -o $@ $(CORELIB_CXXFLAGS) $(srcdir)/src/generic/dirdlgg.cpp

@@ -168,27 +168,35 @@ bool wxGTKSetWindowShape(GtkWidget* widget, const cairo_region_t* region)
             cairo_region_destroy(static_cast<cairo_region_t*>(data));
         });
 
-    GtkStyleContext* const style = gtk_widget_get_style_context(widget);
-    GtkCssProvider* const oldProvider = static_cast<GtkCssProvider*>(
-        g_object_get_data(G_OBJECT(widget), "wx-window-shape-css"));
+    // GTK4 has no per-widget style providers -- a provider belongs to the
+    // display -- so the rule is installed once, for everyone, and carrying it
+    // is a CSS class that only shaped windows wear. That is the shape GTK4
+    // asks for, and it means there is one provider however many shaped
+    // windows an application has, instead of one each.
+    static const char* const shapedClass = "wx-shaped-window";
 
-    if ( region && !oldProvider )
+    if ( region )
     {
-        GtkCssProvider* const provider = gtk_css_provider_new();
-        gtk_css_provider_load_from_data(
-            provider,
-            "window { background-color: rgba(0, 0, 0, 0); }", -1);
-        gtk_style_context_add_provider(style, GTK_STYLE_PROVIDER(provider),
-                                       GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-        g_object_set_data_full(G_OBJECT(widget), "wx-window-shape-css",
-                               provider, g_object_unref);
+        static bool s_ruleInstalled = false;
+        if ( !s_ruleInstalled )
+        {
+            GtkCssProvider* const provider = gtk_css_provider_new();
+            gtk_css_provider_load_from_data(
+                provider,
+                "window.wx-shaped-window { background-color: rgba(0,0,0,0); }",
+                -1);
+            gtk_style_context_add_provider_for_display(
+                gtk_widget_get_display(widget), GTK_STYLE_PROVIDER(provider),
+                GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+            g_object_unref(provider);   // the display keeps its own reference
+            s_ruleInstalled = true;
+        }
+
+        gtk_widget_add_css_class(widget, shapedClass);
     }
-    else if ( !region && oldProvider )
+    else
     {
-        gtk_style_context_remove_provider(style,
-                                          GTK_STYLE_PROVIDER(oldProvider));
-        g_object_set_data_full(G_OBJECT(widget), "wx-window-shape-css",
-                               nullptr, nullptr);
+        gtk_widget_remove_css_class(widget, shapedClass);
     }
 
     GdkSurface* const surface = wx_gtk_widget_get_surface(widget);

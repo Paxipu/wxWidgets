@@ -318,29 +318,157 @@ static void test_scratch_hierarchy_lifecycle(void)
  * with theme-defined colour names. Those names are an Adwaita convention
  * rather than a guarantee, so this is SOFT: a theme legitimately need not
  * define them, and the port falls back when it doesn't. */
+/* wxGTKLookupThemeColour() reads a theme's named colours through CSS, because
+ * GTK4 has no call that does it: it sets "color" to the name on a widget of
+ * its own and reads back what GTK computed. Two properties of GTK make that
+ * work, and neither is documented, so both are pinned here. See
+ * docs/gtk/probes/gtk4-theme-colour-probe.c. */
+
+#define WX_COLOUR_PROBE_CLASS "wx-colour-probe"
+
+static void probe_colour(const char* css, GdkRGBA* out)
+{
+    GtkCssProvider* p = gtk_css_provider_new();
+    gtk_css_provider_load_from_data(p, css, -1);
+    gtk_style_context_add_provider_for_display(
+        gdk_display_get_default(), GTK_STYLE_PROVIDER(p),
+        GTK_STYLE_PROVIDER_PRIORITY_USER);
+
+    /* After the provider, deliberately: see the invariant below. */
+    GtkWidget* w = gtk_label_new("");
+    g_object_ref_sink(w);
+    gtk_widget_add_css_class(w, WX_COLOUR_PROBE_CLASS);
+    gtk_widget_get_color(w, out);
+    g_object_unref(w);
+
+    gtk_style_context_remove_provider_for_display(gdk_display_get_default(),
+                                                  GTK_STYLE_PROVIDER(p));
+    g_object_unref(p);
+}
+
+static gboolean probe_lookup(const char* name, GdkRGBA* out)
+{
+    static const struct { const char* before; const char* after; } expr[] =
+    {
+        { "",     ""                    },
+        { "mix(", ", rgb(0,255,0), 0.5)" },
+        { "mix(", ", rgb(255,0,0), 0.5)" }
+    };
+
+    GdkRGBA answer[G_N_ELEMENTS(expr)];
+    for (guint i = 0; i < G_N_ELEMENTS(expr); i++)
+    {
+        char* css = g_strdup_printf("." WX_COLOUR_PROBE_CLASS
+                                    " { color: %s@%s%s; }",
+                                    expr[i].before, name, expr[i].after);
+        probe_colour(css, &answer[i]);
+        g_free(css);
+    }
+
+    for (guint i = 1; i < G_N_ELEMENTS(answer); i++)
+    {
+        if (!gdk_rgba_equal(&answer[0], &answer[i]))
+        {
+            *out = answer[0];
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
 static void test_theme_colour_names(void)
 {
     printf("theme colour names used by the Bg()/Border() approximation\n");
 
-    GtkWidget* w = gtk_button_new();
-    g_object_ref_sink(w);
-    GtkStyleContext* sc = gtk_widget_get_style_context(w);
-    GdkRGBA c;
+    /* A widget that is never shown has its style computed once, on demand:
+     * installing a provider afterwards does not invalidate it. This is the
+     * same GTK behaviour as issue #245, where a wxStaticText measured by
+     * SetFont() while hidden keeps the style that measurement computed and
+     * never takes the colour set after it.
+     *
+     * The probe relies on it by creating its widget last -- if GTK started
+     * invalidating, reusing a widget would still be wrong, so this is only
+     * reported. What would break the probe is the opposite: a fresh widget
+     * not seeing the provider, which is the second half of the check. */
+    {
+        GtkWidget* w = gtk_label_new("");
+        g_object_ref_sink(w);
+        gtk_widget_add_css_class(w, WX_COLOUR_PROBE_CLASS);
 
-    soft(gtk_style_context_lookup_color(sc, "theme_bg_color", &c),
-         "theme defines 'theme_bg_color'",
-         "Bg() falls back; window/button backgrounds may be off");
-    soft(gtk_style_context_lookup_color(sc, "theme_base_color", &c),
-         "theme defines 'theme_base_color'",
-         "Bg() falls back for list/text backgrounds");
-    soft(gtk_style_context_lookup_color(sc, "theme_selected_bg_color", &c),
-         "theme defines 'theme_selected_bg_color'",
-         "Bg() falls back for selection backgrounds");
-    soft(gtk_style_context_lookup_color(sc, "borders", &c),
-         "theme defines 'borders'",
-         "Border() falls back; border colours may be off");
+        GdkRGBA before, after, fresh;
+        gtk_widget_get_color(w, &before);
 
-    g_object_unref(w);
+        GtkCssProvider* p = gtk_css_provider_new();
+        gtk_css_provider_load_from_data(
+            p, "." WX_COLOUR_PROBE_CLASS " { color: rgb(1,2,3); }", -1);
+        gtk_style_context_add_provider_for_display(
+            gdk_display_get_default(), GTK_STYLE_PROVIDER(p),
+            GTK_STYLE_PROVIDER_PRIORITY_USER);
+        gtk_widget_get_color(w, &after);
+        gtk_style_context_remove_provider_for_display(
+            gdk_display_get_default(), GTK_STYLE_PROVIDER(p));
+        g_object_unref(p);
+        g_object_unref(w);
+
+        probe_colour("." WX_COLOUR_PROBE_CLASS " { color: rgb(1,2,3); }",
+                     &fresh);
+
+        soft(gdk_rgba_equal(&before, &after),
+             "an off-screen widget's style survives a provider being added",
+             "GTK now invalidates these; the probe still works, but reusing "
+             "a widget would no longer be silently wrong");
+
+        const GdkRGBA wanted = { 1/255.0, 2/255.0, 3/255.0, 1.0 };
+        check(gdk_rgba_equal(&fresh, &wanted),
+              "a widget created after a provider is styled by it",
+              "wxGTKLookupThemeColour() would read every colour as the "
+              "unstyled default");
+    }
+
+    /* An undefined name is substituted silently rather than reported, so the
+     * probe tells the two apart by asking through several expressions: a name
+     * that resolves answers differently through each, one that does not
+     * answers the same. */
+    static const char* const defined[] =
+    {
+        "theme_fg_color", "theme_bg_color", "theme_base_color",
+        "theme_selected_bg_color", "borders"
+    };
+
+    for (guint i = 0; i < G_N_ELEMENTS(defined); i++)
+    {
+        GdkRGBA css_answer, control;
+        const gboolean found = probe_lookup(defined[i], &css_answer);
+
+        GtkWidget* w = gtk_button_new();
+        g_object_ref_sink(w);
+        G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+        const gboolean known = gtk_style_context_lookup_color(
+            gtk_widget_get_style_context(w), defined[i], &control);
+        G_GNUC_END_IGNORE_DEPRECATIONS
+        g_object_unref(w);
+
+        char* what = g_strdup_printf("theme defines '%s'", defined[i]);
+        soft(found, what, "Bg()/Border() falls back for it");
+        g_free(what);
+
+        /* Whether the theme has the name is the theme's business; that both
+         * ways of asking give the same answer is not. */
+        what = g_strdup_printf("CSS and lookup_color() agree about '%s'",
+                               defined[i]);
+        check(found == known &&
+                  (!found || gdk_rgba_equal(&css_answer, &control)),
+              what,
+              "the CSS probe no longer reproduces the deprecated call");
+        g_free(what);
+    }
+
+    GdkRGBA unused;
+    check(!probe_lookup("wx_no_such_colour", &unused),
+          "a name no theme defines is reported as missing",
+          "callers with a fallback would silently take the substituted "
+          "colour instead");
 }
 
 #ifdef HAVE_XTEST

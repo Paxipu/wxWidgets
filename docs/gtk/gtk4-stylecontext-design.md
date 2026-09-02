@@ -53,7 +53,7 @@ Every mechanism in that paragraph is gone:
 | `gtk_style_context_get()` (varargs property query) | **removed** |
 | `gtk_style_context_get_color()` | survives (deprecated in 4.10) |
 | `gtk_style_context_get_border/padding/margin()` | survive, minus the `GtkStateFlags` parameter |
-| `gtk_style_context_lookup_color()` | survives |
+| `gtk_style_context_lookup_color()` | survives, deprecated in 4.10 with no replacement — asked in CSS instead, see §5 |
 | `gtk_style_context_set_state()` | survives |
 
 Two consequences, and they are of very different severity:
@@ -196,11 +196,37 @@ in debug builds when a descent misses, so these stay visible.
 colour does the theme paint behind this node". GTK4 backgrounds are
 painted through `render_background()` and may legitimately be a gradient
 or an image, not a flat colour, which is *why* the flat-colour query was
-removed rather than merely renamed. The available approximation is
-`gtk_style_context_lookup_color()` with the names Adwaita-derived themes
-conventionally define — probes confirm `theme_bg_color`,
-`theme_base_color` and `borders` all resolve — but this is a convention,
-not a guarantee, and a theme that omits them will fall back. This is the
+removed rather than merely renamed. The available approximation is the
+theme's named colours, with the names Adwaita-derived themes conventionally
+define -- probes confirm `theme_bg_color`, `theme_base_color` and `borders`
+all resolve -- but this is a convention, not a guarantee, and a theme that
+omits them will fall back.
+
+Reading those names is itself a problem, because
+`gtk_style_context_lookup_color()` is deprecated with nothing to replace
+it. CSS still resolves them, so `wxGTKLookupThemeColour()` asks in CSS: it
+installs a provider setting `color` to the name and reads the result back
+with `gtk_widget_get_color()`. Two undocumented details of GTK make that
+work, and both are pinned in `build/tools/gtk4-invariants.c`:
+
+* An off-screen widget's style is computed once, on demand, and adding a
+  provider afterwards does not invalidate it. So each probe creates its
+  widget *after* its provider; reusing one answers with whatever cascade
+  was in force the first time it was read.
+* An undefined name is substituted silently -- no `parsing-error` signal,
+  and the substitute is an ordinary colour -- so one answer cannot say
+  whether the name exists. Several can: the substitute does not depend on
+  the expression the name appeared in, while a colour that resolves does,
+  so asking through `@name` and through two different `mix()`es separates
+  the cases. Two mixes rather than one because a single one collapses for
+  the theme colour that happens to equal what it is mixed with, and
+  Adwaita's `theme_base_color` -- pure white -- is close enough to that to
+  be worth guarding against.
+
+Measured against the deprecated call in
+`docs/gtk/probes/gtk4-theme-colour-probe.c`: same colour for every name the
+theme defines, same "no" for one it does not, and all 35
+`wxSystemSettings::GetColour()` entries unchanged. This is the
 same wall already hit and documented in `control.cpp`
 (`GetClassDefaultAttributes()`, status update 10); the two should use one
 shared helper rather than two independent approximations.

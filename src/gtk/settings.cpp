@@ -26,6 +26,8 @@
 #include "wx/gtk/private/gtk3-compat.h"
 #include "wx/gtk/private/win_gtk.h"
 #include "wx/gtk/private/stylecontext.h"
+#include "wx/gtk/private/object.h"
+#include "wx/gtk/private/string.h"
 #include "wx/gtk/private/value.h"
 
 #ifdef __WXGTK3__
@@ -547,17 +549,89 @@ private:
 // the probe programs establishing that this actually reproduces the theme's
 // values.
 
+#ifdef __WXGTK4__
+
+// The class the colour probes below are selected by. Only ever on a widget of
+// their own, so it cannot collide with anything a theme styles.
+#define wxGTK_COLOUR_PROBE_CLASS "wx-colour-probe"
+
+// Compute one "color:" declaration the way GTK would, and hand back what it
+// came to.
+static void
+wxGTKComputeProbeColour(GdkDisplay* display, const char* css, GdkRGBA& rgba)
+{
+    wxGtkObject<GtkCssProvider> provider(gtk_css_provider_new());
+    gtk_css_provider_load_from_data(provider, css, -1);
+    gtk_style_context_add_provider_for_display(
+        display, GTK_STYLE_PROVIDER(provider.get()),
+        GTK_STYLE_PROVIDER_PRIORITY_USER);
+
+    // Create the widget after the provider, and throw it away with it: a
+    // widget that is never shown has its style computed once, on demand, and
+    // a provider added afterwards does not invalidate it.
+    GtkWidget* const probe = gtk_label_new("");
+    g_object_ref_sink(probe);
+    gtk_widget_add_css_class(probe, wxGTK_COLOUR_PROBE_CLASS);
+    gtk_widget_get_color(probe, &rgba);
+    g_object_unref(probe);
+
+    gtk_style_context_remove_provider_for_display(
+        display, GTK_STYLE_PROVIDER(provider.get()));
+}
+
+#endif // __WXGTK4__
+
 bool wxGTKLookupThemeColour(GtkWidget* widget, const char* name, wxColour& color)
 {
     if (!widget)
         return false;
 
-    // The one deprecated call left in this file that has no replacement at
-    // all: GTK4 offers no way to read a theme's named colours. It is taken
-    // through this one function on purpose, so that when GTK removes it there
-    // is a single place to decide what to do instead. Everything around it --
-    // the foreground colour, the padding and the border -- has a supported
-    // query and uses it.
+#ifdef __WXGTK4__
+    // GTK4 has no call that reads a theme's named colours, so the question
+    // goes to CSS instead: set a colour to the name and read back what GTK
+    // computed for it. The widget is only here to say which display to ask --
+    // a name belongs to that display's cascade, not to any one widget.
+    //
+    // An undefined name makes the declaration invalid, and GTK then quietly
+    // substitutes a colour of its own rather than reporting anything, so one
+    // answer cannot say whether the name exists. Several answers can: a name
+    // that resolves comes back changed by each expression it is put through,
+    // one that does not comes back as the same substitute every time. Two
+    // mixes rather than one because a single one collapses for the theme
+    // colour that happens to equal what it is mixed with, and no colour can
+    // equal both of these.
+    static const struct { const char* before; const char* after; } expr[] =
+    {
+        { "",     ""                     },
+        { "mix(", ", rgb(0,255,0), 0.5)"  },
+        { "mix(", ", rgb(255,0,0), 0.5)"  }
+    };
+
+    GdkDisplay* const display = gtk_widget_get_display(widget);
+    if (display == nullptr)
+        return false;
+
+    GdkRGBA answer[WXSIZEOF(expr)];
+    for (size_t i = 0; i < WXSIZEOF(expr); i++)
+    {
+        wxGtkString css(g_strdup_printf(
+            "." wxGTK_COLOUR_PROBE_CLASS " { color: %s@%s%s; }",
+            expr[i].before, name, expr[i].after));
+
+        wxGTKComputeProbeColour(display, css.c_str(), answer[i]);
+    }
+
+    for (size_t i = 1; i < WXSIZEOF(answer); i++)
+    {
+        if (!gdk_rgba_equal(&answer[0], &answer[i]))
+        {
+            color = wxColour(answer[0]);
+            return true;
+        }
+    }
+
+    return false;
+#else
     GdkRGBA rgba;
     if (!gtk_style_context_lookup_color(gtk_widget_get_style_context(widget),
                                         name, &rgba))
@@ -565,6 +639,7 @@ bool wxGTKLookupThemeColour(GtkWidget* widget, const char* name, wxColour& color
 
     color = wxColour(rgba);
     return true;
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 // The CSS classes wxGTKGetStyleMetrics() puts on a widget to take one side of
@@ -700,6 +775,26 @@ void wxGtkStyleContext::PopulateForStyleQuery(GtkWidget* widget)
         gtk_notebook_append_page(GTK_NOTEBOOK(widget),
                                  gtk_label_new(""), gtk_label_new(""));
     }
+}
+
+// A widget that exists to carry a CSS node and nothing else.
+//
+// A style query resolves against a node and its classes, so that is all it
+// needs.  Instantiating the real widget also builds whatever that widget owns
+// -- for a GtkTextView an input method context, a buffer and a set of
+// controllers -- none of which a query ever reads.
+#define WX_TYPE_STYLE_NODE (wx_style_node_get_type())
+G_DECLARE_FINAL_TYPE(wxStyleNode, wx_style_node, WX, STYLE_NODE, GtkWidget)
+struct _wxStyleNode { GtkWidget parent_instance; };
+G_DEFINE_TYPE(wxStyleNode, wx_style_node, GTK_TYPE_WIDGET)
+
+static void wx_style_node_init(wxStyleNode*)
+{
+}
+
+static void wx_style_node_class_init(wxStyleNodeClass* klass)
+{
+    gtk_widget_class_set_css_name(GTK_WIDGET_CLASS(klass), "textview");
 }
 
 void wxGtkStyleContext::AddWidget(GType type)
@@ -966,7 +1061,11 @@ wxGtkStyleContext& wxGtkStyleContext::AddMenuItem()
 
 wxGtkStyleContext& wxGtkStyleContext::AddTextview(const char* child1, const char* child2)
 {
+#ifdef __WXGTK4__
+    Add(WX_TYPE_STYLE_NODE, "textview", "view", nullptr);
+#else
     Add(GTK_TYPE_TEXT_VIEW, "textview", "view", nullptr);
+#endif
     if (child1 && gtk_check_version(3,20,0) == nullptr)
     {
         Add(child1);

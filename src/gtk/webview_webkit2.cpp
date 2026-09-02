@@ -1910,17 +1910,73 @@ bool wxWebViewWebKit::IsEditable() const
 #endif
 }
 
+namespace
+{
+
+// Data shared between wxCallWebExtension() and its completion callback.
+struct wxWebExtensionCall
+{
+    GVariant* result = nullptr;
+    bool done = false;
+};
+
+extern "C" {
+
+static void
+wxgtk_web_extension_call_done(GObject* proxy, GAsyncResult* res, gpointer data)
+{
+    wxWebExtensionCall* const call = static_cast<wxWebExtensionCall*>(data);
+
+    call->result = g_dbus_proxy_call_finish(G_DBUS_PROXY(proxy), res, nullptr);
+    call->done = true;
+}
+
+} // extern "C"
+
+// Call a method of the web process extension for the given page and return its
+// reply, or an empty variant if the extension didn't answer.
+//
+// The call is made asynchronously and the main context iterated until the
+// reply arrives, rather than using g_dbus_proxy_call_sync(): the web process
+// can be waiting for an answer from this one, and it cannot service our
+// request before it gets that answer.  g_dbus_proxy_call_sync() iterates a
+// private context holding only the D-Bus socket, so this process would not
+// answer, and both sides would wait for each other until the call times out.
+//
+// Note that this means the calls using this function yield, i.e. they can run
+// event handlers before returning, as any other nested event loop does.
+wxGtkVariant
+wxCallWebExtension(GDBusProxy* extension, guint64 pageId, const char* method)
+{
+    wxWebExtensionCall call;
+
+    g_dbus_proxy_call(extension,
+                      method,
+                      g_variant_new("(t)", pageId),
+                      G_DBUS_CALL_FLAGS_NONE, -1,
+                      nullptr,
+                      wxgtk_web_extension_call_done,
+                      &call);
+
+    // This is the context g_dbus_proxy_call() will invoke the callback in.
+    GMainContext* const context = g_main_context_get_thread_default();
+
+    while ( !call.done )
+        g_main_context_iteration(context, TRUE);
+
+    return wxGtkVariant(call.result);
+}
+
+} // anonymous namespace
+
 void wxWebViewWebKit::DeleteSelection()
 {
     GDBusProxy *extension = GetExtensionProxy();
     if (extension)
     {
         guint64 page_id = webkit_web_view_get_page_id(m_web_view);
-        wxGtkVariant retval(g_dbus_proxy_call_sync(extension,
-                                                  "DeleteSelection",
-                                                  g_variant_new("(t)", page_id),
-                                                  G_DBUS_CALL_FLAGS_NONE, -1,
-                                                  nullptr, nullptr));
+        wxGtkVariant retval = wxCallWebExtension(extension, page_id,
+                                                 "DeleteSelection");
     }
 }
 
@@ -1930,11 +1986,8 @@ bool wxWebViewWebKit::HasSelection() const
     if (extension)
     {
         guint64 page_id = webkit_web_view_get_page_id(m_web_view);
-        wxGtkVariant retval(g_dbus_proxy_call_sync(extension,
-                                                  "HasSelection",
-                                                  g_variant_new("(t)", page_id),
-                                                  G_DBUS_CALL_FLAGS_NONE, -1,
-                                                  nullptr, nullptr));
+        wxGtkVariant retval = wxCallWebExtension(extension, page_id,
+                                                 "HasSelection");
         if (retval)
         {
             gboolean has_selection = FALSE;
@@ -1958,11 +2011,8 @@ wxString wxWebViewWebKit::GetSelectedText() const
     if (extension)
     {
         guint64 page_id = webkit_web_view_get_page_id(m_web_view);
-        wxGtkVariant retval(g_dbus_proxy_call_sync(extension,
-                                                  "GetSelectedText",
-                                                  g_variant_new("(t)", page_id),
-                                                  G_DBUS_CALL_FLAGS_NONE, -1,
-                                                  nullptr, nullptr));
+        wxGtkVariant retval = wxCallWebExtension(extension, page_id,
+                                                 "GetSelectedText");
         if (retval)
         {
             char *text;
@@ -1979,11 +2029,8 @@ wxString wxWebViewWebKit::GetSelectedSource() const
     if (extension)
     {
         guint64 page_id = webkit_web_view_get_page_id(m_web_view);
-        wxGtkVariant retval(g_dbus_proxy_call_sync(extension,
-                                                  "GetSelectedSource",
-                                                  g_variant_new("(t)", page_id),
-                                                  G_DBUS_CALL_FLAGS_NONE, -1,
-                                                  nullptr, nullptr));
+        wxGtkVariant retval = wxCallWebExtension(extension, page_id,
+                                                 "GetSelectedSource");
         if (retval)
         {
             char *source;
@@ -2000,11 +2047,8 @@ void wxWebViewWebKit::ClearSelection()
     if (extension)
     {
         guint64 page_id = webkit_web_view_get_page_id(m_web_view);
-        wxGtkVariant retval(g_dbus_proxy_call_sync(extension,
-                                                  "ClearSelection",
-                                                  g_variant_new("(t)", page_id),
-                                                  G_DBUS_CALL_FLAGS_NONE, -1,
-                                                  nullptr, nullptr));
+        wxGtkVariant retval = wxCallWebExtension(extension, page_id,
+                                                 "ClearSelection");
     }
 }
 
@@ -2014,11 +2058,8 @@ wxString wxWebViewWebKit::GetPageText() const
     if (extension)
     {
         guint64 page_id = webkit_web_view_get_page_id(m_web_view);
-        wxGtkVariant retval(g_dbus_proxy_call_sync(extension,
-                                                  "GetPageText",
-                                                  g_variant_new("(t)", page_id),
-                                                  G_DBUS_CALL_FLAGS_NONE, -1,
-                                                  nullptr, nullptr));
+        wxGtkVariant retval = wxCallWebExtension(extension, page_id,
+                                                 "GetPageText");
         if (retval)
         {
             char *text;

@@ -14,6 +14,8 @@
 // and "catch.hpp"
 #include "testprec.h"
 
+#include "gtklog.h"
+
 // See PCH support documentation in 3rdparty/catch/docs/ci-and-misc.md
 #undef TWOBLUECUBES_SINGLE_INCLUDE_CATCH_HPP_INCLUDED
 #define CATCH_CONFIG_IMPL_ONLY
@@ -620,6 +622,14 @@ int wxTestX11ErrorHandler(Display*, XErrorEvent*)
 
 #endif // GDK_WINDOWING_X11
 
+// See tests/gtklog.h.
+static unsigned gs_gtkLogCount = 0;
+
+unsigned wxTestGetGTKLogCount()
+{
+    return gs_gtkLogCount;
+}
+
 extern "C"
 void
 wxTestGLogHandler(const gchar* domain,
@@ -646,6 +656,8 @@ wxTestGLogHandler(const gchar* domain,
             return;
         }
     }
+
+    gs_gtkLogCount++;
 
     fprintf(stderr, "\n*** GTK log message while running %s(): ",
             wxGetCurrentTestName().c_str());

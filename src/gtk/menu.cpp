@@ -386,15 +386,26 @@ void wxMenuBar::GTKRebuildModel()
         }
         else
         {
-            // A GMenuModel sub menu item has no action of its own, so there is
-            // nothing to disable: show a plain item with the same label bound
-            // to the menu's never-enabled action instead.
-            GMenuItem* const item = g_menu_item_new(title.utf8_str(), nullptr);
-            const wxString action = menu->GTKGetActionPrefix() + "." +
-                                        wxGTK_DISABLED_ACTION;
-            g_menu_item_set_detailed_action(item, action.utf8_str());
-            g_menu_append_item(m_barModel, item);
-            g_object_unref(item);
+            // The label stays a submenu, with nothing in it.
+            //
+            // A GtkPopoverMenuBar renders only submenus at the top level. An
+            // item bound to a never-enabled action, which is the obvious way
+            // to show a disabled title, is refused with "Don't know how to
+            // handle this item" -- and refusing it costs more than the grey:
+            // the label is dropped from the bar altogether, and the menus
+            // after it come out in the wrong order, because the tracker's
+            // bookkeeping does not survive an item it would not take. See
+            // #253.
+            //
+            // So this is a trade rather than a fix for everything: the title
+            // is in its place and opens on to nothing, where GTK+ 3 greys it
+            // out and does not open. A submenu item has no action and no
+            // disabled state under GTK4, so looking disabled is not something
+            // the menu bar can be asked for.
+            GMenu* const empty = g_menu_new();
+            g_menu_append_submenu(m_barModel, title.utf8_str(),
+                                  G_MENU_MODEL(empty));
+            g_object_unref(empty);
         }
     }
 

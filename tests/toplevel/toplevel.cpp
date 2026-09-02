@@ -24,9 +24,11 @@
 
 #if wxUSE_MDI
     #include "wx/mdi.h"
+
 #endif // wxUSE_MDI
 
 #include "testableframe.h"
+#include "gtklog.h"
 #include "waitfor.h"
 
 class DestroyOnScopeExit
@@ -183,5 +185,42 @@ TEST_CASE("wxMDIParentFrame::ShowFullScreen", "[tlw][mdi][fullscreen]")
     CHECK( bar->IsShown() );
     CHECK( bar->GetFrame() == frame );
 }
+
+#ifdef __WXGTK4__
+
+// Destroying MDI children has to take their pages out of the notebook.
+//
+// A child frame is an ordinary child of the client window as far as wx is
+// concerned, so it goes through DestroyChildren() and never through the
+// notebook's own page removal. GTK+ 3 did not mind. GTK4's notebook keeps its
+// pages in a GtkStack, and a page whose child was unparented behind its back
+// leaves that list stale -- which the notebook's dispose trips over, saying so
+// once per page and carrying on.
+//
+// The check is on GTK's log because that complaint is the only thing said
+// about it: wx reports the same either way, and nothing crashes. See #255.
+TEST_CASE("wxMDIChildFrame::DestroyRemovesThePage", "[mdi][gtk]")
+{
+    const unsigned before = wxTestGetGTKLogCount();
+
+    wxMDIParentFrame* const parent =
+        new wxMDIParentFrame(nullptr, wxID_ANY, "mdi",
+                             wxDefaultPosition, wxSize(400, 300));
+
+    for ( int i = 0; i < 3; ++i )
+        new wxMDIChildFrame(parent, wxID_ANY, wxString::Format("Child %d", i));
+
+    parent->Show();
+    YieldForAWhile();
+
+    parent->Destroy();
+
+    // Destroy() is deferred, so the teardown this is about happens in here.
+    YieldForAWhile();
+
+    CHECK( wxTestGetGTKLogCount() == before );
+}
+
+#endif // __WXGTK4__
 
 #endif // wxUSE_MDI

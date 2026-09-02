@@ -214,12 +214,20 @@ static GtkWidget* ToolTipWidget()
 static wxColour gs_systemColorCache[wxSYS_COLOUR_MAX + 1];
 
 extern "C" {
+#ifdef __WXGTK4__
+// Defined with the rest of the named colour reading, further down.
+void wxGTKForgetThemeColours();
+#endif
+
 static void notify_gtk_theme_name(GObject*, GParamSpec*, void*)
 {
     gs_fontSystem.UnRef();
     gs_scrollWidth = 0;
     for (int i = wxSYS_COLOUR_MAX; i--;)
         gs_systemColorCache[i].UnRef();
+#ifdef __WXGTK4__
+    wxGTKForgetThemeColours();
+#endif
 }
 
 static void notify_gtk_font_name(GObject*, GParamSpec*, void*)
@@ -547,29 +555,180 @@ private:
 // the probe programs establishing that this actually reproduces the theme's
 // values.
 
-bool wxGTKLookupThemeColour(GtkWidget* widget, const char* name, wxColour& color)
+namespace
 {
-    if (!widget)
-        return false;
 
-    // Deprecated since 4.10, and kept deliberately. GTK4 has no API for a
-    // theme's named colours. CSS does resolve them, but reading them that
-    // way means installing a provider on the display per query, and this
-    // runs from Bg() and Border() while GTK is laying out or painting some
-    // other widget: doing it crashed the GUI suite inside
-    // gtk_widget_snapshot_child(). See docs/gtk/gtk4-stylecontext-design.md.
-    //
-    // It is taken through this one function on purpose, so that when GTK
-    // removes it there is a single place to decide what to do instead.
-    // Everything around it -- the foreground colour, the padding and the
-    // border -- has a supported query and uses it.
-    GdkRGBA rgba;
-    if (!gtk_style_context_lookup_color(gtk_widget_get_style_context(widget),
-                                        name, &rgba))
-        return false;
+// A theme's named colours, read through CSS on a display of our own.
+//
+// Declared before it is defined because the theme change handler is above.
+//
+// gtk_style_context_lookup_color() is deprecated with nothing to replace it,
+// and CSS is the only thing left that resolves an "@name". Putting the
+// question to CSS means installing a provider, and installing one on the
+// display the application is using invalidates every widget on it. Bg() and
+// Border() are called from inside GTK's own measuring, layout and painting,
+// and a display-wide invalidation from there is not something GTK survives:
+// doing it per query crashed the GUI suite inside gtk_widget_snapshot_child().
+//
+// So the question is asked on a second display, opened for this and nothing
+// else. The application has nothing on it, so nothing of the application's is
+// invalidated, whenever the question is asked. A named colour belongs to the
+// theme rather than to any widget, so one answer serves every caller, and the
+// answers are kept until the theme changes.
+//
+// Three properties of GTK this rests on, each measured in
+// docs/gtk/probes/gtk4-theme-colour-probe.c:
+//
+//  * a widget that is never shown has its style computed once, on demand, and
+//    a provider added afterwards does not invalidate it -- so the probe
+//    widgets are made after their provider and never reused across one;
+//  * an undefined name makes the declaration invalid and GTK substitutes a
+//    colour of its own, silently, so a single answer cannot say whether the
+//    name is defined;
+//  * that substitute does not depend on the expression the name appeared in,
+//    while a name that resolves does -- so asking through two different mixes
+//    tells the two apart.
+class wxGTKThemeColour
+{
+public:
+    // The colour this theme gives the name, if it gives it one.
+    static bool Get(const char* name, wxColour& color)
+    {
+        Cache& cache = GetCache();
 
-    color = wxColour(rgba);
-    return true;
+        const wxString key = wxString::FromUTF8(name);
+        for ( Cache::const_iterator i = cache.begin(); i != cache.end(); ++i )
+        {
+            if ( i->name == key )
+            {
+                if ( !i->colour.IsOk() )
+                    return false;
+
+                color = i->colour;
+                return true;
+            }
+        }
+
+        const Entry entry = { key, Resolve(name) };
+        cache.push_back(entry);
+
+        if ( !entry.colour.IsOk() )
+            return false;
+
+        color = entry.colour;
+        return true;
+    }
+
+    // The theme has changed, so nothing that was asked of the old one holds.
+    static void Forget()
+    {
+        GetCache().clear();
+    }
+
+private:
+    // An invalid colour means "this theme does not define that name", which is
+    // worth keeping too: the fallback that follows a miss is asked for as
+    // often as the hits. A handful of names is all the port ever asks about,
+    // so a list searched end to end is the right size of container for it.
+    struct Entry
+    {
+        wxString name;
+        wxColour colour;
+    };
+
+    typedef wxVector<Entry> Cache;
+
+    static Cache& GetCache()
+    {
+        static Cache s_cache;
+        return s_cache;
+    }
+
+    static GdkDisplay* GetDisplay()
+    {
+        static bool s_tried = false;
+        static GdkDisplay* s_display = nullptr;
+
+        if ( !s_tried )
+        {
+            s_tried = true;
+
+            // A connection of our own. If the display server will not give us
+            // a second one, the application's own display has to do: a
+            // provider is then installed and taken off again once per name,
+            // which is the thing this class exists to avoid, but wrong colours
+            // everywhere is worse than a risk taken four times.
+            s_display = gdk_display_open(nullptr);
+        }
+
+        return s_display ? s_display : gdk_display_get_default();
+    }
+
+    static wxColour Resolve(const char* name)
+    {
+        GdkDisplay* const display = GetDisplay();
+        if ( !display )
+            return wxColour();
+
+        // Three ways of asking: the colour itself, and two mixes that answer
+        // the same as each other only when the name resolves to nothing.
+        wxString css;
+        css << ".wx-tc-value{color:@" << name << ";}"
+            << ".wx-tc-red{color:mix(@" << name << ",#ff0000,0.5);}"
+            << ".wx-tc-green{color:mix(@" << name << ",#00ff00,0.5);}";
+
+        GtkCssProvider* const provider = gtk_css_provider_new();
+        gtk_css_provider_load_from_data(provider, css.utf8_str(), -1);
+
+        gtk_style_context_add_provider_for_display(
+            display, GTK_STYLE_PROVIDER(provider),
+            GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+
+        GtkWidget* const window = gtk_window_new();
+        gtk_window_set_display(GTK_WINDOW(window), display);
+
+        GtkWidget* const box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+        gtk_window_set_child(GTK_WINDOW(window), box);
+
+        GdkRGBA rgba[3];
+        static const char* const classes[] =
+            { "wx-tc-value", "wx-tc-red", "wx-tc-green" };
+
+        for ( unsigned n = 0; n < WXSIZEOF(classes); ++n )
+        {
+            GtkWidget* const label = gtk_label_new("");
+            gtk_widget_add_css_class(label, classes[n]);
+            gtk_box_append(GTK_BOX(box), label);
+
+            gtk_widget_get_color(label, &rgba[n]);
+        }
+
+        const bool defined = !gdk_rgba_equal(&rgba[1], &rgba[2]);
+
+        gtk_window_destroy(GTK_WINDOW(window));
+        gtk_style_context_remove_provider_for_display(
+            display, GTK_STYLE_PROVIDER(provider));
+        g_object_unref(provider);
+
+        return defined ? wxColour(rgba[0]) : wxColour();
+    }
+};
+
+} // anonymous namespace
+
+void wxGTKForgetThemeColours()
+{
+    wxGTKThemeColour::Forget();
+}
+
+bool wxGTKLookupThemeColour(GtkWidget* WXUNUSED(widget),
+                            const char* name,
+                            wxColour& color)
+{
+    // The widget is not asked anything: a named colour is the theme's, and the
+    // same for every widget on the display. See wxGTKThemeColour above for how
+    // it is read now that gtk_style_context_lookup_color() is deprecated.
+    return wxGTKThemeColour::Get(name, color);
 }
 
 // The CSS classes wxGTKGetStyleMetrics() puts on a widget to take one side of

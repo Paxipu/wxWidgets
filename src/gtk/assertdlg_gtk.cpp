@@ -17,6 +17,10 @@
 #include "wx/translation.h"
 #include "wx/stockitem.h"
 
+#if wxUSE_FILEDLG
+    #include "wx/filedlg.h"
+#endif
+
 #include <stdio.h>
 
 /* ----------------------------------------------------------------------------
@@ -319,6 +323,41 @@ static void gtk_assert_dialog_expander_callback(GtkWidget*, GtkAssertDialog* dlg
 
 static void gtk_assert_dialog_save_backtrace_callback(GtkWidget*, GtkAssertDialog* dlg)
 {
+#if defined(__WXGTK4__) && wxUSE_FILEDLG
+    /* wx's own file dialog rather than GTK's.
+     *
+     * GtkFileChooserDialog is deprecated under GTK4, and the GtkFileDialog
+     * that replaces it does not appear at all on a machine whose portal
+     * answers and shows nothing -- measured in
+     * docs/gtk/probes/gtk4-filedialog-portal-hang.c, and the reason
+     * wxFileDialog is the generic one under GTK4 (#182). So this asks
+     * wxFileDialog, which opens either way, rather than choosing between two
+     * GTK dialogs that each fail somewhere.
+     *
+     * GTK+ 2 and GTK+ 3 keep the code below: the call is not deprecated
+     * there, and their wxFileDialog is that same GtkFileChooserDialog. */
+    const wxString filename =
+        wxFileSelector("Save assert info to file", wxEmptyString,
+                       wxEmptyString, wxEmptyString,
+                       wxFileSelectorDefaultWildcardStr,
+                       wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+
+    if ( !filename.empty() )
+    {
+        char* const msg = gtk_assert_dialog_get_message (dlg);
+        char* const backtrace = gtk_assert_dialog_get_backtrace (dlg);
+
+        FILE* const fp = fopen (filename.fn_str(), "w");
+        if (fp)
+        {
+            fprintf (fp, "ASSERT INFO:\n%s\n\nBACKTRACE:\n%s", msg, backtrace);
+            fclose (fp);
+        }
+
+        g_free (msg);
+        g_free (backtrace);
+    }
+#else /* !(__WXGTK4__ && wxUSE_FILEDLG) */
     GtkWidget *dialog;
 
     dialog = gtk_file_chooser_dialog_new ("Save assert info to file", GTK_WINDOW(dlg),
@@ -357,6 +396,7 @@ static void gtk_assert_dialog_save_backtrace_callback(GtkWidget*, GtkAssertDialo
 #else
     gtk_widget_destroy (dialog);
 #endif
+#endif /* __WXGTK4__ && wxUSE_FILEDLG */
 }
 
 static void gtk_assert_dialog_copy_callback(GtkWidget*, GtkAssertDialog* dlg)

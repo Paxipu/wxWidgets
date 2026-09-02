@@ -210,15 +210,32 @@ provider setting `color` to the name, then read the result with
 `docs/gtk/probes/gtk4-theme-colour-probe.c`, that reproduces every name the
 port asks for exactly, and reports a name no theme defines as missing.
 
-**It is not usable here, and the deprecated call stays.** `Bg()` and
+**Asking on the application's own display is not usable here.** `Bg()` and
 `Border()` are called while GTK is measuring, laying out or painting some
-other widget, and a probe has to install a provider on the display to ask
+other widget, and the probe has to install a provider on the display to ask
 its question. Doing that per query segfaulted the GUI suite inside
 `gtk_widget_snapshot_child()` after about a hundred cases, with the crash
 point moving between runs. Bisected to the commit that introduced it; every
 commit before it ran all 551 cases. A cache would reduce the number of
 those queries but not remove the first one, which still falls inside
 someone else's layout.
+
+**So the question is asked on a display of our own.** `gdk_display_open()`
+gives a second connection, the provider goes on that, and the probe widgets
+live there: the application has nothing on that display, so nothing of the
+application's is invalidated, whenever the question is asked. The answers
+are the theme's rather than any widget's, so they are the same for every
+caller and are kept until the theme changes -- `notify::gtk-theme-name`
+drops them. That is what `wxGTKLookupThemeColour()` does now, and the
+deprecated call is gone.
+
+Verified against the deprecated implementation: all 35
+`wxSystemSettings::GetColour()` values identical, and the GUI suite green
+three runs in a row where the per-query version died in one. If the display
+server will not give a second connection, the application's own display is
+used instead -- a handful of names, each installing and removing a provider
+once, which is the risk this design exists to avoid but is better than no
+theme colours at all.
 
 Two details of GTK the probe had to establish are worth keeping whatever is
 done here, and are pinned in `build/tools/gtk4-invariants.c`:

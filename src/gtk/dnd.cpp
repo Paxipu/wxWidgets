@@ -25,6 +25,7 @@
 #include "wx/scopeguard.h"
 
 #include "wx/gtk/private/wrapgtk.h"
+#include "wx/gtk/private/gtk3-compat.h"
 #include "wx/gtk/private/backend.h"
 
 //----------------------------------------------------------------------------
@@ -50,6 +51,9 @@ extern int       g_lastButtonNumber;
 // standard icons
 //----------------------------------------------------------------------------
 
+#ifndef __WXGTK4__
+// Only wxDropSource::Init() uses this, and that is compiled out under GTK4,
+// where the drag icon comes from GdkPaintable instead.
 /* Copyright (c) Julian Smart */
 static const char * page_xpm[] = {
 /* columns rows colors chars-per-pixel */
@@ -125,6 +129,7 @@ static const char * page_xpm[] = {
 "                                ",
 "                                "
 };
+#endif // !__WXGTK4__
 
 
 // ============================================================================
@@ -151,6 +156,8 @@ static wxDragResult ConvertFromGTK(long action)
 
     return wxDragNone;
 }
+
+#ifndef __WXGTK4__
 
 // ----------------------------------------------------------------------------
 // "drag_leave"
@@ -402,9 +409,681 @@ static void target_drag_data_received( GtkWidget *WXUNUSED(widget),
 }
 }
 
+#endif // !__WXGTK4__
+
 //----------------------------------------------------------------------------
 // wxDropTarget
 //----------------------------------------------------------------------------
+
+wxDropTarget::~wxDropTarget()
+{
+#ifdef __WXGTK4__
+    if ( m_dropController )
+    {
+        // The controller can outlive us while an asynchronous transfer holds
+        // a reference to it. Never leave its non-owning C++ pointer dangling.
+        g_object_set_data(G_OBJECT(m_dropController), "wx-drop-target", nullptr);
+        g_object_remove_weak_pointer(
+            G_OBJECT(m_dropController),
+            reinterpret_cast<gpointer*>(&m_dropController));
+    }
+#endif // __WXGTK4__
+}
+
+#ifdef __WXGTK4__
+
+// ============================================================================
+// GTK4: GtkDropTargetAsync and gdk_drag_begin()
+// ============================================================================
+//
+// GTK4 replaced the whole drag and drop API. gtk_drag_dest_set() and the
+// drag_motion/drag_drop/drag_data_received signals are gone, as are
+// GdkDragContext, GtkTargetList and GtkSelectionData. A drop target is an
+// event controller now, the drag itself is a GdkDrop on the receiving side and
+// a GdkDrag on the sending side, and the data has to be read asynchronously
+// rather than arriving attached to the drop.
+//
+// That asynchrony is the interesting part: the "drop" handler must start the
+// read and return before GTK can deliver its result. The stream is drained
+// with g_output_stream_splice_async(), and only then is the synchronous wx
+// OnData() callback invoked with the received bytes made available to
+// GetData().
+
+extern wxDataFormat::NativeFormat
+wxGTKGetAltWaylandFormat(wxDataFormat::NativeFormat format);
+
+// The counterpart of ConvertFromGTK() above. GTK3 never needed it because the
+// drag_motion handler answered with gdk_drag_status(); a GTK4 drop target
+// returns the action from the handler itself.
+static GdkDragAction ConvertToGTK(wxDragResult result)
+{
+    switch ( result )
+    {
+        case wxDragCopy:
+            return GDK_ACTION_COPY;
+
+        case wxDragMove:
+            return GDK_ACTION_MOVE;
+
+        case wxDragLink:
+            return GDK_ACTION_LINK;
+
+        case wxDragNone:
+        case wxDragCancel:
+        case wxDragError:
+            break;
+    }
+
+    return GdkDragAction(0);
+}
+
+namespace
+{
+
+// The drop target a controller belongs to.
+wxDropTarget* TargetFromController(GtkEventController* controller)
+{
+    return static_cast<wxDropTarget*>(
+        g_object_get_data(G_OBJECT(controller), "wx-drop-target"));
+}
+
+const char wxDropDataKey[] = "wx-drop-data";
+
+// Keep everything needed by the GDK read callbacks alive independently of
+// both the widget and its wxDropTarget. The controller's non-owning pointer is
+// cleared when the target is unregistered, so it is safe to check from the
+// completion callback even if application code destroyed the target while a
+// transfer was pending.
+struct PendingDrop
+{
+    PendingDrop(GtkDropTargetAsync* target, GdkDrop* drop,
+                const char* mime, int x, int y, wxDragResult suggested)
+        : controller(GTK_EVENT_CONTROLLER(g_object_ref(target))),
+          drop(GDK_DROP(g_object_ref(drop))),
+          mime(g_strdup(mime)),
+          x(x),
+          y(y),
+          suggested(suggested)
+    {
+        mimes[0] = this->mime;
+        mimes[1] = nullptr;
+    }
+
+    ~PendingDrop()
+    {
+        if ( out )
+            g_object_unref(out);
+
+        g_free(mime);
+        g_object_unref(controller);
+        g_object_unref(drop);
+    }
+
+    GtkEventController* const controller;
+    GdkDrop* const drop;
+    char* const mime;
+    const char* mimes[2];
+    const int x;
+    const int y;
+    const wxDragResult suggested;
+    GOutputStream* out = nullptr;
+};
+
+void CompletePendingDrop(PendingDrop* pending, GBytes* bytes)
+{
+    wxDragResult result = wxDragNone;
+    if ( bytes )
+    {
+        if ( wxDropTarget* const dt =
+                TargetFromController(pending->controller) )
+        {
+            // GBytes remains owned by this function for the entire OnData()
+            // call; GetData() only copies from it.
+            g_object_set_data(G_OBJECT(pending->drop), wxDropDataKey, bytes);
+            dt->GTKSetDrop(pending->drop);
+            result = dt->OnData(pending->x, pending->y, pending->suggested);
+
+            g_object_set_data(G_OBJECT(pending->drop), wxDropDataKey, nullptr);
+
+            // OnData() is application code and may destroy the target.
+            if ( TargetFromController(pending->controller) == dt )
+                dt->GTKSetDrop(nullptr);
+        }
+    }
+
+    gdk_drop_finish(pending->drop,
+                    result != wxDragNone
+                        ? ConvertToGTK(pending->suggested)
+                        : GdkDragAction(0));
+
+    if ( bytes )
+        g_bytes_unref(bytes);
+
+    delete pending;
+}
+
+extern "C" {
+
+void wx_drop_spliced(GObject* src, GAsyncResult* res, gpointer user_data)
+{
+    PendingDrop* const pending = static_cast<PendingDrop*>(user_data);
+
+    GError* error = nullptr;
+    GBytes* bytes = nullptr;
+    if ( g_output_stream_splice_finish(G_OUTPUT_STREAM(src), res, &error) >= 0 )
+    {
+        bytes = g_memory_output_stream_steal_as_bytes(
+                    G_MEMORY_OUTPUT_STREAM(src));
+    }
+    else if ( error )
+    {
+        wxLogTrace(TRACE_DND, "drop stream read failed: %s", error->message);
+        g_error_free(error);
+    }
+
+    CompletePendingDrop(pending, bytes);
+}
+
+void wx_drop_read_done(GObject* src, GAsyncResult* res, gpointer user_data)
+{
+    PendingDrop* const pending = static_cast<PendingDrop*>(user_data);
+
+    GError* error = nullptr;
+    GInputStream* const stream =
+        gdk_drop_read_finish(GDK_DROP(src), res, nullptr, &error);
+
+    if ( !stream )
+    {
+        if ( error )
+        {
+            wxLogTrace(TRACE_DND, "drop read failed: %s", error->message);
+            g_error_free(error);
+        }
+
+        CompletePendingDrop(pending, nullptr);
+        return;
+    }
+
+    pending->out = g_memory_output_stream_new_resizable();
+    g_output_stream_splice_async(pending->out, stream,
+                                 GOutputStreamSpliceFlags(
+                                    G_OUTPUT_STREAM_SPLICE_CLOSE_SOURCE |
+                                    G_OUTPUT_STREAM_SPLICE_CLOSE_TARGET),
+                                 G_PRIORITY_DEFAULT, nullptr,
+                                 wx_drop_spliced, pending);
+    g_object_unref(stream);
+}
+
+} // extern "C"
+
+} // anonymous namespace
+
+extern "C" {
+
+static gboolean
+wx_drop_accept(GtkDropTargetAsync* target, GdkDrop* drop, gpointer)
+{
+    wxDropTarget* const dt = TargetFromController(GTK_EVENT_CONTROLLER(target));
+    if ( !dt )
+        return FALSE;
+
+    dt->GTKSetDrop(drop);
+    const bool ok = dt->GTKGetMatchingPair(true) != nullptr;
+    dt->GTKSetDrop(nullptr);
+
+    return ok;
+}
+
+static GdkDragAction
+wx_drop_enter(GtkDropTargetAsync* target, GdkDrop* drop,
+              double x, double y, gpointer)
+{
+    wxDropTarget* const dt = TargetFromController(GTK_EVENT_CONTROLLER(target));
+    if ( !dt )
+        return GdkDragAction(0);
+
+    dt->GTKSetDrop(drop);
+
+    if ( !dt->GTKGetMatchingPair() )
+        return GdkDragAction(0);
+
+    const wxDragResult result =
+        dt->OnEnter(int(x), int(y), dt->GTKFigureOutSuggestedAction());
+
+    return ConvertToGTK(result);
+}
+
+static GdkDragAction
+wx_drop_motion(GtkDropTargetAsync* target, GdkDrop* drop,
+               double x, double y, gpointer)
+{
+    wxDropTarget* const dt = TargetFromController(GTK_EVENT_CONTROLLER(target));
+    if ( !dt )
+        return GdkDragAction(0);
+
+    dt->GTKSetDrop(drop);
+
+    if ( !dt->GTKGetMatchingPair(true) )
+        return GdkDragAction(0);
+
+    const wxDragResult result =
+        dt->OnDragOver(int(x), int(y), dt->GTKFigureOutSuggestedAction());
+
+    return ConvertToGTK(result);
+}
+
+static void
+wx_drop_leave(GtkDropTargetAsync* target, GdkDrop*, gpointer)
+{
+    if ( wxDropTarget* const dt =
+            TargetFromController(GTK_EVENT_CONTROLLER(target)) )
+    {
+        dt->OnLeave();
+        dt->GTKSetDrop(nullptr);
+    }
+}
+
+static gboolean
+wx_drop_perform(GtkDropTargetAsync* target, GdkDrop* drop,
+                double x, double y, gpointer)
+{
+    wxDropTarget* const dt = TargetFromController(GTK_EVENT_CONTROLLER(target));
+    if ( !dt )
+        return FALSE;
+
+    dt->GTKSetDrop(drop);
+
+    const wxDragResult suggested = dt->GTKFigureOutSuggestedAction();
+
+    const wxDataFormat::NativeFormat mime = dt->GTKGetMatchingPair();
+    bool ok = false;
+    if ( mime && dt->OnDrop(int(x), int(y)) )
+    {
+        // GtkDropTargetAsync requires the handler to return before completing
+        // the data transfer. Keep the MIME array in PendingDrop too because
+        // gdk_drop_read_async() uses it after this function has returned.
+        PendingDrop* const pending =
+            new PendingDrop(target, drop, mime, int(x), int(y), suggested);
+        gdk_drop_read_async(drop, pending->mimes, G_PRIORITY_DEFAULT, nullptr,
+                            wx_drop_read_done, pending);
+        ok = true;
+    }
+
+    if ( !ok )
+    {
+        gdk_drop_finish(drop, GdkDragAction(0));
+        dt->GTKSetDrop(nullptr);
+    }
+
+    return ok;
+}
+
+} // extern "C"
+
+wxDropTarget::wxDropTarget( wxDataObject *data )
+            : wxDropTargetBase( data )
+{
+    m_firstMotion = true;
+    m_drop = nullptr;
+    m_dropController = nullptr;
+    m_dragWidget = nullptr;
+}
+
+wxDragResult wxDropTarget::OnDragOver( wxCoord WXUNUSED(x),
+                                       wxCoord WXUNUSED(y),
+                                       wxDragResult def )
+{
+    return def;
+}
+
+bool wxDropTarget::OnDrop( wxCoord WXUNUSED(x), wxCoord WXUNUSED(y) )
+{
+    return true;
+}
+
+wxDragResult wxDropTarget::OnData( wxCoord WXUNUSED(x), wxCoord WXUNUSED(y),
+                                   wxDragResult def )
+{
+    return GetData() ? def : wxDragNone;
+}
+
+wxDragResult wxDropTarget::GTKFigureOutSuggestedAction()
+{
+    if (!m_drop)
+        return wxDragError;
+
+    // GTK4 has no separate "suggested" action: GdkDrop reports the set of
+    // actions the source offers, and choosing between them is entirely ours.
+    // That removes the GTK3 complication of second-guessing a suggestion which
+    // was always wxDragCopy even when a move was wanted.
+    const GdkDragAction actions = gdk_drop_get_actions(m_drop);
+
+    if (GetDefaultAction() == wxDragNone)
+    {
+        if ( (gs_flagsForDrag & wxDrag_DefaultMove) == wxDrag_DefaultMove &&
+            (actions & GDK_ACTION_MOVE))
+        {
+            return wxDragMove;
+        }
+    }
+    else if (GetDefaultAction() == wxDragMove && (actions & GDK_ACTION_MOVE))
+    {
+        return wxDragMove;
+    }
+
+    if (actions & GDK_ACTION_COPY)
+        return wxDragCopy;
+    if (actions & GDK_ACTION_MOVE)
+        return wxDragMove;
+    if (actions & GDK_ACTION_LINK)
+        return wxDragLink;
+
+    return wxDragNone;
+}
+
+wxDataFormat wxDropTarget::GetMatchingPair()
+{
+    return wxDataFormat( GTKGetMatchingPair() );
+}
+
+wxDataFormat::NativeFormat wxDropTarget::GTKGetMatchingPair(bool quiet)
+{
+    if (!m_dataObject || !m_drop)
+        return nullptr;
+
+    GdkContentFormats* const formats = gdk_drop_get_formats(m_drop);
+    if (!formats)
+        return nullptr;
+
+    gsize n = 0;
+    const char* const* const mimes =
+        gdk_content_formats_get_mime_types(formats, &n);
+
+    for (gsize i = 0; i < n; i++)
+    {
+        const wxDataFormat format(mimes[i]);
+
+        if ( !quiet )
+        {
+            wxLogTrace(TRACE_DND, wxT("Drop target: drag has format: %s"),
+                       format.GetId().c_str());
+        }
+
+        if (m_dataObject->IsSupportedFormat( format ))
+            return format.GetFormatId();
+    }
+
+    return nullptr;
+}
+
+bool wxDropTarget::GetData()
+{
+    if (!m_drop || !m_dataObject)
+        return false;
+
+    const wxDataFormat::NativeFormat mime = GTKGetMatchingPair(true);
+    if (!mime)
+        return false;
+
+    GBytes* const bytes = static_cast<GBytes*>(
+        g_object_get_data(G_OBJECT(m_drop), wxDropDataKey));
+    if (!bytes)
+        return false;
+
+    gsize size = 0;
+    gconstpointer const data = g_bytes_get_data(bytes, &size);
+
+    return m_dataObject->SetData(wxDataFormat(mime), size, data);
+}
+
+void wxDropTarget::GtkUnregisterWidget( GtkWidget *widget )
+{
+    wxCHECK_RET( widget != nullptr, wxT("unregister widget is null") );
+
+    if ( GtkEventController* const controller =
+            static_cast<GtkEventController*>(
+                g_object_get_data(G_OBJECT(widget), "wx-drop-controller")) )
+    {
+        // A pending asynchronous drop keeps the controller alive, so clear
+        // its non-owning C++ pointer before detaching it from the widget.
+        g_object_set_data(G_OBJECT(controller), "wx-drop-target", nullptr);
+
+        if ( m_dropController == controller )
+        {
+            g_object_remove_weak_pointer(
+                G_OBJECT(controller),
+                reinterpret_cast<gpointer*>(&m_dropController));
+            m_dropController = nullptr;
+        }
+
+        gtk_widget_remove_controller(widget, controller);
+        g_object_set_data(G_OBJECT(widget), "wx-drop-controller", nullptr);
+    }
+}
+
+void wxDropTarget::GtkRegisterWidget( GtkWidget *widget )
+{
+    wxCHECK_RET( widget != nullptr, wxT("register widget is null") );
+
+    // Unlike gtk_drag_dest_set(), which could be told to supply no formats and
+    // no actions so that wx could decide everything itself in the signal
+    // handlers, a GtkDropTargetAsync is created with both up front. The
+    // formats are those the data object accepts and the actions everything wx
+    // might return; the handlers still decide per position, by returning the
+    // action to use or none at all.
+    GdkContentFormats* formats = nullptr;
+
+    if ( m_dataObject )
+    {
+        const size_t count = m_dataObject->GetFormatCount(wxDataObject::Set);
+        if ( count )
+        {
+            wxDataFormat* const array = new wxDataFormat[count];
+            m_dataObject->GetAllFormats(array, wxDataObject::Set);
+
+            GdkContentFormatsBuilder* const builder =
+                gdk_content_formats_builder_new();
+            for ( size_t i = 0; i < count; i++ )
+                gdk_content_formats_builder_add_mime_type(builder,
+                                                          array[i].GetFormatId());
+
+            delete[] array;
+
+            formats = gdk_content_formats_builder_free_to_formats(builder);
+        }
+    }
+
+    // Note that gtk_drop_target_async_new() takes ownership of the formats
+    // (they are annotated "transfer full"), so they must not be unreffed
+    // here: doing that frees them while the drop target is still holding
+    // them, and the widget's eventual destruction then unrefs freed memory.
+    GtkDropTargetAsync* const target = gtk_drop_target_async_new(
+        formats, GdkDragAction(GDK_ACTION_COPY | GDK_ACTION_MOVE |
+                               GDK_ACTION_LINK));
+
+    wxASSERT_MSG(!m_dropController, "drop target is already registered");
+    m_dropController = GTK_EVENT_CONTROLLER(target);
+    g_object_add_weak_pointer(
+        G_OBJECT(target), reinterpret_cast<gpointer*>(&m_dropController));
+
+    g_object_set_data(G_OBJECT(target), "wx-drop-target", this);
+
+    g_signal_connect(target, "accept", G_CALLBACK(wx_drop_accept), nullptr);
+    g_signal_connect(target, "drag-enter", G_CALLBACK(wx_drop_enter), nullptr);
+    g_signal_connect(target, "drag-motion", G_CALLBACK(wx_drop_motion), nullptr);
+    g_signal_connect(target, "drag-leave", G_CALLBACK(wx_drop_leave), nullptr);
+    g_signal_connect(target, "drop", G_CALLBACK(wx_drop_perform), nullptr);
+
+    gtk_widget_add_controller(widget, GTK_EVENT_CONTROLLER(target));
+
+    g_object_set_data(G_OBJECT(widget), "wx-drop-controller", target);
+}
+
+//----------------------------------------------------------------------------
+// wxDropSource
+//----------------------------------------------------------------------------
+
+extern "C" {
+
+static void wx_drag_finished(GdkDrag*, wxDropSource* source)
+{
+    source->m_waiting = false;
+}
+
+static void wx_drag_cancelled(GdkDrag*, GdkDragCancelReason, wxDropSource* source)
+{
+    source->m_retValue = wxDragCancel;
+    source->m_waiting = false;
+}
+
+} // extern "C"
+
+wxDragResult wxDropSource::DoDragDrop(int flags)
+{
+    wxCHECK_MSG( m_data && m_data->GetFormatCount(), wxDragNone,
+                 wxT("Drop source: no data") );
+
+    // still in drag
+    if (g_blockEventsOnDrag)
+        return wxDragNone;
+
+    // don't start dragging if no button is down
+    if (g_lastButtonNumber == 0)
+        return wxDragNone;
+
+    // we can only start a drag after a mouse event
+    if (g_lastMouseEvent == nullptr)
+        return wxDragNone;
+
+    GdkSurface* const surface = wx_gtk_widget_get_surface(m_widget);
+    if ( !surface )
+        return wxDragError;
+
+    GdkDevice* const device =
+        wx_get_gdk_device_from_display(gtk_widget_get_display(m_widget));
+    if ( !device )
+        return wxDragError;
+
+    // The data is serialised here rather than being supplied lazily on
+    // request, for the same reason as in wxClipboard::AddData(): GTK4's lazy
+    // form means subclassing GdkContentProvider.
+    const size_t count = m_data->GetFormatCount(wxDataObject::Get);
+    wxDataFormat* const array = new wxDataFormat[count];
+    m_data->GetAllFormats(array, wxDataObject::Get);
+
+    wxVector<GdkContentProvider*> providers;
+    for ( size_t i = 0; i < count; i++ )
+    {
+        const size_t size = m_data->GetDataSize(array[i]);
+        if ( !size )
+            continue;
+
+        wxCharBuffer buf(size);
+        if ( !m_data->GetDataHere(array[i], buf.data()) )
+            continue;
+
+        GBytes* const bytes = g_bytes_new(buf.data(), size);
+        providers.push_back(
+            gdk_content_provider_new_for_bytes(array[i].GetFormatId(), bytes));
+        g_bytes_unref(bytes);
+    }
+
+    delete[] array;
+
+    if ( providers.empty() )
+        return wxDragNone;
+
+    // new_union() takes ownership of the providers given to it.
+    GdkContentProvider* const content = providers.size() == 1
+        ? providers[0]
+        : gdk_content_provider_new_union(&providers[0], providers.size());
+
+    int allowed_actions = GDK_ACTION_COPY;
+    if ( flags & wxDrag_AllowMove )
+        allowed_actions |= GDK_ACTION_MOVE;
+
+    // VZ: as we already use g_blockEventsOnDrag it shouldn't be that bad
+    //     to use a global to pass the flags to the drop target but I'd
+    //     surely prefer a better way to do it
+    gs_flagsForDrag = flags;
+
+    m_retValue = wxDragCopy;
+    m_waiting = true;
+
+    GdkDrag* const drag = gdk_drag_begin(surface, device, content,
+                                         GdkDragAction(allowed_actions),
+                                         0, 0);
+    g_object_unref(content);
+
+    if ( !drag )
+        return wxDragError;
+
+    m_dragContext = drag;
+
+    // There is no drag icon set here: GTK4 draws one from the content provider
+    // by default, and the GTK3 code's approach -- an override-redirect window
+    // whose shape is combined from a bitmap mask -- has no GTK4 form at all.
+    g_signal_connect(drag, "dnd-finished", G_CALLBACK(wx_drag_finished), this);
+    g_signal_connect(drag, "cancel", G_CALLBACK(wx_drag_cancelled), this);
+
+    // wxDropSource::DoDragDrop() is documented to return only once the drag
+    // has finished, so spin a nested loop, as everything else in this port
+    // that has to be synchronous over an asynchronous API does.
+    while ( m_waiting )
+    {
+        g_main_context_iteration(nullptr, TRUE);
+
+        GiveFeedback(ConvertFromGTK(gdk_drag_get_selected_action(drag)));
+    }
+
+    if ( m_retValue != wxDragCancel )
+        m_retValue = ConvertFromGTK(gdk_drag_get_selected_action(drag));
+
+    g_signal_handlers_disconnect_by_data(drag, this);
+    m_dragContext = nullptr;
+
+    return m_retValue;
+}
+
+wxDropSource::wxDropSource(wxWindow *win,
+                           const wxIcon &iconCopy,
+                           const wxIcon &iconMove,
+                           const wxIcon &iconNone)
+    : m_iconCopy(iconCopy)
+    , m_iconMove(iconMove)
+    , m_iconNone(iconNone)
+{
+    Init(win);
+}
+
+wxDropSource::wxDropSource(wxDataObject& data,
+                           wxWindow *win,
+                           const wxIcon &iconCopy,
+                           const wxIcon &iconMove,
+                           const wxIcon &iconNone)
+    : wxDropSource(win, iconCopy, iconMove, iconNone)
+{
+    SetData( data );
+}
+
+void wxDropSource::Init(wxWindow* win)
+{
+    m_waiting = true;
+    m_retValue = wxDragNone;
+    m_dragContext = nullptr;
+    m_widget = win->m_wxwindow ? win->m_wxwindow : win->m_widget;
+
+    // The icons are stored but never used: see the note about drag icons
+    // above. They are kept so that SetIcon() remains a no-op rather than an
+    // error, and so that this can start working again without an API change
+    // if GTK4 ever grows a way to supply one.
+}
+
+wxDropSource::~wxDropSource()
+{
+}
+
+#else // !__WXGTK4__
 
 wxDropTarget::wxDropTarget( wxDataObject *data )
             : wxDropTargetBase( data )
@@ -771,7 +1450,7 @@ void wxDropSource::PrepareIcon( int action, GdkDragContext *context )
     {
         widget = gtk_drawing_area_new();
         gtk_widget_set_size_request(widget, icon->GetWidth(), icon->GetHeight());
-        gtk_widget_show(widget);
+        gtk_widget_set_visible(widget, TRUE);
         gtk_drag_set_icon_widget(context, widget, 0, 0);
         // GTK >= 3.20 puts the icon widget in a GTK_WINDOW_POPUP,
         // we need to connect to that widget to get "configure-event"
@@ -933,6 +1612,10 @@ wxDragResult wxDropSource::DoDragDrop(int flags)
     return m_retValue;
 }
 
+#endif // __WXGTK4__/!__WXGTK4__
+
+#ifndef __WXGTK4__
+
 void wxDropSource::GTKConnectDragSignals()
 {
     if (!m_widget)
@@ -974,6 +1657,8 @@ void wxDropSource::GTKDisconnectDragSignals()
     g_signal_handlers_disconnect_by_func(m_widget, (void*)wx_gtk_mouse_event, this);
 #endif
 }
+
+#endif // !__WXGTK4__
 
 #endif
       // wxUSE_DRAG_AND_DROP

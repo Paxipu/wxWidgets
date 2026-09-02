@@ -13,8 +13,16 @@
 class WXDLLIMPEXP_CORE wxDataFormat
 {
 public:
+#ifdef __WXGTK4__
+    // GdkAtom is gone under GTK4: a clipboard format is just a MIME type
+    // string now. Formats are interned with g_intern_string(), which returns a
+    // canonical pointer per string, so comparing them by pointer keeps working
+    // exactly as it did for atoms -- an atom was an interned string too.
+    typedef const char* NativeFormat;
+#else
     // the clipboard formats under GDK are GdkAtoms
     typedef GdkAtom NativeFormat;
+#endif
 
     wxDataFormat();
     wxDataFormat( wxDataFormatId type );
@@ -23,7 +31,11 @@ public:
     // we have to provide all the overloads to allow using strings instead of
     // data formats (as a lot of existing code does)
     wxDataFormat( const wxString& id ) { InitFromString(id); }
-#ifndef wxNO_IMPLICIT_WXSTRING_ENCODING
+#if !defined(wxNO_IMPLICIT_WXSTRING_ENCODING) && !defined(__WXGTK4__)
+    // Under GTK4 this would be the same signature as the NativeFormat ctor
+    // above, as a native format is a MIME type string there. The two are
+    // interchangeable in that case: SetId(NativeFormat) interns whatever it is
+    // given, so passing an ordinary literal works.
     wxDataFormat( const char *id ) { InitFromString(id); }
 #endif
     wxDataFormat( const wchar_t *id ) { InitFromString(id); }

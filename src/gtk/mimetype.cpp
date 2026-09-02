@@ -32,6 +32,34 @@ wxString wxGTKMimeTypesManagerImpl::GetIconFromMimeType(const wxString& mime)
     if ( !gicon )
         return icon;
 
+#ifdef __WXGTK4__
+    GtkIconTheme *theme(gtk_icon_theme_get_for_display(gdk_display_get_default()));
+    if ( !theme )
+        return icon;
+
+    // GTK4 has no GTK_ICON_LOOKUP_NO_SVG, so there's no "prefer a bitmap icon"
+    // pass to make here: the icon found may well be an SVG one.
+    wxGtkObject<GtkIconPaintable> paintable
+    (
+        gtk_icon_theme_lookup_by_gicon(theme, gicon, 32, 1,
+                                       GTK_TEXT_DIR_NONE,
+                                       GtkIconLookupFlags(0))
+    );
+
+    if ( paintable )
+    {
+        // The icon may come from a resource rather than a file, in which case
+        // there is no path to return, which g_file_get_path() indicates by
+        // returning null just as we need.
+        wxGtkObject<GFile> file(gtk_icon_paintable_get_file(paintable));
+        if ( file )
+        {
+            wxGtkString filename(g_file_get_path(file));
+            if ( filename )
+                icon = wxString::FromUTF8(filename);
+        }
+    }
+#else // !__WXGTK4__
     GtkIconTheme *theme(gtk_icon_theme_get_default());
     if ( !theme )
         return icon;
@@ -65,6 +93,7 @@ wxString wxGTKMimeTypesManagerImpl::GetIconFromMimeType(const wxString& mime)
             break;
         // else try again without GTK_ICON_LOOKUP_NO_SVG
     }
+#endif // __WXGTK4__/!__WXGTK4__
 #endif // GTK_CHECK_VERSION(2,14,0)
     return icon;
 }

@@ -55,6 +55,10 @@ public:
 
     virtual GtkCellRendererText *GtkGetTextRenderer() const override;
 
+#if wxUSE_ACCESSIBILITY
+    virtual wxString GetAccessibleDescription() const override;
+#endif // wxUSE_ACCESSIBILITY
+
 protected:
     virtual void SetAttr(const wxDataViewItemAttr& attr) override;
 
@@ -93,6 +97,10 @@ public:
     virtual
     bool IsCompatibleVariantType(const wxString& variantType) const override;
 
+#if wxUSE_ACCESSIBILITY
+    virtual wxString GetAccessibleDescription() const override;
+#endif // wxUSE_ACCESSIBILITY
+
 protected:
     wxDECLARE_DYNAMIC_CLASS_NO_COPY(wxDataViewBitmapRenderer);
 };
@@ -114,6 +122,10 @@ public:
 
     bool SetValue( const wxVariant &value ) override;
     bool GetValue( wxVariant &value ) const override;
+
+#if wxUSE_ACCESSIBILITY
+    virtual wxString GetAccessibleDescription() const override;
+#endif // wxUSE_ACCESSIBILITY
 
 protected:
     wxDECLARE_DYNAMIC_CLASS_NO_COPY(wxDataViewToggleRenderer);

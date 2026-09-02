@@ -45,17 +45,23 @@ public:
     wxGdkAtom(const wxGdkAtom&) = delete;
     wxGdkAtom& operator=(const wxGdkAtom&) = delete;
 
-    GdkAtom Get() const
+    wxDataFormat::NativeFormat Get() const
     {
         if ( !m_atom )
+        {
+#ifdef __WXGTK4__
+            m_atom = g_intern_string(m_name);
+#else
             m_atom = gdk_atom_intern(m_name, FALSE);
+#endif
+        }
 
         return m_atom;
     }
 
 private:
     const char* const m_name;
-    mutable GdkAtom m_atom = nullptr;
+    mutable wxDataFormat::NativeFormat m_atom = nullptr;
 };
 
 inline bool operator==(wxDataFormat format, const wxGdkAtom& wxatom)
@@ -63,7 +69,7 @@ inline bool operator==(wxDataFormat format, const wxGdkAtom& wxatom)
     return format.GetFormatId() == wxatom.Get();
 }
 
-inline bool operator==(GdkAtom atom, const wxGdkAtom& wxatom)
+inline bool operator==(wxDataFormat::NativeFormat atom, const wxGdkAtom& wxatom)
 {
     return atom == wxatom.Get();
 }
@@ -91,7 +97,7 @@ wxGdkAtom g_htmlAtom    {"text/html"};
 wxDataFormat::wxDataFormat()
 {
     m_type = wxDF_INVALID;
-    m_format = (GdkAtom) nullptr;
+    m_format = (NativeFormat) nullptr;
 }
 
 wxDataFormat::wxDataFormat( wxDataFormatId type )
@@ -139,17 +145,34 @@ wxDataFormatId wxDataFormat::GetType() const
 
 wxString wxDataFormat::GetId() const
 {
+#ifdef __WXGTK4__
+    // The format *is* its name under GTK4, and it is owned by GLib's intern
+    // table rather than by us, so there is nothing to free here.
+    const char* const atom_name = m_format ? m_format : "";
+#else
     wxGtkString atom_name(gdk_atom_name(m_format));
+#endif
 
     // In practice atom name is always in UTF-8, but don't lose the name
     // entirely if it isn't.
     wxMBConvUTF8 conv(wxMBConvUTF8::MAP_INVALID_UTF8_TO_PUA);
+#ifdef __WXGTK4__
+    return wxString(conv.cMB2WX(atom_name));
+#else
     return wxString(conv.cMB2WX(atom_name.c_str()));
+#endif
 }
 
 void wxDataFormat::SetId( NativeFormat format )
 {
+#ifdef __WXGTK4__
+    // Formats are compared by pointer, so make sure ours is the canonical one:
+    // callers may pass an ordinary string literal rather than an already
+    // interned pointer, and interning an interned string is a no-op.
+    m_format = format ? g_intern_string(format) : nullptr;
+#else
     m_format = format;
+#endif
 
     if (m_format == g_u8strAtom || m_format == g_u8textAtom)
         m_type = wxDF_UNICODETEXT;
@@ -172,13 +195,18 @@ void wxDataFormat::SetId( NativeFormat format )
 void wxDataFormat::SetId( const wxString& id )
 {
     m_type = wxDF_PRIVATE;
+#ifdef __WXGTK4__
+    m_format = g_intern_string( id.ToAscii() );
+#else
     m_format = gdk_atom_intern( id.ToAscii(), FALSE );
+#endif
 }
 
 
 // This is also used by wxClipboard to check if the given atom refer to the
 // same format, so make it extern.
-extern bool wxGTKIsSameFormat(GdkAtom atom1, GdkAtom atom2)
+extern bool wxGTKIsSameFormat(wxDataFormat::NativeFormat atom1,
+                              wxDataFormat::NativeFormat atom2)
 {
     if (atom1 == atom2)
         return true;
@@ -193,7 +221,8 @@ extern bool wxGTKIsSameFormat(GdkAtom atom1, GdkAtom atom2)
 }
 
 // Also used by wxClipboard to use the alternative Wayland atoms for the text.
-extern GdkAtom wxGTKGetAltWaylandFormat(GdkAtom atom)
+extern wxDataFormat::NativeFormat
+wxGTKGetAltWaylandFormat(wxDataFormat::NativeFormat atom)
 {
     if (atom == g_u8strAtom)
         return g_u8textAtom.Get();

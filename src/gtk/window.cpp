@@ -8911,6 +8911,37 @@ GtkRcStyle* wxWindowGTK::GTKCreateWidgetStyle()
 }
 #endif // !__WXGTK3__
 
+#ifdef __WXGTK4__
+
+void wxWindowGTK::GTKReapplyStyleAfterShow()
+{
+    // A style that was applied while the window was off screen may not have
+    // taken effect, and applying it again now that the window is on screen is
+    // what puts it right. See #245: a widget measured while it is not on
+    // screen -- which wxStaticText does to itself in SetFont(), for #16088 --
+    // keeps the style that measurement computed, and a later load of the rules
+    // behind it does not replace it. The window that was styled last before
+    // the window was shown is the one that keeps the wrong style, because any
+    // later styling of any window rescues the ones before it.
+    //
+    // Measured with no wx in the process in
+    // docs/gtk/probes/gtk4-hidden-style-reload.c, which also has the list of
+    // things that do not fix it: queue_draw, queue_resize, reloading through
+    // gtk_css_provider_load_from_string(), taking the provider off the display
+    // and putting it back, and retiring the provider for a fresh one.
+    if ( m_styleProvider )
+        GTKApplyWidgetStyle();
+
+    for ( wxWindowList::compatibility_iterator node = GetChildren().GetFirst();
+          node;
+          node = node->GetNext() )
+    {
+        static_cast<wxWindowGTK*>(node->GetData())->GTKReapplyStyleAfterShow();
+    }
+}
+
+#endif // __WXGTK4__
+
 void wxWindowGTK::GTKApplyWidgetStyle(bool forceStyle)
 {
     const wxColour& fg = m_foregroundColour;

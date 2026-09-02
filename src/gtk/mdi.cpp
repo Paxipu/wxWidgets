@@ -301,6 +301,28 @@ wxMDIChildFrame::~wxMDIChildFrame()
 {
     delete m_menuBar;
 
+#ifdef __WXGTK4__
+    // Take the page out of the notebook rather than leaving the widget to be
+    // unparented from under it.
+    //
+    // A child frame is an ordinary child of the client window as far as wx is
+    // concerned, so it is destroyed by DestroyChildren() and never goes
+    // through the notebook's own page removal. GTK+ 3 did not mind; GTK4's
+    // notebook keeps its pages in a GtkStack of its own, and a page whose
+    // child has been unparented behind its back leaves that list stale --
+    // which its dispose then trips over, one
+    // "gtk_stack_remove: assertion 'gtk_widget_get_parent (child) ==
+    // GTK_WIDGET (stack)' failed" per page. See #255.
+    if ( m_widget && m_parent && m_parent->m_widget &&
+            GTK_IS_NOTEBOOK(m_parent->m_widget) )
+    {
+        GtkNotebook* const notebook = GTK_NOTEBOOK(m_parent->m_widget);
+        const gint page = gtk_notebook_page_num(notebook, m_widget);
+        if ( page != -1 )
+            gtk_notebook_remove_page(notebook, page);
+    }
+#endif // __WXGTK4__
+
     // wxMDIClientWindow does not get redrawn properly after last child is removed
     if (m_parent && m_parent->GetChildren().size() <= 1)
         gtk_widget_queue_draw(m_parent->m_widget);

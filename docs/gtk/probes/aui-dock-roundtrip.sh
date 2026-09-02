@@ -17,7 +17,22 @@
 #   g++ -o $AUIDOCK aui-dock-roundtrip.cpp $($WXBUILD/wx-config --cxxflags \
 #       --libs core,base,aui)
 #   gcc -o $XDRAG xdrag.c -lX11 -lXtst        # X11: XTEST
-#   gcc -o $WLDRAG wldrag.c ...               # Wayland: see wldrag.c
+#
+# wldrag is C++ despite its name, and the generated protocol code is C, so
+# the header has to be pulled in with C linkage or the manager interface goes
+# undefined at link time:
+#
+#   wayland-scanner client-header wlr-virtual-pointer-unstable-v1.xml vp_real.h
+#   wayland-scanner private-code  wlr-virtual-pointer-unstable-v1.xml vp.c
+#   printf '%s\n' 'extern "C" {' '#include "vp_real.h"' '}' > vp.h
+#   gcc -c vp.c -o vp.o
+#   g++ -o $WLDRAG wldrag.c vp.o -I. $(pkg-config --libs wayland-client)
+#
+# The Wayland half needs sway specifically, not any compositor: the run asks
+# swaymsg where the window is, so weston answers nothing and the harness stops
+# with "no compositor answering". A headless one is enough:
+#
+#   XDG_RUNTIME_DIR=... WLR_BACKENDS=headless sway
 WXBUILD=${WXBUILD:-/home/user/wxbuild-gtk4-ci}
 AUIDOCK=${AUIDOCK:-/tmp/auidock}
 XDRAG=${XDRAG:-/tmp/xdrag}

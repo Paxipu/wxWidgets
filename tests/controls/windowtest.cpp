@@ -891,6 +891,15 @@ TEST_CASE_METHOD(WindowTestCase, "wxWindow::SetSizeIsHonoured", "[window][size]"
         new wxButton(wxTheApp->GetTopWindow(), wxID_ANY,
                      "A button with a fairly long label");
 
+    // GTK warns once here, and is meant to:
+    //   gtk_widget_size_allocate(): attempt to allocate GtkLabel label
+    //   with width -24 and height -6
+    // The button gets the 10x4 it was asked for, and Adwaita's button padding
+    // (17px each side, 5px above and below) leaves its label that much less
+    // than nothing. Honouring the size and never allocating below a widget's
+    // minimum cannot both hold; wx promises the first. Removing the warning
+    // means reinstating the clamp described above, which is the fault this
+    // case exists to catch. See #256.
     button->SetSize(0, 0, 10, 4);
     YieldForAWhile();
 

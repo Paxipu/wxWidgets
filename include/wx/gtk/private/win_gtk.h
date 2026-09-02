@@ -12,6 +12,12 @@
 #define WX_PIZZA(obj) G_TYPE_CHECK_INSTANCE_CAST(obj, wxPizza::type(), wxPizza)
 #define WX_IS_PIZZA(obj) G_TYPE_CHECK_INSTANCE_TYPE(obj, wxPizza::type())
 
+#ifdef __WXGTK4__
+// Name of the signal wxPizza emits once it has laid its children out, standing
+// in for GtkWidget's "size-allocate" which GTK4 removed. See win_gtk.cpp.
+extern WXDLLIMPEXP_DATA_CORE(const char* const) wxPIZZA_SIGNAL_SIZE_ALLOCATED;
+#endif // __WXGTK4__
+
 struct WXDLLIMPEXP_CORE wxPizza
 {
     // borders styles which can be used with wxPizza
@@ -22,6 +28,12 @@ struct WXDLLIMPEXP_CORE wxPizza
     static GType type();
     void move(GtkWidget* widget, int x, int y, int width, int height);
     void put(GtkWidget* widget, int x, int y, int width, int height);
+#ifdef __WXGTK4__
+    // Undo put(). GTK3 got this from GtkContainer's "remove" vfunc, which
+    // GTK4 does not have, so it has to be called explicitly -- see the
+    // comment on the definition.
+    void remove(GtkWidget* widget);
+#endif
     void scroll(int dx, int dy);
     void get_border(GtkBorder& border);
     void size_allocate_child(

@@ -32,7 +32,11 @@ public:
         m_tbar->AddTool(wxID_ADD, wxString(), GetNamedBitmap("list-add"));
         m_tbar->AddTool(wxID_REMOVE, wxString(), GetNamedBitmap("list-remove"));
 
-#if defined(__WXGTK3__) && !defined(__WXUNIVERSAL__)
+// This is skipped under GTK4: wxToolBar is a GtkBox with the "toolbar" style
+// class there rather than a GtkToolbar, and neither the inline-toolbar class
+// nor style context junction sides survived the move to CSS styling, so there
+// is nothing left to tweak. The toolbar simply looks like a plain one.
+#if defined(__WXGTK3__) && !defined(__WXGTK4__) && !defined(__WXUNIVERSAL__)
         // Tweak the toolbar appearance to correspond to how the toolbars used
         // in other GNOME applications for similar purposes look.
         GtkToolbar* const toolbar = m_tbar->GTKGetToolbar();

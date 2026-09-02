@@ -10,6 +10,12 @@
 #ifndef _GTK_PRIVATE_TREEVIEW_H_
 #define _GTK_PRIVATE_TREEVIEW_H_
 
+// GtkTreePath belongs to GtkTreeView, which GTK4 does not have, so the
+// controls that used this wrapper take a different route there and nothing
+// below is compiled: guarding it keeps its deprecated calls out of a GTK4
+// build rather than only out of a GTK4 run.
+#ifndef __WXGTK4__
+
 // ----------------------------------------------------------------------------
 // wxGtkTreePath: RAII wrapper for GtkTreePath
 // ----------------------------------------------------------------------------
@@ -58,5 +64,7 @@ private:
 
     wxDECLARE_NO_COPY_CLASS(wxGtkTreePath);
 };
+
+#endif // !__WXGTK4__
 
 #endif // _GTK_PRIVATE_TREEVIEW_H_

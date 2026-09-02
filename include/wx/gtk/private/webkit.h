@@ -12,17 +12,37 @@
 
 #include "wx/buffer.h"
 
-#include <webkit2/webkit2.h>
-#include <JavaScriptCore/JSStringRef.h>
+#ifdef __WXGTK4__
+    // WebKitGTK has a separate API version for GTK4, with its own header, and
+    // the deprecated JavaScriptCore C API used below is not part of it any
+    // more: the only way to get at a script result is the JSC GObject API.
+    #include <webkit/webkit.h>
+#else
+    #include <webkit2/webkit2.h>
+    #include <JavaScriptCore/JSStringRef.h>
+#endif
 
 // ----------------------------------------------------------------------------
-// RAII wrapper of WebKitJavascriptResult taking care of freeing it
+// The result of evaluating a script
+//
+// This is a WebKitJavascriptResult, which owns a JSValueRef, up to the GTK3
+// API and a plain (reference counted) JSCValue under GTK4.
+// ----------------------------------------------------------------------------
+
+#ifdef __WXGTK4__
+typedef JSCValue wxWebKitJSValue;
+#else
+typedef WebKitJavascriptResult wxWebKitJSValue;
+#endif
+
+// ----------------------------------------------------------------------------
+// RAII wrapper of wxWebKitJSValue taking care of freeing it
 // ----------------------------------------------------------------------------
 
 class wxWebKitJavascriptResult
 {
 public:
-    explicit wxWebKitJavascriptResult(WebKitJavascriptResult *r)
+    explicit wxWebKitJavascriptResult(wxWebKitJSValue *r)
         : m_jsresult(r)
     {
     }
@@ -30,16 +50,24 @@ public:
     ~wxWebKitJavascriptResult()
     {
         if ( m_jsresult != nullptr )
+        {
+#ifdef __WXGTK4__
+            g_object_unref(m_jsresult);
+#else
             webkit_javascript_result_unref(m_jsresult);
+#endif
+        }
     }
 
-    operator WebKitJavascriptResult *() const { return m_jsresult; }
+    operator wxWebKitJSValue *() const { return m_jsresult; }
 
 private:
-    WebKitJavascriptResult *m_jsresult;
+    wxWebKitJSValue *m_jsresult;
 
     wxDECLARE_NO_COPY_CLASS(wxWebKitJavascriptResult);
 };
+
+#ifndef __WXGTK4__
 
 // ----------------------------------------------------------------------------
 // RAII wrapper of JSStringRef, also providing conversion to wxString
@@ -67,5 +95,7 @@ private:
 
     wxDECLARE_NO_COPY_CLASS(wxJSStringRef);
 };
+
+#endif // !__WXGTK4__
 
 #endif // _WX_GTK_PRIVATE_WEBKIT_H_

@@ -53,7 +53,7 @@ Every mechanism in that paragraph is gone:
 | `gtk_style_context_get()` (varargs property query) | **removed** |
 | `gtk_style_context_get_color()` | survives (deprecated in 4.10) |
 | `gtk_style_context_get_border/padding/margin()` | survive, minus the `GtkStateFlags` parameter |
-| `gtk_style_context_lookup_color()` | survives, deprecated in 4.10 with no replacement — asked in CSS instead, see §5 |
+| `gtk_style_context_lookup_color()` | survives, deprecated in 4.10 with no replacement — still used, see §5 |
 | `gtk_style_context_set_state()` | survives |
 
 Two consequences, and they are of very different severity:
@@ -204,29 +204,37 @@ omits them will fall back.
 
 Reading those names is itself a problem, because
 `gtk_style_context_lookup_color()` is deprecated with nothing to replace
-it. CSS still resolves them, so `wxGTKLookupThemeColour()` asks in CSS: it
-installs a provider setting `color` to the name and reads the result back
-with `gtk_widget_get_color()`. Two undocumented details of GTK make that
-work, and both are pinned in `build/tools/gtk4-invariants.c`:
+it. CSS does still resolve them, and a probe can read one back: install a
+provider setting `color` to the name, then read the result with
+`gtk_widget_get_color()`. Measured against the deprecated call in
+`docs/gtk/probes/gtk4-theme-colour-probe.c`, that reproduces every name the
+port asks for exactly, and reports a name no theme defines as missing.
+
+**It is not usable here, and the deprecated call stays.** `Bg()` and
+`Border()` are called while GTK is measuring, laying out or painting some
+other widget, and a probe has to install a provider on the display to ask
+its question. Doing that per query segfaulted the GUI suite inside
+`gtk_widget_snapshot_child()` after about a hundred cases, with the crash
+point moving between runs. Bisected to the commit that introduced it; every
+commit before it ran all 551 cases. A cache would reduce the number of
+those queries but not remove the first one, which still falls inside
+someone else's layout.
+
+Two details of GTK the probe had to establish are worth keeping whatever is
+done here, and are pinned in `build/tools/gtk4-invariants.c`:
 
 * An off-screen widget's style is computed once, on demand, and adding a
-  provider afterwards does not invalidate it. So each probe creates its
-  widget *after* its provider; reusing one answers with whatever cascade
-  was in force the first time it was read.
+  provider afterwards does not invalidate it. This is also issue #245 seen
+  from the other side: a `wxStaticText` measured by `SetFont()` while hidden
+  keeps the style that measurement computed, and a colour set after it never
+  arrives.
 * An undefined name is substituted silently -- no `parsing-error` signal,
-  and the substitute is an ordinary colour -- so one answer cannot say
-  whether the name exists. Several can: the substitute does not depend on
-  the expression the name appeared in, while a colour that resolves does,
-  so asking through `@name` and through two different `mix()`es separates
-  the cases. Two mixes rather than one because a single one collapses for
-  the theme colour that happens to equal what it is mixed with, and
-  Adwaita's `theme_base_color` -- pure white -- is close enough to that to
-  be worth guarding against.
-
-Measured against the deprecated call in
-`docs/gtk/probes/gtk4-theme-colour-probe.c`: same colour for every name the
-theme defines, same "no" for one it does not, and all 35
-`wxSystemSettings::GetColour()` entries unchanged. This is the
+  and an ordinary colour comes back -- so one answer cannot say whether the
+  name exists. Asking through `@name` and through two different `mix()`es
+  can: the substitute does not depend on the expression, a colour that
+  resolves does. Two mixes because a single one collapses for the theme
+  colour equal to what it is mixed with, and Adwaita's `theme_base_color` is
+  pure white, which is exactly what an undefined name resolves to. This is the
 same wall already hit and documented in `control.cpp`
 (`GetClassDefaultAttributes()`, status update 10); the two should use one
 shared helper rather than two independent approximations.

@@ -5180,38 +5180,68 @@ than it appears to is worse than a job with known red tests in it: the wxGTK
 2 and 3 jobs run these cases, and a GTK4 number that is not comparable with
 theirs is not a number anyone can use.
 
-## Progress update 55: reading theme colours without the deprecated call
+## Progress update 55: a warning traded for a segfault, and traded back
 
-Two of the three deprecation warnings a GTK4 build still printed came from one
-line, `wxGTKLookupThemeColour()`'s `gtk_style_context_lookup_color()` on a
-`gtk_widget_get_style_context()`. Both are deprecated in 4.10, and the earlier
-note in the design doc called this the one query with no replacement at all.
+`wxGTKLookupThemeColour()`'s `gtk_style_context_lookup_color()`, on a
+`gtk_widget_get_style_context()`, is two of the three deprecation warnings a
+GTK4 build prints. The comment on it said GTK4 offers no way to read a
+theme's named colours. That is true of GTK's API and not of GTK: CSS
+resolves the names, and a probe can read one back by installing a provider
+that sets `color` to the name and reading the result with
+`gtk_widget_get_color()`.
 
-There is one, just not an API: CSS resolves the names, so the function now
-installs a provider setting `color` to the name and reads the result back with
-`gtk_widget_get_color()`. What made this take several attempts is that neither
-of the two properties it depends on is documented, and getting either wrong
-fails quietly rather than loudly:
+The reading half works, and was verified: identical colours to the
+deprecated call for every name the port asks for, an identical "no" for a
+name no theme defines, and all 35 `wxSystemSettings::GetColour()` entries
+unchanged. It was pushed on that evidence.
 
-* An off-screen widget's style is computed once, on demand; adding a provider
-  afterwards does not invalidate it. The first three attempts reused the
-  caller's widget and so read the cascade that had been in force before any
-  probe existed -- every colour came back as the widget's unstyled default,
-  and the equality test that was supposed to detect a missing name reported
-  every name as present. The probe widget is now created after its provider.
-* An undefined name is substituted silently: no `parsing-error` signal, and
-  the substitute is an ordinary colour. So the name is asked for through three
-  expressions -- `@name` and two different `mix()`es -- which answer alike
-  only when the name did not resolve.
+**It also segfaulted the GUI suite**, and the verification could not see
+that, because it was a pair of single-purpose programs rather than a suite
+run. A full `test_gui` died inside `gtk_widget_snapshot_child()` after
+roughly a hundred cases, at a point that moved between runs -- 99, 102, 117,
+124, and once before the first case name was printed. `Bg()` and `Border()`
+are called while GTK is measuring, laying out or painting some other widget,
+and the probe installs a provider on the display to ask its question; a
+display-wide style invalidation from inside GTK's own tree walk is not
+something GTK survives.
 
-The second mix is not belt and braces. With one, a name resolving to the
-colour it is mixed with would look undefined, and Adwaita's
-`theme_base_color` is pure white, which is exactly what an undefined name is
-substituted with here.
+Reverted. The deprecated call is back, the comment now says why it stays,
+and the two warnings with it.
 
-Measured against the deprecated call, which is still what the invariants check
-compares to: identical colours for the five names the port asks for,
-identical "no" for a name no theme defines, and all 35
-`wxSystemSettings::GetColour()` entries byte-identical across the two
-implementations. The GTK4 build now has one deprecation warning left, in
-`assertdlg_gtk.cpp`.
+**How long it took to get to that, and why:** three wrong suspects first,
+each of which had to be measured and cleared.
+
+| suspect | how it was cleared |
+|---|---|
+| the three PRs merged an hour earlier (#252, #254, #257) | the crash reproduces at the commit before all three |
+| the instrumentation added to chase #256 | the crash reproduces without it |
+| no window manager on the test display | the crash reproduces with `openbox` running |
+
+Only then a bisect, which named the commit in five steps: every commit
+before it ran all 551 cases, and it did not.
+
+**The lesson is the one already in the working notes, applied to a case that
+did not look like it needed it.** Two purpose-built programs agreed with the
+control on every colour and on the missing name, which is exactly what the
+change was supposed to do -- and neither program could crash, because
+neither ran a widget through a real layout. A verification made only of
+things that cannot fail the way the change fails is not a verification. The
+suite is the only harness here that lays out and paints real widgets in
+bulk, and it is cheap: one run, four minutes.
+
+**What survives, because it is about GTK rather than about this change:**
+`docs/gtk/probes/gtk4-theme-colour-probe.c` and two invariants in
+`build/tools/gtk4-invariants.c`.
+
+* An off-screen widget's style is computed once, on demand, and adding a
+  provider afterwards does not invalidate it. This is A's #245 from the
+  other side: a `wxStaticText` measured by `SetFont()` while hidden keeps the
+  style that measurement computed, and the colour set after it never
+  arrives. Everything else either of us tried -- `queue_draw`,
+  `queue_resize`, provider off and on again, a fresh provider -- leaves it
+  alone. What works is creating the widget after the provider.
+* An undefined CSS colour name is substituted silently, and the substitute
+  does not depend on the expression it appeared in, while a name that
+  resolves does. That is how the probe tells the two apart, and a single
+  `mix()` is not enough: Adwaita's `theme_base_color` is pure white, which is
+  exactly what an undefined name resolves to.

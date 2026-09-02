@@ -8,6 +8,12 @@
  * gtk_widget_get_color(). This program establishes the three things that
  * makes rest on, each against the deprecated call as a control.
  *
+ * wxGTKLookupThemeColour() does NOT do this, and the deprecated call stays.
+ * Bg() and Border() run while GTK is measuring, laying out or painting some
+ * other widget, and installing a provider on the display from there
+ * segfaults GTK inside gtk_widget_snapshot_child(). What is below is a
+ * measurement of GTK, not a description of the library.
+ *
  *   1. A widget that is never shown has its style computed once, on demand.
  *      Adding a provider afterwards does not invalidate it, so a probe widget
  *      has to be created *after* its provider -- reusing one silently answers

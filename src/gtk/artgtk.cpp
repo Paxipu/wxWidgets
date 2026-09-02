@@ -119,8 +119,12 @@ const wxString wxId2Gtk[] = {
     ART(wxART_FIND,             GTK_STOCK_FIND, "edit-find")
     ART(wxART_FIND_AND_REPLACE, GTK_STOCK_FIND_AND_REPLACE, "edit-find-replace")
     ART(wxART_FULL_SCREEN,      GTK_STOCK_FULLSCREEN, "view-fullscreen")
-    ART(wxART_REFRESH,          GTK_STOCK_REFRESH, "gtk-refresh")
-    ART(wxART_STOP,             GTK_STOCK_STOP, "gtk-stop")
+    // The theme names of these two were the GTK stock ids, which no icon theme
+    // has ever provided: they worked only through GTK+ 3's built-in stock
+    // icons, and GTK4 has none, so under it both fell through to wx's own
+    // bitmaps. Measured in docs/gtk/probes/gtk4-icon-names.c.
+    ART(wxART_REFRESH,          GTK_STOCK_REFRESH, "view-refresh")
+    ART(wxART_STOP,             GTK_STOCK_STOP, "process-stop")
 
     ART(wxART_EDIT,             "accessories-text-editor", "accessories-text-editor")
 };

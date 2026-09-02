@@ -5179,3 +5179,39 @@ so the only thing the flag bought was a green tick. A job that measures less
 than it appears to is worse than a job with known red tests in it: the wxGTK
 2 and 3 jobs run these cases, and a GTK4 number that is not comparable with
 theirs is not a number anyone can use.
+
+## Progress update 55: reading theme colours without the deprecated call
+
+Two of the three deprecation warnings a GTK4 build still printed came from one
+line, `wxGTKLookupThemeColour()`'s `gtk_style_context_lookup_color()` on a
+`gtk_widget_get_style_context()`. Both are deprecated in 4.10, and the earlier
+note in the design doc called this the one query with no replacement at all.
+
+There is one, just not an API: CSS resolves the names, so the function now
+installs a provider setting `color` to the name and reads the result back with
+`gtk_widget_get_color()`. What made this take several attempts is that neither
+of the two properties it depends on is documented, and getting either wrong
+fails quietly rather than loudly:
+
+* An off-screen widget's style is computed once, on demand; adding a provider
+  afterwards does not invalidate it. The first three attempts reused the
+  caller's widget and so read the cascade that had been in force before any
+  probe existed -- every colour came back as the widget's unstyled default,
+  and the equality test that was supposed to detect a missing name reported
+  every name as present. The probe widget is now created after its provider.
+* An undefined name is substituted silently: no `parsing-error` signal, and
+  the substitute is an ordinary colour. So the name is asked for through three
+  expressions -- `@name` and two different `mix()`es -- which answer alike
+  only when the name did not resolve.
+
+The second mix is not belt and braces. With one, a name resolving to the
+colour it is mixed with would look undefined, and Adwaita's
+`theme_base_color` is pure white, which is exactly what an undefined name is
+substituted with here.
+
+Measured against the deprecated call, which is still what the invariants check
+compares to: identical colours for the five names the port asks for,
+identical "no" for a name no theme defines, and all 35
+`wxSystemSettings::GetColour()` entries byte-identical across the two
+implementations. The GTK4 build now has one deprecation warning left, in
+`assertdlg_gtk.cpp`.

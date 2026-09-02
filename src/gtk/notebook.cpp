@@ -24,6 +24,7 @@
 #include "wx/fontutil.h"
 
 #include "wx/gtk/private.h"
+#include "wx/gtk/private/gtk3-compat.h"
 #include "wx/gtk/private/image.h"
 #include "wx/gtk/private/log.h"
 #include "wx/gtk/private/stylecontext.h"
@@ -51,7 +52,11 @@ public:
 
 
 extern "C" {
+#ifdef __WXGTK4__
+static void event_after(GtkNotebook*, GtkWidget*, guint, wxNotebook*);
+#else
 static void event_after(GtkNotebook*, GdkEvent*, wxNotebook*);
+#endif
 }
 
 //-----------------------------------------------------------------------------
@@ -87,6 +92,41 @@ switch_page(GtkNotebook* widget, GtkNotebookPage*, int page, wxNotebook* win)
 // "event_after" from m_widget
 //-----------------------------------------------------------------------------
 
+// GTK4 removed the "event-after" signal along with the rest of the
+// GdkEvent-level ones. What this does is undo a page switch the application
+// vetoed, once GTK has finished the switch it started -- deferring to an idle
+// source gives the same "after the current event has been dealt with"
+// guarantee, as in slider.cpp.
+#ifdef __WXGTK4__
+extern "C" {
+static gboolean event_after_idle(void* data);
+
+// Connected to "switch-page", so it takes that signal's parameters: getting
+// this wrong is invisible to the compiler, G_CALLBACK() having cast the type
+// away, and lands the user data in the wrong argument.
+static void event_after(GtkNotebook* widget, GtkWidget*, guint, wxNotebook* win)
+{
+    g_signal_handlers_block_by_func(widget, (void*)event_after, win);
+
+    g_idle_add(event_after_idle, win);
+}
+
+static gboolean event_after_idle(void* data)
+{
+    wxNotebook* const win = static_cast<wxNotebook*>(data);
+    GtkNotebook* const widget = GTK_NOTEBOOK(win->m_widget);
+
+    g_signal_handlers_block_by_func(widget, (void*)switch_page, win);
+
+    // restore previous selection
+    gtk_notebook_set_current_page(widget, win->m_oldSelection);
+
+    g_signal_handlers_unblock_by_func(widget, (void*)switch_page, win);
+
+    return G_SOURCE_REMOVE;
+}
+}
+#else // !__WXGTK4__
 extern "C" {
 static void event_after(GtkNotebook* widget, GdkEvent*, wxNotebook* win)
 {
@@ -99,6 +139,7 @@ static void event_after(GtkNotebook* widget, GdkEvent*, wxNotebook* win)
     g_signal_handlers_unblock_by_func(widget, (void*)switch_page, win);
 }
 }
+#endif // __WXGTK4__/!__WXGTK4__
 
 //-----------------------------------------------------------------------------
 // InsertChild callback for wxNotebook
@@ -187,7 +228,15 @@ bool wxNotebook::Create(wxWindow *parent, wxWindowID id,
                       G_CALLBACK(switch_page_after), this);
     g_signal_handlers_block_by_func(m_widget, (void*)switch_page_after, this);
 
+#ifdef __WXGTK4__
+    // "event-after" is gone. The veto path only needs something which runs
+    // once GTK has settled, and the handler arms an idle source for that; a
+    // second, blocked handler on the same page-switch signal is what gets it
+    // there, keeping the existing block/unblock protocol unchanged.
+    g_signal_connect_after(m_widget, "switch-page", G_CALLBACK(event_after), this);
+#else
     g_signal_connect(m_widget, "event_after", G_CALLBACK(event_after), this);
+#endif
     g_signal_handlers_block_by_func(m_widget, (void*)event_after, this);
 
     m_parent->DoAddChild( this );
@@ -289,15 +338,23 @@ bool wxNotebook::SetPageImage( size_t page, int image )
         if (pageData->m_image == nullptr)
         {
             pageData->m_image = wxGtkImage::New();
-            gtk_widget_show(pageData->m_image);
+            gtk_widget_set_visible(pageData->m_image, TRUE);
             gtk_box_pack_start(GTK_BOX(pageData->m_box),
                 pageData->m_image, false, false, m_padding);
         }
+#ifdef __WXGTK4__
+        wxGtkImage::Set(pageData->m_image, bundle);
+#else
         WX_GTK_IMAGE(pageData->m_image)->Set(bundle);
+#endif
     }
     else if (pageData->m_image)
     {
+#ifdef __WXGTK4__
+        gtk_box_remove(GTK_BOX(pageData->m_box), pageData->m_image);
+#else
         gtk_container_remove(GTK_CONTAINER(pageData->m_box), pageData->m_image);
+#endif
         pageData->m_image = nullptr;
     }
     pageData->m_imageIndex = image;
@@ -318,7 +375,51 @@ wxSize wxNotebook::CalcSizeFromPage(const wxSize& sizePage) const
     }
 
     wxSize sizeFull(sizePage);
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    // The GTK3 code below reconstructs the notebook's chrome by summing the
+    // border, margin and padding of each CSS node involved, and reads the tab
+    // node's minimum size with gtk_style_context_get(), which GTK4 removed
+    // along with the rest of the varargs style query API.
+    //
+    // Measuring a real notebook answers the same question directly and takes
+    // every node's contribution into account by construction: a notebook whose
+    // only page has no size at all is exactly the chrome we are looking for.
+    // The same reasoning as for GetScrollbarWidth() in settings.cpp.
+    {
+        // Size of the page in the scratch notebook. Any value does, as it is
+        // subtracted out again; it only has to be large enough that the page
+        // and not the tab strip is what decides the notebook's minimum size.
+        const int pageSize = 200;
+
+        GtkWidget* const nb = gtk_notebook_new();
+        g_object_ref_sink(nb);
+
+        gtk_notebook_set_tab_pos(GTK_NOTEBOOK(nb),
+            gtk_notebook_get_tab_pos(GTK_NOTEBOOK(m_widget)));
+
+        GtkWidget* const page = gtk_drawing_area_new();
+        gtk_widget_set_size_request(page, pageSize, pageSize);
+        gtk_notebook_append_page(GTK_NOTEBOOK(nb), page, gtk_label_new(""));
+
+        int wTabs = 0, hTabs = 0, wBare = 0, hBare = 0;
+        gtk_widget_measure(nb, GTK_ORIENTATION_HORIZONTAL, -1, &wTabs, nullptr, nullptr, nullptr);
+        gtk_widget_measure(nb, GTK_ORIENTATION_VERTICAL, -1, &hTabs, nullptr, nullptr, nullptr);
+
+        gtk_notebook_set_show_tabs(GTK_NOTEBOOK(nb), FALSE);
+        gtk_widget_measure(nb, GTK_ORIENTATION_HORIZONTAL, -1, &wBare, nullptr, nullptr, nullptr);
+        gtk_widget_measure(nb, GTK_ORIENTATION_VERTICAL, -1, &hBare, nullptr, nullptr, nullptr);
+
+        g_object_unref(nb);
+
+        // With the tab strip hidden, whatever surrounds the page is the frame.
+        sizeFull.IncBy(wxMax(wBare - pageSize, 0), wxMax(hBare - pageSize, 0));
+
+        // And what showing it adds back is the room the smallest possible tab
+        // needs, which is what the GTK3 code below obtains by summing the tab
+        // node's own margin, border and padding on top of its minimum size.
+        sizeTabMax.IncTo(wxSize(wxMax(wTabs - wBare, 0), wxMax(hTabs - hBare, 0)));
+    }
+#elif defined(__WXGTK3__)
     GtkBorder b;
     if (gtk_check_version(3,20,0) == nullptr)
     {
@@ -396,6 +497,18 @@ void wxNotebook::SetPadding( const wxSize &padding )
     for (size_t i = GetPageCount(); i--;)
     {
         wxGtkNotebookPage* pageData = GetNotebookPage(i);
+#ifdef __WXGTK4__
+        // GtkBox child packing became plain widget properties: the per-child
+        // padding is now the child's own start/end margin along the box's
+        // orientation, which for a notebook tab is always horizontal.
+        if (pageData->m_image)
+        {
+            gtk_widget_set_margin_start(pageData->m_image, m_padding);
+            gtk_widget_set_margin_end(pageData->m_image, m_padding);
+        }
+        gtk_widget_set_margin_start(pageData->m_label, m_padding);
+        gtk_widget_set_margin_end(pageData->m_label, m_padding);
+#else
         if (pageData->m_image)
         {
             gtk_box_set_child_packing(GTK_BOX(pageData->m_box),
@@ -403,6 +516,7 @@ void wxNotebook::SetPadding( const wxSize &padding )
         }
         gtk_box_set_child_packing(GTK_BOX(pageData->m_box),
             pageData->m_label, false, false, m_padding, GTK_PACK_END);
+#endif
     }
 }
 
@@ -493,7 +607,11 @@ bool wxNotebook::InsertPage( size_t position,
     if ( bundle.IsOk() )
     {
         pageData->m_image = wxGtkImage::New();
+#ifdef __WXGTK4__
+        wxGtkImage::Set(pageData->m_image, bundle);
+#else
         WX_GTK_IMAGE(pageData->m_image)->Set(bundle);
+#endif
         gtk_box_pack_start(GTK_BOX(pageData->m_box),
             pageData->m_image, false, false, m_padding);
     }
@@ -508,15 +626,38 @@ bool wxNotebook::InsertPage( size_t position,
     pageData->m_text = text;
     pageData->m_label = gtk_label_new(RemoveMnemonics(text).utf8_str());
 
+#ifdef __WXGTK4__
+    // gtk_label_set_angle() is gone; a label is rotated by rotating the
+    // Pango layout it renders, which is what that function did internally.
+    if (m_windowStyle & (wxBK_LEFT | wxBK_RIGHT))
+    {
+        PangoLayout* const layout = gtk_label_get_layout(GTK_LABEL(pageData->m_label));
+        PangoContext* const context = pango_layout_get_context(layout);
+
+        pango_context_set_base_gravity(context, PANGO_GRAVITY_AUTO);
+        pango_context_set_gravity_hint(context, PANGO_GRAVITY_HINT_STRONG);
+
+        PangoMatrix matrix = PANGO_MATRIX_INIT;
+        pango_matrix_rotate(&matrix, m_windowStyle & wxBK_LEFT ? 90 : 270);
+        pango_context_set_matrix(context, &matrix);
+    }
+#else
     if (m_windowStyle & wxBK_LEFT)
         gtk_label_set_angle(GTK_LABEL(pageData->m_label), 90);
     if (m_windowStyle & wxBK_RIGHT)
         gtk_label_set_angle(GTK_LABEL(pageData->m_label), 270);
+#endif
 
     gtk_box_pack_end(GTK_BOX(pageData->m_box),
         pageData->m_label, false, false, m_padding);
 
+#ifdef __WXGTK4__
+    // Widgets are visible by default under GTK4, so there is nothing to show
+    // recursively any more.
+    gtk_widget_set_visible(pageData->m_box, TRUE);
+#else
     gtk_widget_show_all(pageData->m_box);
+#endif
 
     // Inserting the page may generate selection changing events that are not
     // expected here: we will send them ourselves below if necessary.
@@ -575,7 +716,13 @@ int wxNotebook::HitTest(const wxPoint& pt, long *flags) const
         if (!gtk_widget_get_child_visible(box))
             continue;
 
+#ifdef __WXGTK4__
+        // GtkContainer's border width became the widget's own margins, which
+        // are what the tab box is given in InsertPage().
+        const gint border = gtk_widget_get_margin_start(box);
+#else
         const gint border = gtk_container_get_border_width(GTK_CONTAINER(box));
+#endif
 
         if ( IsPointInsideWidget(pt, box, x, y, border) )
         {
@@ -652,6 +799,7 @@ void wxNotebook::DoApplyWidgetStyle(GtkRcStyle *style)
         GTKApplyStyle(GetNotebookPage(i)->m_label, style);
 }
 
+#ifndef __WXGTK4__
 GdkWindow *wxNotebook::GTKGetWindow(wxArrayGdkWindows& windows) const
 {
     windows.push_back(gtk_widget_get_window(m_widget));
@@ -665,6 +813,7 @@ GdkWindow *wxNotebook::GTKGetWindow(wxArrayGdkWindows& windows) const
 
     return nullptr;
 }
+#endif // !__WXGTK4__
 
 // static
 wxVisualAttributes

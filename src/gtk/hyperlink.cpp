@@ -131,9 +131,18 @@ bool wxHyperlinkCtrl::Create(wxWindow *parent, wxWindowID id,
         else if (HasFlag(wxHL_ALIGN_RIGHT))
             x_alignment = 1;
 
+#ifdef __WXGTK4__
+        // gtk_button_set_alignment() is gone: a button's child is aligned with
+        // the ordinary halign property now.
+        gtk_widget_set_halign(m_widget,
+                              x_alignment < 0.25f ? GTK_ALIGN_START
+                            : x_alignment > 0.75f ? GTK_ALIGN_END
+                                                  : GTK_ALIGN_CENTER);
+#else
         wxGCC_WARNING_SUPPRESS(deprecated-declarations)
         gtk_button_set_alignment(GTK_BUTTON(m_widget), x_alignment, 0.5f);
         wxGCC_WARNING_RESTORE()
+#endif
 
         // set to non empty strings both the url and the label
         SetURL(url.empty() ? label : url);
@@ -237,6 +246,16 @@ wxColour wxHyperlinkCtrl::GetVisitedColour() const
     wxColour ret;
     if ( UseNative() )
     {
+#ifdef __WXGTK4__
+        // GdkColor, gtk_widget_style_get() and the "visited-link-color" style
+        // property are all gone under GTK4: link colouring moved to CSS, where
+        // it is applied to the link element rather than exposed as a queryable
+        // property. Fall back to the same hard-coded value the GTK3 path uses
+        // when the theme defines nothing, since there is no longer anything to
+        // query. Known fidelity gap: a theme with custom visited-link colours
+        // will not be followed.
+        ret = wxColour(0x55, 0x1a, 0x8b);
+#else
         GdkColor* link_color;
         GdkColor color = { 0, 0x5555, 0x1a1a, 0x8b8b };
 
@@ -251,6 +270,7 @@ wxColour wxHyperlinkCtrl::GetVisitedColour() const
         }
         wxGCC_WARNING_RESTORE()
         ret = wxColour(color);
+#endif
     }
     else
         ret = base_type::GetVisitedColour();
@@ -301,10 +321,12 @@ wxColour wxHyperlinkCtrl::GetHoverColour() const
     return wxGenericHyperlinkCtrl::GetHoverColour();
 }
 
+#ifndef __WXGTK4__
 GdkWindow *wxHyperlinkCtrl::GTKGetWindow(wxArrayGdkWindows& windows) const
 {
     return UseNative() ? gtk_button_get_event_window(GTK_BUTTON(m_widget))
                        : wxGenericHyperlinkCtrl::GTKGetWindow(windows);
 }
+#endif // !__WXGTK4__
 
 #endif // wxUSE_HYPERLINKCTRL && GTK+ 2.10+

@@ -68,10 +68,17 @@ bool wxGauge::Create( wxWindow *parent,
         GTKApplyCssStyle(provider, buf);
 
         int min;
+#ifdef __WXGTK4__
+        if (isVertical)
+            gtk_widget_measure(m_widget, GTK_ORIENTATION_HORIZONTAL, -1, &min, nullptr, nullptr, nullptr);
+        else
+            gtk_widget_measure(m_widget, GTK_ORIENTATION_VERTICAL, -1, &min, nullptr, nullptr, nullptr);
+#else
         if (isVertical)
             gtk_widget_get_preferred_width(m_widget, &min, nullptr);
         else
             gtk_widget_get_preferred_height(m_widget, &min, nullptr);
+#endif
 
         // Adjust the min{width,height} to get the right overall size
         wh -= min - wh;
@@ -130,9 +137,16 @@ void wxGauge::Pulse()
 wxVisualAttributes wxGauge::GetDefaultAttributes() const
 {
     // Visible gauge colours use a different colour state
+    // (GTK_STATE_ACTIVE under GTK3, ignored by the GTK4 implementation of
+    // GetDefaultAttributesFromGTKWidget(), which ties into the still-open
+    // background-colour fidelity gap noted in control.cpp)
     return GetDefaultAttributesFromGTKWidget(m_widget,
                                              UseGTKStyleBase(),
+#ifdef __WXGTK4__
+                                             GTK_STATE_FLAG_ACTIVE);
+#else
                                              GTK_STATE_ACTIVE);
+#endif
 
 }
 
@@ -141,7 +155,11 @@ wxVisualAttributes
 wxGauge::GetClassDefaultAttributes(wxWindowVariant WXUNUSED(variant))
 {
     return GetDefaultAttributesFromGTKWidget(gtk_progress_bar_new(),
+#ifdef __WXGTK4__
+                                             false, GTK_STATE_FLAG_ACTIVE);
+#else
                                              false, GTK_STATE_ACTIVE);
+#endif
 }
 
 #endif // wxUSE_GAUGE

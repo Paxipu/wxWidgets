@@ -73,6 +73,12 @@ public:
     bool m_needThumbRelease;
     GtkWidget *m_scale;
 
+#ifdef __WXGTK4__
+    // Id of the idle source used to run the code which GTK3 ran from the
+    // "event-after" signal, or 0 if none is pending, see slider.cpp.
+    unsigned m_afterReleaseIdle;
+#endif // __WXGTK4__
+
 protected:
     virtual wxSize DoGetBestSize() const override;
 
@@ -82,7 +88,9 @@ protected:
     // Note the following member is not used in GTK+2 < 2.16.
     int m_tickFreq;
 
+#ifndef __WXGTK4__
     virtual GdkWindow *GTKGetWindow(wxArrayGdkWindows& windows) const override;
+#endif // !__WXGTK4__
 
     // set the slider value unconditionally
     void GTKSetValue(int value);

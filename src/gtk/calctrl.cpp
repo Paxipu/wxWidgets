@@ -26,11 +26,26 @@ static void gtk_day_selected_callback(GtkWidget *WXUNUSED(widget),
     cal->GTKGenerateEvent(wxEVT_CALENDAR_SEL_CHANGED);
 }
 
+#ifdef __WXGTK4__
+// GtkCalendar has no "day-selected-double-click" signal any more, so the
+// double click is detected directly. A gesture reports the press count, so
+// there is nothing to keep track of.
+static void gtk_calendar_double_click_callback(GtkGestureClick* WXUNUSED(gesture),
+                                               int nPress,
+                                               double WXUNUSED(x),
+                                               double WXUNUSED(y),
+                                               wxGtkCalendarCtrl *cal)
+{
+    if ( nPress == 2 )
+        cal->GTKGenerateEvent(wxEVT_CALENDAR_DOUBLECLICKED);
+}
+#else
 static void gtk_day_selected_double_click_callback(GtkWidget *WXUNUSED(widget),
                                                    wxGtkCalendarCtrl *cal)
 {
     cal->GTKGenerateEvent(wxEVT_CALENDAR_DOUBLECLICKED);
 }
+#endif // __WXGTK4__/!__WXGTK4__
 
 static void gtk_month_changed_callback(GtkWidget *WXUNUSED(widget),
                                        wxGtkCalendarCtrl *cal)
@@ -78,20 +93,51 @@ bool wxGtkCalendarCtrl::Create(wxWindow *parent,
     g_object_ref(m_widget);
     SetDate(date.IsValid() ? date : wxDateTime::Today());
 
+#ifndef __WXGTK4__
     if (style & wxCAL_NO_MONTH_CHANGE)
         g_object_set (G_OBJECT (m_widget), "no-month-change", true, nullptr);
+#else
+    // GtkCalendar's "no-month-change" property is gone under GTK4 and has no
+    // replacement, so wxCAL_NO_MONTH_CHANGE cannot be honoured: the month and
+    // year arrows stay usable. Setting it by name would not have worked
+    // either -- g_object_set() on a property that does not exist is a runtime
+    // warning, not an error, and does nothing. See docs/gtk/gtk4-status.md.
+#endif // !__WXGTK4__/__WXGTK4__
     if (style & wxCAL_SHOW_WEEK_NUMBERS)
         g_object_set (G_OBJECT (m_widget), "show-week-numbers", true, nullptr);
 
     g_signal_connect_after(m_widget, "day-selected",
                            G_CALLBACK (gtk_day_selected_callback),
                            this);
+#ifdef __WXGTK4__
+    // GtkCalendar lost "day-selected-double-click" -- activating a day is
+    // reported by the double click itself now, so that is what is watched for.
+    {
+        GtkGesture* const click = gtk_gesture_click_new();
+        g_signal_connect(click, "pressed",
+                         G_CALLBACK (gtk_calendar_double_click_callback), this);
+        gtk_widget_add_controller(m_widget, GTK_EVENT_CONTROLLER(click));
+    }
+
+    // It also lost "month-changed", but the four signals below, which say
+    // exactly how the month changed, are all still there and between them
+    // cover every way it can.
+    g_signal_connect_after(m_widget, "prev-month",
+                           G_CALLBACK (gtk_month_changed_callback), this);
+    g_signal_connect_after(m_widget, "next-month",
+                           G_CALLBACK (gtk_month_changed_callback), this);
+    g_signal_connect_after(m_widget, "prev-year",
+                           G_CALLBACK (gtk_month_changed_callback), this);
+    g_signal_connect_after(m_widget, "next-year",
+                           G_CALLBACK (gtk_month_changed_callback), this);
+#else // !__WXGTK4__
     g_signal_connect_after(m_widget, "day-selected-double-click",
                            G_CALLBACK (gtk_day_selected_double_click_callback),
                            this);
     g_signal_connect_after(m_widget, "month-changed",
                            G_CALLBACK (gtk_month_changed_callback),
                            this);
+#endif // __WXGTK4__/!__WXGTK4__
 
     // connect callbacks that send deprecated events
     g_signal_connect_after(m_widget, "prev-month",
@@ -184,12 +230,19 @@ wxGtkCalendarCtrl::GetDateRange(wxDateTime *lowerdate,
 
 bool wxGtkCalendarCtrl::EnableMonthChange(bool enable)
 {
+#ifdef __WXGTK4__
+    // Not supported: see the comment in Create(). Say so rather than claiming
+    // success, so that callers can fall back to the generic implementation.
+    wxUnusedVar(enable);
+    return false;
+#else
     if ( !wxCalendarCtrlBase::EnableMonthChange(enable) )
         return false;
 
     g_object_set (G_OBJECT (m_widget), "no-month-change", !enable, nullptr);
 
     return true;
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 
@@ -209,8 +262,17 @@ bool wxGtkCalendarCtrl::SetDate(const wxDateTime& date)
     int year = date.GetYear();
     int month = date.GetMonth();
     int day = date.GetDay();
+#ifdef __WXGTK4__
+    // gtk_calendar_select_month() is gone under GTK4 -- gtk_calendar_
+    // select_day() now takes a full GDateTime (GLib months are 1-based,
+    // unlike wxDateTime::Month/GTK3's 0-based gtk_calendar_select_month()).
+    GDateTime* const dt = g_date_time_new_local(year, month + 1, day, 0, 0, 0);
+    gtk_calendar_select_day(GTK_CALENDAR(m_widget), dt);
+    g_date_time_unref(dt);
+#else
     gtk_calendar_select_month(GTK_CALENDAR(m_widget), month, year);
     gtk_calendar_select_day(GTK_CALENDAR(m_widget), day);
+#endif
 
     g_signal_handlers_unblock_by_func( m_widget,
         (gpointer) gtk_month_changed_callback, this);
@@ -223,7 +285,18 @@ bool wxGtkCalendarCtrl::SetDate(const wxDateTime& date)
 wxDateTime wxGtkCalendarCtrl::GetDate() const
 {
     guint year, monthGTK, day;
+#ifdef __WXGTK4__
+    // gtk_calendar_get_date() returns a GDateTime under GTK4 instead of
+    // filling in separate out-params; GLib months are 1-based, unlike
+    // wxDateTime::Month/GTK3's 0-based out-param.
+    GDateTime* const dt = gtk_calendar_get_date(GTK_CALENDAR(m_widget));
+    year = guint(g_date_time_get_year(dt));
+    monthGTK = guint(g_date_time_get_month(dt) - 1);
+    day = guint(g_date_time_get_day_of_month(dt));
+    g_date_time_unref(dt);
+#else
     gtk_calendar_get_date(GTK_CALENDAR(m_widget), &year, &monthGTK, &day);
+#endif
 
     // GTK may return an invalid date, this happens at least when switching the
     // month (or the year in case of February in a leap year) and the new month

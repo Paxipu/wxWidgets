@@ -41,7 +41,7 @@ protected:
 
 private:
     // this does (each) half of AdjustScrollbars() work
-    void DoAdjustScrollbar(GtkRange* range,
+    void DoAdjustScrollbar(wxGtkScrollbar* range,
                            int pixelsPerLine,
                            int winSize,
                            int virtSize,

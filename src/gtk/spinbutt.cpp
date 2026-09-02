@@ -14,6 +14,10 @@
 #include "wx/spinbutt.h"
 
 #include "wx/gtk/private/wrapgtk.h"
+#ifdef __WXGTK3__
+    #include "wx/gtk/private.h"
+    #include "wx/gtk/private/stylecontext.h"
+#endif
 
 //-----------------------------------------------------------------------------
 // data
@@ -117,10 +121,18 @@ bool wxSpinButton::Create(wxWindow *parent,
     m_widget = gtk_spin_button_new_with_range(0, 100, 1);
     g_object_ref(m_widget);
 
+#ifdef __WXGTK4__
+    // GtkSpinButton no longer subclasses GtkEntry under GTK4 (it now just
+    // implements the GtkEditable interface), and the width-chars setters
+    // moved from GtkEntry to that interface.
+    gtk_editable_set_width_chars(GTK_EDITABLE(m_widget), 0);
+    gtk_editable_set_max_width_chars(GTK_EDITABLE(m_widget), 0);
+#else
     gtk_entry_set_width_chars(GTK_ENTRY(m_widget), 0);
 #if GTK_CHECK_VERSION(3,12,0)
     if (gtk_check_version(3,12,0) == nullptr)
         gtk_entry_set_max_width_chars(GTK_ENTRY(m_widget), 0);
+#endif
 #endif
 #ifdef __WXGTK3__
     if (gtk_check_version(3,20,0) == nullptr)
@@ -231,6 +243,7 @@ void wxSpinButton::GtkEnableEvents() const
         (void*)gtk_value_changed, const_cast<wxSpinButton*>(this));
 }
 
+#ifndef __WXGTK4__
 GdkWindow *wxSpinButton::GTKGetWindow(wxArrayGdkWindows& WXUNUSED_IN_GTK2(windows)) const
 {
 #ifdef __WXGTK3__
@@ -240,14 +253,24 @@ GdkWindow *wxSpinButton::GTKGetWindow(wxArrayGdkWindows& WXUNUSED_IN_GTK2(window
     return GTK_SPIN_BUTTON(m_widget)->panel;
 #endif
 }
+#endif // !__WXGTK4__
 
 wxSize wxSpinButton::DoGetBestSize() const
 {
     wxSize best = base_type::DoGetBestSize();
 #ifdef __WXGTK3__
-    GtkStyleContext* sc = gtk_widget_get_style_context(m_widget);
     GtkBorder pad = { 0, 0, 0, 0 };
+#ifdef __WXGTK4__
+    // Measured on the scratch spin button rather than on this one: the
+    // measurement requeues the widget's resize, and doing that to a live
+    // widget from inside DoGetBestSize() asks the layout to run again, which
+    // calls DoGetBestSize() again. Padding is the theme's for the widget type
+    // in any case. See stylecontext.h.
+    wxGTKGetStyleMetrics(wxGTKPrivate::GetSpinButtonWidget(), &pad, nullptr);
+#else
+    GtkStyleContext* sc = gtk_widget_get_style_context(m_widget);
     gtk_style_context_get_padding(sc, gtk_style_context_get_state(sc), &pad);
+#endif
     best.x -= pad.left + pad.right;
 #else
     gtk_widget_ensure_style(m_widget);

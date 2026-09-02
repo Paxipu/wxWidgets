@@ -18,6 +18,8 @@
 #include "wx/artprov.h"
 
 #include "wx/gtk/private.h"
+#include "wx/gtk/private/object.h"
+#include "wx/gtk/private/string.h"
 
 #if !GTK_CHECK_VERSION(2,8,0)
     #define GTK_STOCK_FULLSCREEN "gtk-fullscreen"
@@ -117,8 +119,12 @@ const wxString wxId2Gtk[] = {
     ART(wxART_FIND,             GTK_STOCK_FIND, "edit-find")
     ART(wxART_FIND_AND_REPLACE, GTK_STOCK_FIND_AND_REPLACE, "edit-find-replace")
     ART(wxART_FULL_SCREEN,      GTK_STOCK_FULLSCREEN, "view-fullscreen")
-    ART(wxART_REFRESH,          GTK_STOCK_REFRESH, "gtk-refresh")
-    ART(wxART_STOP,             GTK_STOCK_STOP, "gtk-stop")
+    // The theme names of these two were the GTK stock ids, which no icon theme
+    // has ever provided: they worked only through GTK+ 3's built-in stock
+    // icons, and GTK4 has none, so under it both fell through to wx's own
+    // bitmaps. Measured in docs/gtk/probes/gtk4-icon-names.c.
+    ART(wxART_REFRESH,          GTK_STOCK_REFRESH, "view-refresh")
+    ART(wxART_STOP,             GTK_STOCK_STOP, "process-stop")
 
     ART(wxART_EDIT,             "accessories-text-editor", "accessories-text-editor")
 };
@@ -143,47 +149,97 @@ wxString wxArtIDToStock(const wxArtID& id)
     return ret;
 }
 
-GtkIconSize ArtClientToIconSize(const wxArtClient& client)
+// GTK4 removed the named icon sizes: only GTK_ICON_SIZE_INHERIT/NORMAL/LARGE
+// are left, with no way to map them to pixels, gtk_icon_size_lookup() having
+// been removed along with them. So use plain pixel sizes there instead, taking
+// the values GTK+ 3 uses by default for the sizes wx cares about.
+#ifdef __WXGTK4__
+
+typedef int wxGtkIconSize;
+
+#define wxGTK_ICON_SIZE_INVALID       0
+#define wxGTK_ICON_SIZE_MENU          16
+#define wxGTK_ICON_SIZE_SMALL_TOOLBAR 16
+#define wxGTK_ICON_SIZE_LARGE_TOOLBAR 24
+#define wxGTK_ICON_SIZE_BUTTON        16
+#define wxGTK_ICON_SIZE_DND           32
+#define wxGTK_ICON_SIZE_DIALOG        48
+
+inline void wxGtkIconSizeToPixels(wxGtkIconSize size, gint* width, gint* height)
 {
-    if (client == wxART_TOOLBAR)
-        return GTK_ICON_SIZE_LARGE_TOOLBAR;
-    else if (client == wxART_MENU || client == wxART_FRAME_ICON)
-        return GTK_ICON_SIZE_MENU;
-    else if (client == wxART_CMN_DIALOG || client == wxART_MESSAGE_BOX)
-        return GTK_ICON_SIZE_DIALOG;
-    else if (client == wxART_BUTTON)
-        return GTK_ICON_SIZE_BUTTON;
-    else
-        return GTK_ICON_SIZE_INVALID; // this is arbitrary
+    *width =
+    *height = size;
 }
 
-GtkIconSize FindClosestIconSize(const wxSize& size)
+inline GtkIconTheme* wxGtkGetIconTheme()
+{
+    return gtk_icon_theme_get_for_display(gdk_display_get_default());
+}
+
+#else // !__WXGTK4__
+
+typedef GtkIconSize wxGtkIconSize;
+
+#define wxGTK_ICON_SIZE_INVALID       GTK_ICON_SIZE_INVALID
+#define wxGTK_ICON_SIZE_MENU          GTK_ICON_SIZE_MENU
+#define wxGTK_ICON_SIZE_SMALL_TOOLBAR GTK_ICON_SIZE_SMALL_TOOLBAR
+#define wxGTK_ICON_SIZE_LARGE_TOOLBAR GTK_ICON_SIZE_LARGE_TOOLBAR
+#define wxGTK_ICON_SIZE_BUTTON        GTK_ICON_SIZE_BUTTON
+#define wxGTK_ICON_SIZE_DND           GTK_ICON_SIZE_DND
+#define wxGTK_ICON_SIZE_DIALOG        GTK_ICON_SIZE_DIALOG
+
+inline void wxGtkIconSizeToPixels(wxGtkIconSize size, gint* width, gint* height)
+{
+    gtk_icon_size_lookup(size, width, height);
+}
+
+// Note that there is deliberately no wxGtkGetIconTheme() here: the GTK+ 3 code
+// below uses gtk_icon_theme_get_default() directly, so defining one would just
+// be an unused function, which clang diagnoses.
+
+#endif // __WXGTK4__/!__WXGTK4__
+
+wxGtkIconSize ArtClientToIconSize(const wxArtClient& client)
+{
+    if (client == wxART_TOOLBAR)
+        return wxGTK_ICON_SIZE_LARGE_TOOLBAR;
+    else if (client == wxART_MENU || client == wxART_FRAME_ICON)
+        return wxGTK_ICON_SIZE_MENU;
+    else if (client == wxART_CMN_DIALOG || client == wxART_MESSAGE_BOX)
+        return wxGTK_ICON_SIZE_DIALOG;
+    else if (client == wxART_BUTTON)
+        return wxGTK_ICON_SIZE_BUTTON;
+    else
+        return wxGTK_ICON_SIZE_INVALID; // this is arbitrary
+}
+
+wxGtkIconSize FindClosestIconSize(const wxSize& size)
 {
     #define NUM_SIZES 6
     static struct
     {
-        GtkIconSize icon;
+        wxGtkIconSize icon;
         gint x, y;
     } s_sizes[NUM_SIZES];
     static bool s_sizesInitialized = false;
 
     if (!s_sizesInitialized)
     {
-        s_sizes[0].icon = GTK_ICON_SIZE_MENU;
-        s_sizes[1].icon = GTK_ICON_SIZE_SMALL_TOOLBAR;
-        s_sizes[2].icon = GTK_ICON_SIZE_LARGE_TOOLBAR;
-        s_sizes[3].icon = GTK_ICON_SIZE_BUTTON;
-        s_sizes[4].icon = GTK_ICON_SIZE_DND;
-        s_sizes[5].icon = GTK_ICON_SIZE_DIALOG;
+        s_sizes[0].icon = wxGTK_ICON_SIZE_MENU;
+        s_sizes[1].icon = wxGTK_ICON_SIZE_SMALL_TOOLBAR;
+        s_sizes[2].icon = wxGTK_ICON_SIZE_LARGE_TOOLBAR;
+        s_sizes[3].icon = wxGTK_ICON_SIZE_BUTTON;
+        s_sizes[4].icon = wxGTK_ICON_SIZE_DND;
+        s_sizes[5].icon = wxGTK_ICON_SIZE_DIALOG;
         for ( auto& iconSize : s_sizes )
         {
-            gtk_icon_size_lookup(iconSize.icon,
-                                 &iconSize.x, &iconSize.y);
+            wxGtkIconSizeToPixels(iconSize.icon,
+                                  &iconSize.x, &iconSize.y);
         }
         s_sizesInitialized = true;
     }
 
-    GtkIconSize best = GTK_ICON_SIZE_DIALOG; // presumably largest
+    wxGtkIconSize best = wxGTK_ICON_SIZE_DIALOG; // presumably largest
     unsigned distance = INT_MAX;
     for ( auto& iconSize : s_sizes )
     {
@@ -241,6 +297,37 @@ GdkPixbuf *CreateStockIcon(const char *stockid, GtkIconSize size)
 
 GdkPixbuf *CreateThemeIcon(const char *iconname, int size)
 {
+#ifdef __WXGTK4__
+    // gtk_icon_theme_load_icon() is gone: GTK4 looks an icon up as a
+    // GtkIconPaintable, which is meant to be drawn rather than turned into
+    // pixels, so go through the file it was loaded from to get a pixbuf.
+    GtkIconTheme* const theme = wxGtkGetIconTheme();
+
+    // Unlike the GTK+ 3 function, the lookup below never fails: it falls back
+    // to the "missing image" icon, which is not what the callers expect.
+    if ( !gtk_icon_theme_has_icon(theme, iconname) )
+        return nullptr;
+
+    wxGtkObject<GtkIconPaintable> paintable
+    (
+        gtk_icon_theme_lookup_icon(theme, iconname, nullptr, size, 1,
+                                   GTK_TEXT_DIR_NONE, GtkIconLookupFlags(0))
+    );
+    if ( !paintable )
+        return nullptr;
+
+    wxGtkObject<GFile> file(gtk_icon_paintable_get_file(paintable));
+    if ( !file )
+        return nullptr;
+
+    // The icon may live in a resource rather than in a real file, in which
+    // case there is no path and we can't load it this way.
+    wxGtkString path(g_file_get_path(file));
+    if ( !path )
+        return nullptr;
+
+    return gdk_pixbuf_new_from_file_at_size(path, size, size, nullptr);
+#else
     return gtk_icon_theme_load_icon
            (
                gtk_icon_theme_get_default(),
@@ -249,12 +336,13 @@ GdkPixbuf *CreateThemeIcon(const char *iconname, int size)
                (GtkIconLookupFlags)0,
                nullptr
            );
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 
 // creates either stock or theme icon
 GdkPixbuf *CreateGtkIcon(const char *icon_name,
-                         GtkIconSize stock_size, const wxSize& pixel_size)
+                         wxGtkIconSize stock_size, const wxSize& pixel_size)
 {
 #ifndef __WXGTK4__
     // try stock GTK+ icon first
@@ -266,7 +354,7 @@ GdkPixbuf *CreateGtkIcon(const char *icon_name,
     // if that fails, try theme icon
     wxSize size(pixel_size);
     if ( pixel_size == wxDefaultSize )
-        gtk_icon_size_lookup(stock_size, &size.x, &size.y);
+        wxGtkIconSizeToPixels(stock_size, &size.x, &size.y);
     return CreateThemeIcon(icon_name, size.x);
 }
 
@@ -301,12 +389,12 @@ wxBitmap wxGTK2ArtProvider::CreateBitmap(const wxArtID& id,
 {
     const wxString stockid = wxArtIDToStock(id);
 
-    GtkIconSize stocksize = (size == wxDefaultSize) ?
+    wxGtkIconSize stocksize = (size == wxDefaultSize) ?
                                 ArtClientToIconSize(client) :
                                 FindClosestIconSize(size);
     // we must have some size, this is arbitrary
-    if (stocksize == GTK_ICON_SIZE_INVALID)
-        stocksize = GTK_ICON_SIZE_BUTTON;
+    if (stocksize == wxGTK_ICON_SIZE_INVALID)
+        stocksize = wxGTK_ICON_SIZE_BUTTON;
 
     return wxBitmap(CreateGtkIcon(stockid.utf8_str(), stocksize, size));
 }
@@ -344,6 +432,18 @@ wxGTK2ArtProvider::CreateIconBundle(const wxArtID& id,
 #endif // !__WXGTK4__
 
     // otherwise try icon themes
+#ifdef __WXGTK4__
+    // gtk_icon_theme_get_icon_sizes() is gone and GTK4 offers nothing telling
+    // us which sizes an icon is actually available in, so just ask for the
+    // standard ones and let the lookup scale as needed.
+    static const gint s_bundleSizes[] = { 16, 24, 32, 48, 64 };
+
+    if ( !gtk_icon_theme_has_icon(wxGtkGetIconTheme(), stockid.utf8_str()) )
+        return {};
+
+    const gint* first = s_bundleSizes;
+    const gint* last = s_bundleSizes + WXSIZEOF(s_bundleSizes);
+#else
     wxGlibPtr<gint> sizes(gtk_icon_theme_get_icon_sizes
                   (
                       gtk_icon_theme_get_default(),
@@ -356,6 +456,7 @@ wxGTK2ArtProvider::CreateIconBundle(const wxArtID& id,
     const gint* last = first;
     while ( *last )
         last++;
+#endif // __WXGTK4__/!__WXGTK4__
 
     return DoCreateIconBundle
                           (
@@ -373,11 +474,11 @@ wxGTK2ArtProvider::CreateIconBundle(const wxArtID& id,
 wxSize wxArtProvider::GetNativeDIPSizeHint(const wxArtClient& client)
 {
     // Gtk has specific sizes for each client, see artgtk.cpp
-    GtkIconSize gtk_size = ArtClientToIconSize(client);
+    wxGtkIconSize gtk_size = ArtClientToIconSize(client);
     // no size hints for this client
-    if (gtk_size == GTK_ICON_SIZE_INVALID)
+    if (gtk_size == wxGTK_ICON_SIZE_INVALID)
         return wxDefaultSize;
     gint width, height;
-    gtk_icon_size_lookup( gtk_size, &width, &height);
+    wxGtkIconSizeToPixels( gtk_size, &width, &height);
     return wxSize(width, height);
 }

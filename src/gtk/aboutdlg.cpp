@@ -27,6 +27,7 @@
 #endif //WX_PRECOMP
 
 #include "wx/gtk/private.h"
+#include "wx/gtk/private/object.h"
 
 // ----------------------------------------------------------------------------
 // GtkArray: temporary array of GTK strings
@@ -87,7 +88,28 @@ private:
 // GTK+ about dialog is modeless, keep track of it in this variable
 static GtkAboutDialog *gs_aboutDialog = nullptr;
 
+// The icon shown in the dialog, kept alive for as long as the dialog is.
+static wxIcon gs_icon;
+
 extern "C" {
+#ifdef __WXGTK4__
+
+// Under GTK4 the dialog closes itself: GtkAboutDialog derives from GtkWindow,
+// not from GtkDialog, so it has neither a "response" signal nor a close button
+// of its own, and an unhandled "close-request" -- which is what the window
+// manager's close button produces -- destroys the window. All that is left to
+// do is notice that this happened, as otherwise gs_aboutDialog would keep
+// pointing at a destroyed dialog and the next wxAboutBox() call would use it.
+static void wxGtkAboutDialogOnDestroy(GtkWidget* about, void*)
+{
+    gs_icon.UnRef();
+
+    if ( (GtkAboutDialog*)about == gs_aboutDialog )
+        gs_aboutDialog = nullptr;
+}
+
+#else // !__WXGTK4__
+
 static void wxGtkAboutDialogOnClose(GtkAboutDialog* about, int, wxIcon* icon)
 {
     icon->UnRef();
@@ -95,6 +117,8 @@ static void wxGtkAboutDialogOnClose(GtkAboutDialog* about, int, wxIcon* icon)
     if ( about == gs_aboutDialog )
         gs_aboutDialog = nullptr;
 }
+
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 #ifdef __WXGTK3__
@@ -109,6 +133,7 @@ static gboolean activate_link(GtkAboutDialog*, const char* link, void* dontIgnor
     return false;
 }
 
+#ifndef __WXGTK4__
 static void wx_find_image(GtkWidget* widget, void* data)
 {
     GtkWidget** p = static_cast<GtkWidget**>(data);
@@ -136,6 +161,7 @@ static gboolean wx_image_draw(GtkWidget* widget, cairo_t* cr, wxIcon* icon)
     icon->Draw(cr, x, y);
     return true;
 }
+#endif // !__WXGTK4__
 }
 #else
 extern "C" {
@@ -150,7 +176,19 @@ void wxAboutBox(const wxAboutDialogInfo& info, wxWindow* parent)
 {
     // don't create another dialog if one is already present
     if ( !gs_aboutDialog )
+    {
         gs_aboutDialog = GTK_ABOUT_DIALOG(gtk_about_dialog_new());
+
+        // Connect the handler telling us the dialog is gone only once, when
+        // creating it: connecting it again on a later call would run it twice.
+#ifdef __WXGTK4__
+        g_signal_connect(gs_aboutDialog, "destroy",
+                            G_CALLBACK(wxGtkAboutDialogOnDestroy), nullptr);
+#else
+        g_signal_connect(gs_aboutDialog, "response",
+                            G_CALLBACK(wxGtkAboutDialogOnClose), &gs_icon);
+#endif
+    }
 
     GtkAboutDialog * const dlg = gs_aboutDialog;
     gtk_about_dialog_set_program_name(dlg, info.GetName().utf8_str());
@@ -171,19 +209,27 @@ void wxAboutBox(const wxAboutDialogInfo& info, wxWindow* parent)
     else
         gtk_about_dialog_set_license(dlg, nullptr);
 
-    static wxIcon s_icon;
-    s_icon = info.GetIcon(parent);
-    const wxIcon& icon = s_icon;
+    gs_icon = info.GetIcon(parent);
+    const wxIcon& icon = gs_icon;
     if ( icon.IsOk() )
     {
+#ifdef __WXGTK4__
+        // GTK4 wants a GdkPaintable rather than a pixbuf here, and GdkTexture
+        // is the paintable implementation wrapping raw pixels. Drawing the
+        // icon by hand for HiDPI, as done below for GTK+ 3, isn't needed: a
+        // texture carries its own scale and GTK4 renders it accordingly.
+        wxGtkObject<GdkTexture> logo(gdk_texture_new_for_pixbuf(icon.GetPixbuf()));
+        gtk_about_dialog_set_logo(dlg, GDK_PAINTABLE(logo.get()));
+#else
         gtk_about_dialog_set_logo(dlg, icon.GetPixbuf());
 #ifdef __WXGTK3__
         GtkImage* image = nullptr;
         if (!parent || parent->GetContentScaleFactor() > 1)
             wx_find_image(GTK_WIDGET(dlg), &image);
         if (image)
-            g_signal_connect(image, "draw", G_CALLBACK(wx_image_draw), &s_icon);
+            g_signal_connect(image, "draw", G_CALLBACK(wx_image_draw), &gs_icon);
 #endif
+#endif // __WXGTK4__/!__WXGTK4__
     }
     else
         gtk_about_dialog_set_logo(dlg, nullptr);
@@ -259,9 +305,6 @@ void wxAboutBox(const wxAboutDialogInfo& info, wxWindow* parent)
         gtk_about_dialog_set_translator_credits(dlg, transCredits.utf8_str());
     else
         gtk_about_dialog_set_translator_credits(dlg, nullptr);
-
-    g_signal_connect(dlg, "response",
-                        G_CALLBACK(wxGtkAboutDialogOnClose), &s_icon);
 
     GtkWindow* gtkParent = nullptr;
     if (parent && parent->m_widget)

@@ -62,7 +62,11 @@ void wxStaticBitmap::SetBitmap( const wxBitmapBundle &bitmap )
 
     const wxSize sizeNew(DoGetBestSize());
 
+#ifdef __WXGTK4__
+    wxGtkImage::Set(m_widget, bitmap);
+#else
     WX_GTK_IMAGE(m_widget)->Set(bitmap);
+#endif
 
     if (sizeNew != sizeOld)
     {

@@ -125,12 +125,19 @@ bool wxInfoBar::Create(wxWindow *parent, wxWindowID winid, long style)
 
     // also create a label which will be used to show our message
     m_impl->m_label = gtk_label_new("");
-    gtk_widget_show(m_impl->m_label);
+    gtk_widget_set_visible(m_impl->m_label, TRUE);
 
+#ifdef __WXGTK4__
+    // gtk_info_bar_get_content_area()/GtkContainer are both gone under
+    // GTK4; gtk_info_bar_add_child() is the direct replacement for
+    // "add this widget to the info bar's content area".
+    gtk_info_bar_add_child(GTK_INFO_BAR(m_widget), m_impl->m_label);
+#else
     GtkWidget * const
         contentArea = gtk_info_bar_get_content_area(GTK_INFO_BAR(m_widget));
     wxCHECK_MSG( contentArea, false, "failed to get GtkInfoBar content area" );
     gtk_container_add(GTK_CONTAINER(contentArea), m_impl->m_label);
+#endif
 
     // finish creation and connect to all the signals we're interested in
     m_parent->DoAddChild(this);
@@ -276,7 +283,12 @@ void wxInfoBar::AddButton(wxWindowID btnid, const wxString& label)
     // have some user-defined button
     if ( m_impl->m_close )
     {
+#ifdef __WXGTK4__
+        if (gtk_widget_get_parent(m_impl->m_close))
+            gtk_widget_unparent(m_impl->m_close);
+#else
         gtk_widget_destroy(m_impl->m_close);
+#endif
         m_impl->m_close = nullptr;
     }
 
@@ -319,7 +331,12 @@ void wxInfoBar::RemoveButton(wxWindowID btnid)
     {
         if (i->id == btnid)
         {
+#ifdef __WXGTK4__
+            if (gtk_widget_get_parent(i->button))
+                gtk_widget_unparent(i->button);
+#else
             gtk_widget_destroy(i->button);
+#endif
             buttons.erase(i.base() - 1);
 
             // see comment in GTKAddButton()

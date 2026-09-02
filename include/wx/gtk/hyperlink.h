@@ -63,7 +63,9 @@ protected:
     virtual wxSize DoGetBestSize() const override;
     virtual wxSize DoGetBestClientSize() const override;
 
+#ifndef __WXGTK4__
     virtual GdkWindow *GTKGetWindow(wxArrayGdkWindows& windows) const override;
+#endif // !__WXGTK4__
 
     wxDECLARE_DYNAMIC_CLASS(wxHyperlinkCtrl);
 };

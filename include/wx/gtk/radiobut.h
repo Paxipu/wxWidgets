@@ -29,6 +29,10 @@ public:
         Create( parent, id, label, pos, size, style, validator, name );
     }
 
+#ifdef __WXGTK4__
+    virtual ~wxRadioButton();
+#endif // __WXGTK4__
+
     bool Create( wxWindow *parent,
                  wxWindowID id,
                  const wxString& label,
@@ -49,7 +53,9 @@ protected:
     virtual wxBorder GetDefaultBorder() const override { return wxBORDER_NONE; }
 
     virtual void DoApplyWidgetStyle(GtkRcStyle *style) override;
+#ifndef __WXGTK4__
     virtual GdkWindow *GTKGetWindow(wxArrayGdkWindows& windows) const override;
+#endif // !__WXGTK4__
 
     virtual void DoEnable(bool enable) override;
 

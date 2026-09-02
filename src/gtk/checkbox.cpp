@@ -15,6 +15,7 @@
 
 #include "wx/gtk/private/wrapgtk.h"
 #include "wx/gtk/private/eventsdisabler.h"
+#include "wx/gtk/private/gtk3-compat.h"
 
 //-----------------------------------------------------------------------------
 // data
@@ -26,6 +27,52 @@ extern bool           g_blockEventsOnDrag;
 // "clicked"
 //-----------------------------------------------------------------------------
 
+namespace
+{
+
+// Under GTK4 GtkCheckButton doesn't derive from GtkToggleButton any more, it
+// just has an equivalent API of its own, so casting one to the other is not
+// merely deprecated there but actually wrong, even though it still compiles
+// because GtkToggleButton continues to exist.
+
+inline bool wxGtkCheckGetActive(GtkWidget* widget)
+{
+#ifdef __WXGTK4__
+    return gtk_check_button_get_active(GTK_CHECK_BUTTON(widget)) != 0;
+#else
+    return gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget)) != 0;
+#endif
+}
+
+inline void wxGtkCheckSetActive(GtkWidget* widget, bool active)
+{
+#ifdef __WXGTK4__
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(widget), active);
+#else
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(widget), active);
+#endif
+}
+
+inline bool wxGtkCheckGetInconsistent(GtkWidget* widget)
+{
+#ifdef __WXGTK4__
+    return gtk_check_button_get_inconsistent(GTK_CHECK_BUTTON(widget)) != 0;
+#else
+    return gtk_toggle_button_get_inconsistent(GTK_TOGGLE_BUTTON(widget)) != 0;
+#endif
+}
+
+inline void wxGtkCheckSetInconsistent(GtkWidget* widget, bool inconsistent)
+{
+#ifdef __WXGTK4__
+    gtk_check_button_set_inconsistent(GTK_CHECK_BUTTON(widget), inconsistent);
+#else
+    gtk_toggle_button_set_inconsistent(GTK_TOGGLE_BUTTON(widget), inconsistent);
+#endif
+}
+
+} // anonymous namespace
+
 extern "C" {
 static void gtk_checkbox_toggled_callback(GtkWidget *widget, wxCheckBox *cb)
 {
@@ -36,24 +83,22 @@ static void gtk_checkbox_toggled_callback(GtkWidget *widget, wxCheckBox *cb)
     // changed automatically:
     if (cb->Is3State())
     {
-        GtkToggleButton *toggle = GTK_TOGGLE_BUTTON(widget);
-
         // The 3 states cycle like this when clicked:
         // checked -> undetermined -> unchecked -> checked -> ...
 
-        if (gtk_toggle_button_get_inconsistent(toggle))
+        if (wxGtkCheckGetInconsistent(widget))
         {
             // undetermined -> unchecked
             wxGtkEventsDisabler<wxCheckBox> noEvents(cb);
-            gtk_toggle_button_set_active(toggle, false);
-            gtk_toggle_button_set_inconsistent(toggle, false);
+            wxGtkCheckSetActive(widget, false);
+            wxGtkCheckSetInconsistent(widget, false);
         }
-        else if (!gtk_toggle_button_get_active(toggle))
+        else if (!wxGtkCheckGetActive(widget))
         {
             if (cb->Is3rdStateAllowedForUser())
             {
                 // checked -> undetermined
-                gtk_toggle_button_set_inconsistent(toggle, true);
+                wxGtkCheckSetInconsistent(widget, true);
             }
             // else checked -> unchecked
         }
@@ -119,13 +164,24 @@ bool wxCheckBox::Create(wxWindow *parent,
         gtk_box_pack_start(GTK_BOX(m_widget), m_widgetLabel, FALSE, FALSE, 3);
         gtk_box_pack_start(GTK_BOX(m_widget), m_widgetCheckbox, FALSE, FALSE, 3);
 
-        gtk_widget_show( m_widgetLabel );
-        gtk_widget_show( m_widgetCheckbox );
+        gtk_widget_set_visible(m_widgetLabel, TRUE);
+        gtk_widget_set_visible(m_widgetCheckbox, TRUE);
     }
     else
     {
+#ifdef __WXGTK4__
+        // GtkCheckButton is not a GtkBin under GTK4 and the label set by
+        // gtk_check_button_new_with_label() is an internal implementation
+        // detail we can't get at, so create the label ourselves: we need a
+        // real GtkLabel to set the font and colour on and to show or hide.
+        m_widgetCheckbox = gtk_check_button_new();
+        m_widgetLabel = gtk_label_new("");
+        gtk_check_button_set_child(GTK_CHECK_BUTTON(m_widgetCheckbox),
+                                   m_widgetLabel);
+#else
         m_widgetCheckbox = gtk_check_button_new_with_label("");
         m_widgetLabel = gtk_bin_get_child(GTK_BIN(m_widgetCheckbox));
+#endif
         m_widget = m_widgetCheckbox;
     }
     g_object_ref(m_widget);
@@ -133,7 +189,11 @@ bool wxCheckBox::Create(wxWindow *parent,
 
     if ( style & wxNO_BORDER )
     {
+#ifndef __WXGTK4__
         gtk_container_set_border_width(GTK_CONTAINER(m_widgetCheckbox), 0);
+#endif
+        // Nothing to do under GTK4: there is no container border width there,
+        // the equivalent being widget margins, which are already 0 by default.
     }
 
     g_signal_connect (m_widgetCheckbox, "toggled",
@@ -183,21 +243,17 @@ void wxCheckBox::DoSet3StateValue(wxCheckBoxState state)
     if (DoGet3StateValue() == state)
         return;
 
-    GtkToggleButton* tglbtn = GTK_TOGGLE_BUTTON(m_widgetCheckbox);
-
     wxGtkEventsDisabler<wxCheckBox> noEvents(this);
-    gtk_toggle_button_set_inconsistent(tglbtn, state == wxCHK_UNDETERMINED);
-    gtk_toggle_button_set_active(tglbtn, state == wxCHK_CHECKED);
+    wxGtkCheckSetInconsistent(m_widgetCheckbox, state == wxCHK_UNDETERMINED);
+    wxGtkCheckSetActive(m_widgetCheckbox, state == wxCHK_CHECKED);
 }
 
 wxCheckBoxState wxCheckBox::DoGet3StateValue() const
 {
-    GtkToggleButton* tglbtn = GTK_TOGGLE_BUTTON(m_widgetCheckbox);
-
-    if (gtk_toggle_button_get_inconsistent(GTK_TOGGLE_BUTTON(tglbtn)))
+    if (wxGtkCheckGetInconsistent(m_widgetCheckbox))
         return wxCHK_UNDETERMINED;
 
-    return gtk_toggle_button_get_active(tglbtn) ? wxCHK_CHECKED : wxCHK_UNCHECKED;
+    return wxGtkCheckGetActive(m_widgetCheckbox) ? wxCHK_CHECKED : wxCHK_UNCHECKED;
 }
 
 void wxCheckBox::SetLabel( const wxString& label )
@@ -207,9 +263,9 @@ void wxCheckBox::SetLabel( const wxString& label )
     // If we don't hide the empty label, in some themes a focus rectangle is
     // still drawn around it and this looks out of place.
     if ( label.empty() )
-        gtk_widget_hide(m_widgetLabel);
+        gtk_widget_set_visible(m_widgetLabel, FALSE);
     else
-        gtk_widget_show(m_widgetLabel);
+        gtk_widget_set_visible(m_widgetLabel, TRUE);
 
     // save the label inside m_label in case user calls GetLabel() later
     wxControl::SetLabel(label);
@@ -236,10 +292,12 @@ void wxCheckBox::DoApplyWidgetStyle(GtkRcStyle *style)
     GTKApplyStyle(m_widgetLabel, style);
 }
 
+#ifndef __WXGTK4__
 GdkWindow *wxCheckBox::GTKGetWindow(wxArrayGdkWindows& WXUNUSED(windows)) const
 {
     return gtk_button_get_event_window(GTK_BUTTON(m_widgetCheckbox));
 }
+#endif // !__WXGTK4__
 
 // static
 wxVisualAttributes

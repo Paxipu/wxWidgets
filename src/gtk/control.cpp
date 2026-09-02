@@ -24,6 +24,7 @@
 
 #include "wx/gtk/private.h"
 #include "wx/gtk/private/mnemonics.h"
+#include "wx/gtk/private/stylecontext.h"
 
 // ============================================================================
 // wxControl implementation
@@ -112,7 +113,12 @@ void wxControl::PostCreation(const wxSize& size)
 void wxControl::GTKRemoveBorder()
 {
 #ifdef __WXGTK3__
-    GTKApplyCssStyle("*{ border:none; border-radius:0; padding:0 }");
+    // This window's own frame goes, and only that: wxBORDER_NONE on a
+    // container says nothing about the controls it holds. Under GTK+ 3 that
+    // was implicit, because the provider lived on this widget's style context;
+    // under GTK4 it has to be said, as a display-wide "*" otherwise reaches
+    // every node inside, down to a contained check box's indicator.
+    GTKApplyCssStyleToSelf("*{ border:none; border-radius:0; padding:0 }");
 #endif
 }
 
@@ -172,7 +178,7 @@ GtkWidget* wxControl::GTKCreateFrame(const wxString& label)
 {
     const wxString labelGTK = GTKConvertMnemonics(label);
     GtkWidget* labelwidget = gtk_label_new_with_mnemonic(labelGTK.utf8_str());
-    gtk_widget_show(labelwidget); // without this it won't show...
+    gtk_widget_set_visible(labelwidget, TRUE); // without this it won't show...
 
     GtkWidget* framewidget = gtk_frame_new(nullptr);
     gtk_frame_set_label_widget(GTK_FRAME(framewidget), labelwidget);
@@ -245,11 +251,54 @@ wxControl::GetDefaultAttributesFromGTKWidget(GtkWidget* widget,
     GtkWidget* tlw = nullptr;
     if (gtk_widget_get_parent(widget) == nullptr)
     {
+#ifdef __WXGTK4__
+        tlw = gtk_window_new();
+        gtk_window_set_child(GTK_WINDOW(tlw), widget);
+#else
         tlw = gtk_window_new(GTK_WINDOW_TOPLEVEL);
         gtk_container_add(GTK_CONTAINER(tlw), widget);
+#endif
     }
 
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+    // GTK4 removed gtk_style_context_get() and the whole varargs
+    // style-property API it relied on ("color"/"background-color"/
+    // GTK_STYLE_PROPERTY_FONT). Foreground still has an exact query;
+    // background does not, and is approximated through the shared helper in
+    // stylecontext.h so this gap has one implementation rather than one per
+    // call site. Unlike the GTK3 code below, the approximation doesn't walk
+    // the parent chain, so a widget whose theme defines no background colour
+    // won't inherit an ancestor's. Not yet runtime-verified (no linkable
+    // test_gui yet); see docs/gtk/gtk4-stylecontext-design.md.
+    // Unlike the GTK+ 3 code below, this asks the widget rather than a style
+    // context. gtk_widget_get_color() answers for the widget's current state,
+    // so the state goes on the widget; it returns exactly what the deprecated
+    // gtk_style_context_get_color() did, measured in
+    // docs/gtk/probes/gtk4-style-query-replacements.c. The GTK4 path used to
+    // ignore the state parameter outright, which this fixes on the way past.
+    // The GTK+ 2 enumerator this parameter carries no longer exists under
+    // GTK4; 0 is GTK_STATE_NORMAL there and every caller but one uses it.
+    const GtkStateFlags stateFlag = state ? GTK_STATE_FLAG_ACTIVE
+                                          : GTK_STATE_FLAG_NORMAL;
+    if (stateFlag != GTK_STATE_FLAG_NORMAL)
+        gtk_widget_set_state_flags(widget, stateFlag, FALSE);
+
+    GdkRGBA fg;
+    gtk_widget_get_color(widget, &fg);
+    attr.colFg = wxColour(fg);
+
+    attr.colBg = *wxWHITE;
+    wxGTKLookupThemeColour(widget, "theme_bg_color", attr.colBg);
+
+    if (stateFlag != GTK_STATE_FLAG_NORMAL)
+        gtk_widget_unset_state_flags(widget, stateFlag);
+
+    PangoFontDescription* const desc = pango_context_get_font_description(
+        gtk_widget_get_pango_context(widget));
+    wxNativeFontInfo info;
+    info.description = pango_font_description_copy(desc);
+    attr.font = wxFont(info);
+#elif defined(__WXGTK3__)
     GtkStateFlags stateFlag = GTK_STATE_FLAG_NORMAL;
     if (state)
     {
@@ -328,7 +377,11 @@ wxControl::GetDefaultAttributesFromGTKWidget(GtkWidget* widget,
     }
 
     if (tlw)
+#ifdef __WXGTK4__
+        gtk_window_destroy(GTK_WINDOW(tlw));
+#else
         gtk_widget_destroy(tlw);
+#endif
 
     return attr;
 }
@@ -348,14 +401,14 @@ wxSize wxControl::GTKGetPreferredSize(GtkWidget* widget) const
     // So workaround this case.
     const bool wasHidden = !gtk_widget_get_visible(widget);
     if ( wasHidden )
-        gtk_widget_show(widget);
+        gtk_widget_set_visible(widget, TRUE);
 
     gtk_widget_set_size_request(widget, -1, -1);
     gtk_widget_get_preferred_size(widget, nullptr, &req);
     gtk_widget_set_size_request(widget, w, h);
 
     if ( wasHidden )
-        gtk_widget_hide(widget);
+        gtk_widget_set_visible(widget, FALSE);
 #else
     GTK_WIDGET_GET_CLASS(widget)->size_request(widget, &req);
 #endif
@@ -368,12 +421,26 @@ wxSize wxControl::GTKGetEntryMargins(GtkEntry* entry) const
     wxSize size;
 
 #ifdef __WXGTK3__
-    GtkStyleContext* sc = gtk_widget_get_style_context(GTK_WIDGET(entry));
-    GtkStateFlags    state = gtk_style_context_get_state(sc);
-
     GtkBorder padding, border;
+#ifdef __WXGTK4__
+    // Deliberately measured on the scratch entry rather than on this one.
+    //
+    // wxGTKGetStyleMetrics() has to requeue the widget's resize to get an
+    // answer at all (see stylecontext.h), and this function runs inside
+    // DoGetSizeFromTextSize(), which the layout calls. Requeueing a live
+    // widget's resize from there asks for another layout pass, which calls
+    // this again, and the window never stops relaying out.
+    //
+    // Nothing is lost by it: padding and border are the theme's for the entry
+    // type, and wx never sets either on an individual control.
+    wxUnusedVar(entry);
+    wxGTKGetStyleMetrics(wxGTKPrivate::GetEntryWidget(), &padding, &border);
+#else
+    GtkStyleContext* sc = gtk_widget_get_style_context(GTK_WIDGET(entry));
+    const GtkStateFlags state = gtk_style_context_get_state(sc);
     gtk_style_context_get_padding(sc, state, &padding);
     gtk_style_context_get_border(sc, state, &border);
+#endif
 
     size.x += padding.left + padding.right + border.left + border.right;
     size.y += padding.top + padding.bottom + border.top + border.bottom;

@@ -22,12 +22,19 @@
     #include "wx/log.h"
 #endif
 
+// Before wx/filepicker.h, which forward declares both: under GTK4 wxDirDialog
+// is a macro for wxGenericDirDialog, and a forward declaration parsed before
+// that macro exists names a class that never gets defined.
+#include "wx/dirdlg.h"
+#include "wx/filedlg.h"
+
 #include "wx/filepicker.h"
 #include "wx/tooltip.h"
 
 #include "wx/generic/filepickerg.h"
 
 #include "wx/gtk/private.h"
+#include "wx/gtk/private/gtk3-compat.h"
 
 // ============================================================================
 // implementation
@@ -64,6 +71,11 @@ bool wxFileButton::Create( wxWindow *parent, wxWindowID id,
 {
     // we can't use the native button for wxFLP_SAVE pickers as it can only
     // open existing files and there is no way to create a new file using it
+    //
+    // Under GTK4 there is no native button to use at all: GtkFileChooserButton
+    // was removed, and GTK's own answer is a plain button which opens a file
+    // dialog -- which is exactly what wxGenericFileButton below already is.
+#ifndef __WXGTK4__
     if (!(style & wxFLP_SAVE) && !(style & wxFLP_USE_TEXTCTRL))
     {
         // VERY IMPORTANT: this code is identical to relative code in wxDirButton;
@@ -128,6 +140,7 @@ bool wxFileButton::Create( wxWindow *parent, wxWindowID id,
         PostCreation(size);
     }
     else // Use generic implementation.
+#endif // !__WXGTK4__
     {
         if ( !wxControl::Create(parent, id, pos, size, wxBORDER_NONE, validator, name) )
             return false;
@@ -158,7 +171,16 @@ wxFileButton::~wxFileButton()
         // on GtkFileChooserButton first (our base dtor will do it again, but
         // that does no harm). m_dialog holds a reference to the shared widget,
         // so it won't go away until m_dialog base dtor unrefs it.
+#ifdef __WXGTK4__
+        // gtk_widget_destroy() doesn't exist under GTK4; m_widget isn't a
+        // toplevel here, so unparenting it early is the equivalent -- the
+        // base dtor's own unparent call (see window.cpp) becomes a no-op
+        // once this has already run, same "does no harm" reasoning as above.
+        if (gtk_widget_get_parent(m_widget))
+            gtk_widget_unparent(m_widget);
+#else
         gtk_widget_destroy(m_widget);
+#endif
         delete m_dialog;
     }
 }
@@ -233,6 +255,9 @@ void wxFileButton::SetInitialDirectory(const wxString& dir)
 //-----------------------------------------------------------------------------
 
 extern "C" {
+#ifndef __WXGTK4__
+// Both callers -- the "file_set" signal and selection_changed() below -- are
+// on the GtkFileChooserButton path that GTK4 removed.
 static void file_set(GtkFileChooser* widget, wxDirButton* p)
 {
     // NB: it's important to use gtk_file_chooser_get_filename instead of
@@ -260,6 +285,7 @@ static void file_set(GtkFileChooser* widget, wxDirButton* p)
     wxFileDirPickerEvent event(wxEVT_DIRPICKER_CHANGED, p, p->GetId(), p->GetPath());
     p->HandleWindowEvent(event);
 }
+#endif // !__WXGTK4__
 }
 
 //-----------------------------------------------------------------------------
@@ -267,6 +293,10 @@ static void file_set(GtkFileChooser* widget, wxDirButton* p)
 //-----------------------------------------------------------------------------
 
 extern "C" {
+#ifndef __WXGTK4__
+// Connected only on the GtkFileChooserButton path, which GTK4 removed; there
+// the button is a GtkButton driving a GtkFileDialog and reports through
+// file_set() alone.
 static void selection_changed(GtkFileChooser* chooser, wxDirButton* win)
 {
     wxGtkString filename(gtk_file_chooser_get_filename(chooser));
@@ -276,6 +306,7 @@ static void selection_changed(GtkFileChooser* chooser, wxDirButton* win)
     else if (!win->m_bIgnoreNextChange)
         file_set(chooser, win);
 }
+#endif // !__WXGTK4__
 }
 
 //-----------------------------------------------------------------------------
@@ -291,6 +322,9 @@ bool wxDirButton::Create( wxWindow *parent, wxWindowID id,
                         long style, const wxValidator& validator,
                         const wxString &name )
 {
+    // See the comment in wxFileButton::Create() about GTK4 not having a
+    // native button to use here any more.
+#ifndef __WXGTK4__
     if (!(style & wxDIRP_USE_TEXTCTRL))
     {
         // VERY IMPORTANT: this code is identic to relative code in wxFileButton;
@@ -354,6 +388,7 @@ bool wxDirButton::Create( wxWindow *parent, wxWindowID id,
         SetInitialSize(size);
     }
     else // Use generic implementation.
+#endif // !__WXGTK4__
     {
         if ( !wxControl::Create(parent, id, pos, size, wxBORDER_NONE, validator, name) )
             return false;
@@ -379,7 +414,12 @@ wxDirButton::~wxDirButton()
     if (m_dialog)
     {
         // see ~wxFileButton() comment
+#ifdef __WXGTK4__
+        if (gtk_widget_get_parent(m_widget))
+            gtk_widget_unparent(m_widget);
+#else
         gtk_widget_destroy(m_widget);
+#endif
         delete m_dialog;
     }
 }

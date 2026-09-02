@@ -19,6 +19,7 @@
 #include "wx/stockitem.h"
 
 #include "wx/gtk/private/wrapgtk.h"
+#include "wx/gtk/private/gtk3-compat.h"
 #include "wx/gtk/private/image.h"
 
 // ----------------------------------------------------------------------------
@@ -64,6 +65,25 @@ wxgtk_button_released_callback(GtkWidget *WXUNUSED(widget), wxAnyButton *button)
     button->GTKReleased();
 }
 
+#ifdef __WXGTK4__
+// GtkButton has no "pressed"/"released" signals under GTK4; what they told wx
+// about is the "active" property, which is still there.
+static void
+wxgtk_button_active_callback(GObject* obj, GParamSpec*, wxAnyButton* button)
+{
+    if ( button->GTKShouldIgnoreEvent() )
+        return;
+
+    gboolean active = FALSE;
+    g_object_get(obj, "active", &active, nullptr);
+
+    if ( active )
+        button->GTKPressed();
+    else
+        button->GTKReleased();
+}
+#endif // __WXGTK4__
+
 } // extern "C"
 
 //-----------------------------------------------------------------------------
@@ -78,7 +98,12 @@ void wxAnyButton::DoEnable(bool enable)
 
     base_type::DoEnable(enable);
 
+#ifdef __WXGTK4__
+    if ( GtkWidget* const child = gtk_button_get_child(GTK_BUTTON(m_widget)) )
+        gtk_widget_set_sensitive(child, enable);
+#else
     gtk_widget_set_sensitive(gtk_bin_get_child(GTK_BIN(m_widget)), enable);
+#endif
 
     if (enable)
         GTKFixSensitivity();
@@ -86,10 +111,12 @@ void wxAnyButton::DoEnable(bool enable)
     GTKUpdateBitmap();
 }
 
+#ifndef __WXGTK4__
 GdkWindow *wxAnyButton::GTKGetWindow(wxArrayGdkWindows& WXUNUSED(windows)) const
 {
     return gtk_button_get_event_window(GTK_BUTTON(m_widget));
 }
+#endif // !__WXGTK4__
 
 // static
 wxVisualAttributes
@@ -182,10 +209,103 @@ void wxAnyButton::GTKUpdateBitmap()
     }
 }
 
+#ifdef __WXGTK4__
+
+namespace
+{
+
+// GTK4 removed gtk_button_get_image() and gtk_button_set_image(): a button
+// holds exactly one child, so showing an image beside a label means putting
+// both in a box ourselves. These two keep the rest of the file reading the way
+// it did, with the image found rather than asked for.
+
+GtkWidget* ButtonGetImage(GtkWidget* button)
+{
+    GtkWidget* const child = gtk_button_get_child(GTK_BUTTON(button));
+    if ( !child )
+        return nullptr;
+
+    if ( wxGtkImage::Is(child) )
+        return child;
+
+    if ( GTK_IS_BOX(child) )
+    {
+        for ( GtkWidget* c = gtk_widget_get_first_child(child);
+              c;
+              c = gtk_widget_get_next_sibling(c) )
+        {
+            if ( wxGtkImage::Is(c) )
+                return c;
+        }
+    }
+
+    return nullptr;
+}
+
+// Make the button show the given image, the given label, or both. Passing a
+// null image or an empty label leaves that part out. The image is reparented
+// rather than recreated so that the bitmap already on it survives.
+void ButtonSetContent(GtkWidget* button, GtkWidget* image, const wxString& label)
+{
+    if ( image )
+        g_object_ref(image);
+
+    // Detach the image before the old child is dropped, or it goes with it.
+    if ( image && gtk_widget_get_parent(image) )
+        wx_gtk_widget_remove_from_parent(image);
+
+    if ( image && label.empty() )
+    {
+        gtk_button_set_child(GTK_BUTTON(button), image);
+    }
+    else if ( image )
+    {
+        GtkWidget* const box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+        gtk_box_append(GTK_BOX(box), image);
+
+        // The label is ours rather than the button's, so the underline
+        // handling gtk_button_set_use_underline() would have done has to be
+        // done here instead.
+        GtkWidget* const lbl = gtk_label_new_with_mnemonic(label.utf8_str());
+        gtk_box_append(GTK_BOX(box), lbl);
+
+        gtk_widget_set_halign(box, GTK_ALIGN_CENTER);
+        gtk_button_set_child(GTK_BUTTON(button), box);
+        gtk_label_set_mnemonic_widget(GTK_LABEL(lbl), button);
+    }
+    else
+    {
+        gtk_button_set_label(GTK_BUTTON(button), label.utf8_str());
+    }
+
+    if ( image )
+        g_object_unref(image);
+}
+
+} // anonymous namespace
+
+#endif // __WXGTK4__
+
+#ifdef __WXGTK4__
+
+bool wxAnyButton::GTKShowsImage() const
+{
+    return ButtonGetImage(m_widget) != nullptr;
+}
+
+#endif // __WXGTK4__
+
 void wxAnyButton::GTKDoShowBitmap(const wxBitmapBundle& bitmap)
 {
     wxCHECK_RET(bitmap.IsOk(), "invalid bitmap");
 
+#ifdef __WXGTK4__
+    GtkWidget* const image = ButtonGetImage(m_widget);
+
+    wxCHECK_RET(image, "must have image widget");
+
+    wxGtkImage::Set(image, bitmap);
+#else
     GtkWidget* image = gtk_button_get_image(GTK_BUTTON(m_widget));
     if (image == nullptr)
         image = gtk_bin_get_child(GTK_BIN(m_widget));
@@ -193,6 +313,7 @@ void wxAnyButton::GTKDoShowBitmap(const wxBitmapBundle& bitmap)
     wxCHECK_RET(WX_GTK_IS_IMAGE(image), "must have image widget");
 
     WX_GTK_IMAGE(image)->Set(bitmap);
+#endif
 }
 
 wxBitmap wxAnyButton::DoGetBitmap(State which) const
@@ -207,6 +328,13 @@ void wxAnyButton::SetLabel(const wxString& label)
     if (HasFlag(wxBU_NOTEXT))
         return;
 
+#ifdef __WXGTK4__
+    // Same idea as below, but the two configurations are a lone image and a
+    // box holding an image and a label, both of which we build ourselves --
+    // including the mnemonic handling gtk_button_set_label() would have done.
+    ButtonSetContent(m_widget, ButtonGetImage(m_widget),
+                     GTKConvertMnemonics(label));
+#else
     GtkWidget* child = gtk_bin_get_child(GTK_BIN(m_widget));
     if (WX_GTK_IS_IMAGE(child))
     {
@@ -214,6 +342,7 @@ void wxAnyButton::SetLabel(const wxString& label)
         // Direct-child image must be moved into label+image configuration.
         gtk_button_set_image(GTK_BUTTON(m_widget), child);
     }
+#endif
 }
 
 void wxAnyButton::DoSetBitmap(const wxBitmapBundle& bitmap, State which)
@@ -223,13 +352,36 @@ void wxAnyButton::DoSetBitmap(const wxBitmapBundle& bitmap, State which)
         case State_Normal:
             // normal image is special: setting it enables images for the button and
             // resetting it to nothing disables all of them
+#ifdef __WXGTK4__
+            if (bitmap.IsOk())
+            {
+                if ( !ButtonGetImage(m_widget) )
+                {
+                    ButtonSetContent(m_widget, wxGtkImage::New(this),
+                                     HasFlag(wxBU_NOTEXT) ? wxString()
+                                                          : GetLabel());
+
+                    // Rebuilding the child recreates the label, so reapply the
+                    // styles to preserve its font and colour.
+                    GTKApplyWidgetStyle();
+                }
+            }
+            else
+            {
+                if ( ButtonGetImage(m_widget) )
+                {
+                    ButtonSetContent(m_widget, nullptr, GetLabel());
+                    GTKApplyWidgetStyle();
+                }
+            }
+#else
             if (bitmap.IsOk())
             {
                 GtkWidget* child = gtk_bin_get_child(GTK_BIN(m_widget));
                 if (!child)
                 {
                     GtkWidget* image = wxGtkImage::New(this);
-                    gtk_widget_show(image);
+                    gtk_widget_set_visible(image, TRUE);
                     gtk_container_add(GTK_CONTAINER(m_widget), image);
                 }
                 else if (!WX_GTK_IS_IMAGE(child))
@@ -260,6 +412,7 @@ void wxAnyButton::DoSetBitmap(const wxBitmapBundle& bitmap, State which)
                     GTKApplyWidgetStyle();
                 }
             }
+#endif // __WXGTK4__/!__WXGTK4__
             InvalidateBestSize();
             break;
 
@@ -270,6 +423,19 @@ void wxAnyButton::DoSetBitmap(const wxBitmapBundle& bitmap, State which)
                 {
                     // we need to install the callbacks to be notified about
                     // the button pressed state change
+#ifdef __WXGTK4__
+                    // GtkButton's "pressed" and "released" signals are gone --
+                    // a button is driven by a gesture now, and the state they
+                    // reported is the "active" property, which is still there
+                    // and is what a bitmap for State_Pressed follows.
+                    g_signal_connect
+                    (
+                        m_widget,
+                        "notify::active",
+                        G_CALLBACK(wxgtk_button_active_callback),
+                        this
+                    );
+#else
                     g_signal_connect
                     (
                         m_widget,
@@ -285,6 +451,7 @@ void wxAnyButton::DoSetBitmap(const wxBitmapBundle& bitmap, State which)
                         G_CALLBACK(wxgtk_button_released_callback),
                         this
                     );
+#endif // __WXGTK4__/!__WXGTK4__
                 }
             }
             else // no valid bitmap
@@ -434,7 +601,14 @@ void wxAnyButton::DoSetBitmapPosition(wxDirection dir)
                 break;
         }
 
+#ifdef __WXGTK4__
+        // GTK4 has no gtk_button_set_image_position(): the button contains the
+        // box we assembled, so the image can only be where we put it, which is
+        // before the label. wxLEFT is therefore honoured and the others are not.
+        wxUnusedVar(gtkpos);
+#else
         gtk_button_set_image_position(GTK_BUTTON(m_widget), gtkpos);
+#endif
 
         // As in DoSetBitmap() above, the above call can invalidate the label
         // style, so reapply it to preserve its font and colour.

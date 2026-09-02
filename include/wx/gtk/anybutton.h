@@ -39,7 +39,9 @@ public:
     void GTKReleased();
 
 protected:
+#ifndef __WXGTK4__
     virtual GdkWindow *GTKGetWindow(wxArrayGdkWindows& windows) const override;
+#endif // !__WXGTK4__
 
     virtual void DoEnable(bool enable) override;
 
@@ -49,6 +51,14 @@ protected:
 
     // update the bitmap to correspond to the current button state
     void GTKUpdateBitmap();
+
+#ifdef __WXGTK4__
+    // True if the button currently shows an image, i.e. if its child widget
+    // was built by this class rather than by gtk_button_set_label(). Derived
+    // classes must not call the latter in that case, as under GTK4 it replaces
+    // the child and so throws the image away.
+    bool GTKShowsImage() const;
+#endif // __WXGTK4__
 
 private:
     typedef wxAnyButtonBase base_type;

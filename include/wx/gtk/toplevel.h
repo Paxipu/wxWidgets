@@ -110,7 +110,41 @@ public:
 
     void GTKHandleMapped();
 
+#ifndef __WXGTK4__
+    // GTK4 has no configure-event: see the comment in toplevel.cpp.
     void GTKConfigureEvent(int x, int y);
+#endif
+
+#ifdef __WXGTK3__
+    // Check whether our DPI changed and, if so, notify about it. Called from
+    // configure-event under GTK3 and from notify::scale-factor under GTK4.
+    void GTKUpdateScaleFactor();
+#endif
+
+#ifdef __WXGTK4__
+    // Called when the GdkToplevel state changes, which replaces GTK3's
+    // window-state-event. GTK only reports the new state, so the previous one
+    // is remembered here to know what actually changed.
+    void GTKHandleToplevelState(int state);
+
+    int m_gdkToplevelState = 0;
+
+    // Follow a move the compositor is performing on our behalf.
+    //
+    // gdk_toplevel_begin_move() hands the drag to the window manager, and GTK4
+    // never reports where the window ends up, so wxMoveEvent -- which GTK3 got
+    // from configure-event -- would never be sent and anything watching a
+    // window being dragged, wxAUI's docking above all, sees nothing happen.
+    // Start this when beginning such a drag: it polls the real position for as
+    // long as the drag lasts and sends the events.
+    void GTKTrackCompositorMove();
+
+    // One poll: read the position the window really has and, if it moved,
+    // update ours and send wxMoveEvent. Returns false when the drag is over.
+    bool GTKPollCompositorMove();
+
+    unsigned int m_moveTrackerId = 0;
+#endif
 
     // do *not* call this to iconize the frame, this is a private function!
     void SetIconizeState(bool iconic);

@@ -19,6 +19,7 @@
 #endif
 
 #include "wx/gtk/private.h"
+#include "wx/gtk/private/gtk3-compat.h"
 
 //-----------------------------------------------------------------------------
 // "switch_page"
@@ -176,9 +177,16 @@ void wxMDIParentFrame::OnInternalIdle()
         if (visible_child_menu)
         {
             m_frameMenuBar->Show( false );
-            m_frameMenuBar->Detach();
+            if ( m_frameMenuBar->GetFrame() )
+                m_frameMenuBar->Detach();
         }
-        else
+        // Only restore a menu bar that this function hid itself, which it
+        // always detaches when it does. One that is hidden but still attached
+        // was hidden by someone else -- wxFrame::ShowFullScreen() for
+        // wxFULLSCREEN_NOMENUBAR, or application code calling Show(false) on
+        // it -- and showing it again here would undo that. Attach() would
+        // assert on it too, exactly as it does for the children above.
+        else if ( m_frameMenuBar->GetFrame() != this )
         {
             m_frameMenuBar->Show( true );
             m_frameMenuBar->Attach( this );
@@ -199,7 +207,12 @@ void wxMDIParentFrame::DoGetClientSize(int* width, int* height) const
             if (menubar && menubar->IsShown())
             {
                 GtkRequisition req;
+#ifdef __WXGTK4__
+                gtk_widget_measure(menubar->m_widget, GTK_ORIENTATION_VERTICAL, -1,
+                    nullptr, &req.height, nullptr, nullptr);
+#else
                 gtk_widget_get_preferred_height(menubar->m_widget, nullptr, &req.height);
+#endif
                 *height -= req.height;
                 if (*height < 0) *height = 0;
             }
@@ -288,6 +301,28 @@ wxMDIChildFrame::~wxMDIChildFrame()
 {
     delete m_menuBar;
 
+#ifdef __WXGTK4__
+    // Take the page out of the notebook rather than leaving the widget to be
+    // unparented from under it.
+    //
+    // A child frame is an ordinary child of the client window as far as wx is
+    // concerned, so it is destroyed by DestroyChildren() and never goes
+    // through the notebook's own page removal. GTK+ 3 did not mind; GTK4's
+    // notebook keeps its pages in a GtkStack of its own, and a page whose
+    // child has been unparented behind its back leaves that list stale --
+    // which its dispose then trips over, one
+    // "gtk_stack_remove: assertion 'gtk_widget_get_parent (child) ==
+    // GTK_WIDGET (stack)' failed" per page. See #255.
+    if ( m_widget && m_parent && m_parent->m_widget &&
+            GTK_IS_NOTEBOOK(m_parent->m_widget) )
+    {
+        GtkNotebook* const notebook = GTK_NOTEBOOK(m_parent->m_widget);
+        const gint page = gtk_notebook_page_num(notebook, m_widget);
+        if ( page != -1 )
+            gtk_notebook_remove_page(notebook, page);
+    }
+#endif // __WXGTK4__
+
     // wxMDIClientWindow does not get redrawn properly after last child is removed
     if (m_parent && m_parent->GetChildren().size() <= 1)
         gtk_widget_queue_draw(m_parent->m_widget);
@@ -314,7 +349,14 @@ void wxMDIChildFrame::SetMenuBar( wxMenuBar *menu_bar )
         /* insert the invisible menu bar into the _parent_ mdi frame */
         m_menuBar->Show(false);
         gtk_box_pack_start(GTK_BOX(mdi_frame->m_mainWidget), m_menuBar->m_widget, false, false, 0);
+#ifdef __WXGTK4__
+        // gtk_box_reorder_child() is gone under GTK4; reorder_child_after()
+        // with a nullptr sibling moves the child to the front, same as
+        // position 0 did.
+        gtk_box_reorder_child_after(GTK_BOX(mdi_frame->m_mainWidget), m_menuBar->m_widget, nullptr);
+#else
         gtk_box_reorder_child(GTK_BOX(mdi_frame->m_mainWidget), m_menuBar->m_widget, 0);
+#endif
         gtk_widget_set_size_request(m_menuBar->m_widget, -1, -1);
     }
 }

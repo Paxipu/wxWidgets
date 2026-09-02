@@ -41,6 +41,25 @@ protected:
 
     virtual void DoMoveWindow(int x, int y, int width, int height) override;
 
+#ifdef __WXGTK4__
+public:
+    // Place the GtkPopover which stands in for the popup toplevel under GTK4,
+    // see popupwin.cpp. Public because the handlers there call it once the
+    // popover has an allocation, which is the first time the inset below can
+    // be measured.
+    void GTKUpdatePointingTo();
+
+    // How far below its own top edge a popover starts its content. Measured
+    // from the allocation, so it only answers once there is one; the last
+    // answer is remembered for the placements that happen before that.
+    int GTKGetContentTopInset();
+
+    unsigned int m_placeAgainIdle = 0;
+    int m_contentTopInset = 0;
+
+protected:
+#endif // __WXGTK4__
+
 #ifdef __WXUNIVERSAL__
     wxDECLARE_EVENT_TABLE();
 #endif

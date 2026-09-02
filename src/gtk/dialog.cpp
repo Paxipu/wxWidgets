@@ -20,6 +20,7 @@
 #include "wx/modalhook.h"
 
 #include "wx/gtk/private/wrapgtk.h"
+#include "wx/gtk/private/gtk3-compat.h"
 
 wxDEFINE_TIED_SCOPED_PTR_TYPE(wxGUIEventLoop)
 
@@ -116,7 +117,14 @@ realize_hook(GSignalInvocationHint*, unsigned, const GValue* param_values, void*
             if (group != group_parent)
             {
                 gtk_window_group_add_window(group_parent, toplevel);
+#ifndef __WXGTK4__
+                // gtk_grab_add() is gone with the rest of GTK4's explicit
+                // grabs. This whole hook works around a GTK bug in which a
+                // scrollbar's grab escaped its window group (seen on Ubuntu
+                // 12.04/12.10), so it is very unlikely to be needed against
+                // GTK4 at all -- and there is no way to express it there.
                 gtk_grab_add(GTK_WIDGET(toplevel));
+#endif
             }
         }
     }
@@ -124,6 +132,34 @@ realize_hook(GSignalInvocationHint*, unsigned, const GValue* param_values, void*
 }
 }
 #endif // GTK 2.10
+
+#ifdef __WXGTK4__
+
+extern "C" {
+
+// GTK4 offers one of two things for "close-request", never both: return TRUE
+// and the window survives, but GtkDialog does not emit "response"; return
+// FALSE and it responds, but the window is destroyed. GTK3's "delete-event"
+// did both, and wx wanted both -- the dialog is a wxWindow its owner still
+// holds, so it must not be destroyed, yet something has to end the modal loop.
+//
+// Ending it here restores that. Close() is what wxTopLevelWindowGTK's own
+// close-request handler does, and for a modal dialog it comes down to
+// EndModal(wxID_CANCEL). That handler is however not connected on the native
+// dialogs -- colour, font, file, directory -- which build their m_widget
+// themselves instead of going through wxTopLevelWindow::Create(), and those
+// are exactly the ones that reach this handler: for any other dialog the
+// wxTLW one runs first and stops the emission.
+static gboolean wx_gtk_dialog_close_request(GtkWindow*, wxDialog* dialog)
+{
+    dialog->Close();
+
+    return TRUE;
+}
+
+}
+
+#endif // __WXGTK4__
 
 int wxDialog::ShowModal()
 {
@@ -164,8 +200,15 @@ int wxDialog::ShowModal()
     // Prevent the widget from being destroyed if the user closes the window.
     // Needed for derived classes which bypass wxTLW::Create(), and therefore
     // the wxTLW "delete-event" handler is not connected
+#ifdef __WXGTK4__
+    // "delete-event" became "close-request", which also has to end the modal
+    // loop here: see the comment on the handler above.
+    gulong handler_id = g_signal_connect(
+        m_widget, "close-request", G_CALLBACK(wx_gtk_dialog_close_request), this);
+#else
     gulong handler_id = g_signal_connect(
         m_widget, "delete-event", G_CALLBACK(gtk_true), this);
+#endif
 
     // Run modal dialog event loop.
     {

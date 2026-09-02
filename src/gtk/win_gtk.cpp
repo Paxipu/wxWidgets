@@ -161,7 +161,19 @@ static void pizza_size_allocate(GtkWidget* widget, int width, int WXUNUSED(heigh
         if (gtk_widget_get_parent(child->widget) != widget)
             continue;
 
-        if (gtk_widget_get_visible(child->widget))
+        // Child visibility as well as visibility: a widget can live here
+        // without taking part in the layout, and that is how it says so.
+        // wxRendererGTK parks one such widget in the top level's client area --
+        // the one it photographs to draw themed controls -- and laying it out
+        // at the 1x1 it was put here with is what produced hundreds of
+        // "attempt to allocate GtkText text with width -17 and height -1" in a
+        // suite run: a GtkDropDown given 1x1 lays its own contents out at 1
+        // minus its padding. See #250.
+        //
+        // Not gtk_widget_should_layout(), which asks about visibility and
+        // nativeness but not about this.
+        if (gtk_widget_get_visible(child->widget) &&
+            gtk_widget_get_child_visible(child->widget))
         {
             pizza->size_allocate_child(
                 child->widget, child->x, child->y, child->width, child->height, w);

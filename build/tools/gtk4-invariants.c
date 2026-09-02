@@ -382,8 +382,12 @@ static void test_theme_colour_names(void)
     printf("theme colour names used by the Bg()/Border() approximation\n");
 
     /* A widget that is never shown has its style computed once, on demand:
-     * installing a provider afterwards does not invalidate it. The probe
-     * relies on this by creating its widget last -- if GTK started
+     * installing a provider afterwards does not invalidate it. This is the
+     * same GTK behaviour as issue #245, where a wxStaticText measured by
+     * SetFont() while hidden keeps the style that measurement computed and
+     * never takes the colour set after it.
+     *
+     * The probe relies on it by creating its widget last -- if GTK started
      * invalidating, reusing a widget would still be wrong, so this is only
      * reported. What would break the probe is the opposite: a fresh widget
      * not seeing the provider, which is the second half of the check. */

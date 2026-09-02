@@ -58,3 +58,10 @@ before pushing.
 * No bare `NULL` in `.h` or `.cpp` — CI greps added lines for it.
 * `codespell` runs in CI; check new prose before pushing.
 * Run the checks CI runs before pushing, not after.
+* Run `test_gui` with `wxUSE_XVFB=1`, which is what CI's Xvfb jobs
+  set. Without it several cases assert things a window manager under
+  Xvfb will not give -- `wxTopLevel::Show` checks `IsActive()` -- and
+  fail for the harness rather than the code.
+* `make -C tests test_gui` does not depend on the library, so it can
+  report "up to date" and leave a binary older than the change under
+  test. `rm -f tests/test_gui` first, every time.

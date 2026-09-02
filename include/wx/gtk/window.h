@@ -574,6 +574,13 @@ protected:
 
     void GTKApplyWidgetStyle(bool forceStyle = false);
 
+#ifdef __WXGTK4__
+    // Apply again, on this window and everything inside it, what was applied
+    // while the window was off screen: under GTK4 that does not always take
+    // effect until the window is on it. See the definition.
+    void GTKReapplyStyleAfterShow();
+#endif
+
     // Helper function to ease native widgets wrapping, called by
     // GTKApplyWidgetStyle() and supposed to be overridden, not called.
     //

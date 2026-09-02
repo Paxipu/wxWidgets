@@ -28,7 +28,10 @@
 #include "wx/cshelp.h"
 #include "wx/dcclient.h"
 #include "wx/overlay.h"
+#include "wx/frame.h"
 #include "wx/panel.h"
+#include "wx/stattext.h"
+#include "wx/stopwatch.h"
 #include "wx/textctrl.h"
 #include "wx/timer.h"
 
@@ -46,6 +49,7 @@
     #include "wx/scrolwin.h"
     #include "wx/gtk/private/wrapgtk.h"
     #include "wx/gtk/private/win_gtk.h"
+
 #endif // __WXGTK4__
 
 class WindowTestCase
@@ -944,6 +948,83 @@ TEST_CASE_METHOD(WindowTestCase, "wxWindow::BackgroundStaysInTheWindow",
          << ", the panel is " << garish.GetAsString(wxC2S_HTML_SYNTAX));
 
     CHECK( read != garish );
+}
+
+// A style set while the window was off screen has to be there when it arrives
+// on it.
+//
+// Under GTK4 it was not. A widget measured while it is not on screen keeps the
+// style that measurement computed, and a later load of the rules behind it
+// does not replace it -- so a colour set after a font, which is a second load,
+// never took effect. wxStaticText is the control it shows on, because it is the
+// one that measures itself in SetFont(), and only the window styled last before
+// its frame was shown was affected: styling anything else afterwards rescued
+// the ones before it. See #245.
+TEST_CASE_METHOD(WindowTestCase, "wxWindow::StyleSetWhileHiddenTakesEffect",
+                 "[window][colour]")
+{
+    if ( wxGTKImpl::IsWayland(nullptr) )
+        return;
+
+    const wxColour garish(255, 0, 255);
+
+    // A frame of its own, because the fault needs a window that is not yet on
+    // screen and the test frame is on it.
+    std::unique_ptr<wxFrame> frame(
+        new wxFrame(wxTheApp->GetTopWindow(), wxID_ANY, "hidden style",
+                    wxPoint(60, 60), wxSize(260, 100)));
+
+    wxStaticText* const text = new wxStaticText(frame.get(), wxID_ANY, "text",
+                                                wxPoint(10, 10), wxSize(200, 50));
+
+    // This order and no other: SetFont() makes wxStaticText measure itself,
+    // which is what computes the style that then went stale, and the colour
+    // arrives in the load after it.
+    wxFont font = text->GetFont();
+    font.SetPointSize(font.GetPointSize() + 4);
+    text->SetFont(font);
+    text->SetBackgroundColour(garish);
+
+    frame->Show();
+    wxTestWaitForPaint(text);
+
+    // Any of it will do: with the fault there is none of the colour at all,
+    // and the middle of the label may be under a glyph.
+    int found = 0;
+    wxStopWatch sw;
+    for ( ;; )
+    {
+        const wxBitmap shot = wxTestCaptureWindow(text);
+        const wxImage img = shot.IsOk() ? shot.ConvertToImage() : wxImage();
+
+        if ( img.IsOk() )
+        {
+            for ( int y = 0; y < img.GetHeight() && !found; ++y )
+            {
+                for ( int x = 0; x < img.GetWidth(); ++x )
+                {
+                    if ( img.GetRed(x, y) == garish.Red() &&
+                         img.GetGreen(x, y) == garish.Green() &&
+                         img.GetBlue(x, y) == garish.Blue() )
+                    {
+                        found = 1;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if ( found || sw.Time() >= 5000 )
+            break;
+
+        for ( int n = 0; n < 10; ++n )
+        {
+            wxYield();
+            wxMilliSleep(25);
+        }
+    }
+
+    CHECK( found );
 }
 
 #endif // __WXGTK4__

@@ -2189,6 +2189,12 @@ bool wxTopLevelWindowGTK::Show( bool show )
     {
         // We may need to redo it after showing the window.
         GTKUpdateClientSizeIfNecessary();
+
+#ifdef __WXGTK4__
+        // And the styles applied while it was not on screen may need doing
+        // again now that it is: see wxWindowGTK::GTKReapplyStyleAfterShow().
+        GTKReapplyStyleAfterShow();
+#endif
     }
 
     GTKSendSizeEventIfNeeded();

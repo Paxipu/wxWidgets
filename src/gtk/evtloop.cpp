@@ -28,12 +28,19 @@
     #include "wx/log.h"
 #endif // WX_PRECOMP
 
+#include "wx/window.h"
+#include "wx/toplevel.h"
+
 #include "wx/private/eventloopsourcesmanager.h"
 #include "wx/apptrait.h"
 
 #include "wx/gtk/private/wrapgtk.h"
+#include "wx/gtk/private/object.h"
 
+#ifndef __WXGTK4__
 GdkWindow* wxGetTopLevelGDK();
+#endif
+GdkDisplay* wxGetTopLevelGdkDisplay();
 
 // ============================================================================
 // wxEventLoop implementation
@@ -43,20 +50,53 @@ GdkWindow* wxGetTopLevelGDK();
 // wxEventLoop running and exiting
 // ----------------------------------------------------------------------------
 
+#ifdef __WXGTK4__
+
+// GTK4 removed gtk_main() and with it gtk_main_level(), so the nesting depth
+// that DoRun() below needs is tracked here. The stack also gives DoRun() the
+// enclosing loop to quit, which gtk_main_quit() used to find for it.
+static wxVector<GMainLoop*> gs_mainLoops;
+
+#endif // __WXGTK4__
+
 wxGUIEventLoop::wxGUIEventLoop()
 {
     m_exitcode = 0;
+#ifdef __WXGTK4__
+    m_mainLoop = nullptr;
+#else
     m_lastEvent = new GdkEvent;
     memset(m_lastEvent, 0, sizeof(GdkEvent));
+#endif
 }
 
 wxGUIEventLoop::~wxGUIEventLoop()
 {
+#ifndef __WXGTK4__
     delete m_lastEvent;
+#endif
 }
 
 int wxGUIEventLoop::DoRun()
 {
+#ifdef __WXGTK4__
+    m_mainLoop = g_main_loop_new(nullptr, FALSE);
+    gs_mainLoops.push_back(m_mainLoop);
+
+    // Same shape as the GTK3 code below: keep re-entering because an Exit()
+    // for an outer loop quits this one too, and then quit the enclosing loop
+    // so that it gets a chance to notice it should exit as well.
+    while ( !m_shouldExit )
+        g_main_loop_run(m_mainLoop);
+
+    gs_mainLoops.pop_back();
+
+    if ( !gs_mainLoops.empty() )
+        g_main_loop_quit(gs_mainLoops.back());
+
+    g_main_loop_unref(m_mainLoop);
+    m_mainLoop = nullptr;
+#else
     guint loopLevel = gtk_main_level();
 
     // This is placed inside of a loop to take into account nested
@@ -78,6 +118,7 @@ int wxGUIEventLoop::DoRun()
     {
         gtk_main_quit();
     }
+#endif // __WXGTK4__/!__WXGTK4__
 
 #if wxUSE_EXCEPTIONS
     // Rethrow any exceptions which could have been produced by the handlers
@@ -93,7 +134,13 @@ void wxGUIEventLoop::DoStop(int rc)
 {
     m_exitcode = rc;
 
+#ifdef __WXGTK4__
+    // Quit the innermost running loop, which is what gtk_main_quit() did.
+    if ( !gs_mainLoops.empty() )
+        g_main_loop_quit(gs_mainLoops.back());
+#else
     gtk_main_quit();
+#endif
 }
 
 void wxGUIEventLoop::WakeUp()
@@ -106,6 +153,8 @@ void wxGUIEventLoop::WakeUp()
         wxTheApp->WakeUpIdle();
 }
 
+#ifndef __WXGTK4__
+
 bool wxGUIEventLoop::GTKIsSameAsLastEvent(const GdkEvent* ev, size_t size)
 {
     if ( memcmp(m_lastEvent, ev, size) == 0 )
@@ -114,6 +163,8 @@ bool wxGUIEventLoop::GTKIsSameAsLastEvent(const GdkEvent* ev, size_t size)
     memcpy(m_lastEvent, ev, size);
     return false;
 }
+
+#endif // !__WXGTK4__
 
 // ----------------------------------------------------------------------------
 // wxEventLoop adding & removing sources
@@ -226,15 +277,28 @@ bool wxGUIEventLoop::Pending() const
         return wxTheApp->EventsPending();
     }
 
+#ifdef __WXGTK4__
+    return g_main_context_pending(nullptr);
+#else
     return gtk_events_pending() != 0;
+#endif
 }
 
 bool wxGUIEventLoop::Dispatch()
 {
     wxCHECK_MSG( IsRunning(), false, wxT("can't call Dispatch() if not running") );
 
+#ifdef __WXGTK4__
+    g_main_context_iteration(nullptr, TRUE);
+
+    // gtk_main_iteration() reported whether the loop had been asked to quit;
+    // g_main_context_iteration() reports whether it dispatched anything, which
+    // is a different question, so answer the original one directly.
+    return !m_shouldExit;
+#else
     // gtk_main_iteration() returns TRUE only if gtk_main_quit() was called
     return !gtk_main_iteration();
+#endif
 }
 
 extern "C" {
@@ -252,7 +316,12 @@ int wxGUIEventLoop::DispatchTimeout(unsigned long timeout)
 {
     bool expired = false;
     const unsigned id = g_timeout_add(timeout, wx_event_loop_timeout, &expired);
+#ifdef __WXGTK4__
+    g_main_context_iteration(nullptr, TRUE);
+    const bool quit = m_shouldExit;
+#else
     bool quit = gtk_main_iteration() != 0;
+#endif
 
     if ( expired )
         return -1;
@@ -265,6 +334,8 @@ int wxGUIEventLoop::DispatchTimeout(unsigned long timeout)
 //-----------------------------------------------------------------------------
 // YieldFor
 //-----------------------------------------------------------------------------
+
+#ifndef __WXGTK4__
 
 extern "C" {
 static void wxgtk_main_do_event(GdkEvent* event, void* data)
@@ -374,8 +445,102 @@ static void wxgtk_main_do_event(GdkEvent* event, void* data)
 }
 }
 
+#endif // !__WXGTK4__
+
+#ifdef __WXGTK4__
+
+// Let GTK catch up with the layout it has scheduled.
+//
+// GTK3 laid out from idle handlers, which running the main loop dispatched, so
+// a yield settled the interface: that is what wx callers have always assumed,
+// and what "wxYield(); // let GTK layout the control" comments throughout the
+// test suite are asking for. GTK4 lays out in the frame clock's phases
+// instead, which running the main loop does not advance. A window shown,
+// hidden, resized or re-filled just before a yield is therefore still stale
+// when it returns, and every query that depends on the layout --
+// wxTextCtrl::PositionToCoords(), HitTest(), the scrollbar ranges -- answers
+// out of date without anything indicating it.
+//
+// So ask each mapped toplevel's clock for a frame and pump until it has
+// produced one. The wait is bounded because a window that is not being
+// presented may never produce another frame, and a yield must not hang.
+static void wxGTKSettleFrames()
+{
+    // Collect the clocks before waiting on any of them. The wait below runs
+    // the main loop, which is free to destroy top level windows -- a yield is
+    // exactly where a deferred Destroy() happens -- so walking
+    // wxTopLevelWindows while pumping it walks a list being changed underneath.
+    // A reference on each clock keeps it valid for the wait even if its window
+    // goes away during an earlier one.
+    wxVector<GdkFrameClock*> clocks;
+
+    for ( wxWindowList::const_iterator i = wxTopLevelWindows.begin();
+          i != wxTopLevelWindows.end();
+          ++i )
+    {
+        GtkWidget* const widget = (*i)->GetHandle();
+        if ( !widget || !gtk_widget_get_mapped(widget) )
+            continue;
+
+        GdkFrameClock* const clock = gtk_widget_get_frame_clock(widget);
+        if ( !GDK_IS_FRAME_CLOCK(clock) )
+            continue;
+
+        clocks.push_back(GDK_FRAME_CLOCK(g_object_ref(clock)));
+    }
+
+    for ( size_t n = 0; n < clocks.size(); n++ )
+    {
+        GdkFrameClock* const clock = clocks[n];
+
+        const gint64 frame = gdk_frame_clock_get_frame_counter(clock);
+        const gint64 deadline = g_get_monotonic_time() + 100000; // 0.1s
+
+        gdk_frame_clock_request_phase(clock, GDK_FRAME_CLOCK_PHASE_LAYOUT);
+
+        while ( gdk_frame_clock_get_frame_counter(clock) == frame &&
+                g_get_monotonic_time() < deadline )
+        {
+            if ( !g_main_context_iteration(nullptr, FALSE) )
+                g_usleep(1000);
+        }
+    }
+
+    for ( size_t n = 0; n < clocks.size(); n++ )
+        g_object_unref(clocks[n]);
+}
+
+#endif // __WXGTK4__
+
 void wxGUIEventLoop::DoYieldFor(long eventsToProcess)
 {
+#ifdef __WXGTK4__
+    // GTK4 removed gdk_event_handler_set(), which is what the GTK3 code below
+    // uses to take over the global event stream, sort each native event into a
+    // wxEventCategory and put back the ones the caller didn't ask for. There is
+    // no replacement: GTK4 delivers events to surfaces internally and offers no
+    // interception point, and GdkEvent is opaque so they could not be examined
+    // or copied anyway.
+    //
+    // So a GTK4 yield processes every pending native event rather than only
+    // those in the requested categories. Filtering by category still works for
+    // wx events, which the base class handles below; what is lost is deferring
+    // *native* ones, so e.g. YieldFor(wxEVT_CATEGORY_UI) no longer keeps user
+    // input from reaching a window during the yield.
+    //
+    // See docs/gtk/gtk4-status.md for this as a recorded fidelity gap.
+    while ( Pending() )
+        g_main_context_iteration(nullptr, FALSE);
+
+    wxGTKSettleFrames();
+
+    // The frame above is where GTK4's deferred focus move would have happened,
+    // so whatever wxWindowGTK is watching for it need not watch any longer.
+    extern void wxGTKClearFocusRestoreMark();
+    wxGTKClearFocusRestoreMark();
+
+    wxEventLoopBase::DoYieldFor(eventsToProcess);
+#else
     // temporarily replace the global GDK event handler with our function, which
     // categorizes the events and using m_eventsToProcessInsideYield decides
     // if an event should be processed immediately or not
@@ -397,7 +562,7 @@ void wxGUIEventLoop::DoYieldFor(long eventsToProcess)
     // put any unprocessed GDK events back in the queue
     if ( !m_queuedGdkEvents.empty() )
     {
-        GdkDisplay* disp = gdk_window_get_display(wxGetTopLevelGDK());
+        GdkDisplay* disp = wxGetTopLevelGdkDisplay();
         for ( GdkEvent* ev : m_queuedGdkEvents )
         {
             // NOTE: gdk_display_put_event makes a copy of the event passed to it
@@ -407,4 +572,5 @@ void wxGUIEventLoop::DoYieldFor(long eventsToProcess)
 
         m_queuedGdkEvents.clear();
     }
+#endif // __WXGTK4__/!__WXGTK4__
 }

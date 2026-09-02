@@ -14,7 +14,11 @@
 // wxGUIEventLoop for wxGTK
 // ----------------------------------------------------------------------------
 
+#ifdef __WXGTK4__
+typedef struct _GdkEvent        GdkEvent;
+#else
 typedef union  _GdkEvent        GdkEvent;
+#endif
 
 #include <vector>
 
@@ -31,12 +35,19 @@ public:
 
     // implementation only from now on
 
+#ifndef __WXGTK4__
+    // Neither of these has any GTK4 use. GTK4 removed gdk_event_handler_set(),
+    // the hook DoYieldFor() installed to sort native events by category and
+    // defer the ones not wanted yet, so there is nothing to store; and
+    // EventAlreadyProcessed(), the only caller of the second, is itself GTK3
+    // only, GdkEvent being opaque under GTK4 and so not comparable byte-wise.
     void StoreGdkEventForLaterProcessing(GdkEvent* ev)
         { m_queuedGdkEvents.push_back(ev); }
 
     // Check if this event is the same as the last event passed to this
     // function and store it for future checks.
     bool GTKIsSameAsLastEvent(const GdkEvent* ev, size_t size);
+#endif // !__WXGTK4__
 
 protected:
     virtual int DoRun() override;
@@ -47,11 +58,17 @@ private:
     // the exit code of this event loop
     int m_exitcode;
 
+#ifdef __WXGTK4__
+    // GTK4 has no gtk_main(): running a loop means running a GMainLoop, and
+    // this is ours while it is running and null otherwise.
+    GMainLoop* m_mainLoop;
+#else
     // used to temporarily store events processed in DoYieldFor()
     std::vector<GdkEvent*> m_queuedGdkEvents;
 
     // last event passed to GTKIsSameAsLastEvent()
     GdkEvent* m_lastEvent;
+#endif
 
     wxDECLARE_NO_COPY_CLASS(wxGUIEventLoop);
 };

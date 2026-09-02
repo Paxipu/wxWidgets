@@ -68,6 +68,40 @@ wx_emission_hook(GSignalInvocationHint*, guint, const GValue*, gpointer data)
 // Add signal emission hooks, to re-install idle handler when needed.
 static void wx_add_idle_hooks()
 {
+#ifdef __WXGTK4__
+    // Neither GtkWidget::event nor GtkWidget::size-allocate exists any more:
+    // GTK4 delivers events to controllers rather than through a signal on the
+    // widget, and size allocation is a vfunc with no signal at all. (Leaving
+    // the GTK3 code here would not merely be a no-op: g_signal_lookup()
+    // returns 0 for both names and g_signal_add_emission_hook() then asserts,
+    // twice per call, which is how this was noticed.)
+    //
+    // What has taken over from GtkWidget::event is GdkSurface::event, one
+    // level below the widgets: every event GDK delivers to a surface passes
+    // through it, whatever the widget it ends up at, and it can be hooked.
+    // For re-arming the idle handler that is exactly as good, because all this
+    // needs to know is that something happened.
+    //
+    // Something has to, and it cannot be left to WakeUpIdle() alone: the idle
+    // source removes itself when there is no more idle work, and native events
+    // handled entirely inside GTK callbacks -- the window manager's close
+    // button being the one that showed this up -- never go through wx's event
+    // queue. wxTopLevelWindow::Destroy() only puts the window on
+    // wxPendingDelete and waits for idle time to delete it, so without this
+    // hook a quiet application would not close its last window at all.
+    {
+        static bool hook_installed;
+        if (!hook_installed)
+        {
+            static guint sig_id;
+            if (sig_id == 0)
+                sig_id = g_signal_lookup("event", GDK_TYPE_SURFACE);
+            hook_installed = true;
+            g_signal_add_emission_hook(
+                sig_id, 0, wx_emission_hook, &hook_installed, nullptr);
+        }
+    }
+#else
     // "event" hook
     {
         static bool hook_installed;
@@ -96,6 +130,7 @@ static void wx_add_idle_hooks()
                 sig_id, 0, wx_emission_hook, &hook_installed, nullptr);
         }
     }
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 extern "C" {
@@ -107,6 +142,18 @@ static gboolean wxapp_idle_callback(gpointer)
 
 // 0: no change, 1: focus in, 2: focus out
 static wxUIntPtr gs_focusChange;
+
+#ifdef __WXGTK4__
+
+// GTK4 has no focus-in-event/focus-out-event to hook, so this is told about
+// the change instead: toplevel.cpp already watches each window's "is-active"
+// property, which is what the hooks were filtering the focus events down to.
+void wxGTKAppNotifyWindowActivated(bool active)
+{
+    gs_focusChange = active ? 1 : 2;
+}
+
+#else // !__WXGTK4__
 
 extern "C" {
 static gboolean
@@ -120,8 +167,34 @@ wx_focus_event_hook(GSignalInvocationHint*, unsigned, const GValue* param_values
 }
 }
 
+#endif // __WXGTK4__/!__WXGTK4__
+
+#ifdef __WXGTK4__
+
+// Non-zero while a wxGTKIdleSuppressor exists; see the class's comment.
+static int gs_idleSuppressCount = 0;
+
+wxGTKIdleSuppressor::wxGTKIdleSuppressor()
+{
+    gs_idleSuppressCount++;
+}
+
+wxGTKIdleSuppressor::~wxGTKIdleSuppressor()
+{
+    gs_idleSuppressCount--;
+}
+
+#endif // __WXGTK4__
+
 bool wxApp::DoIdle()
 {
+#ifdef __WXGTK4__
+    // Keep the source, so that the idle processing skipped here happens as
+    // soon as the suppressor goes away.
+    if ( gs_idleSuppressCount > 0 )
+        return true;
+#endif
+
     guint id_save;
     {
         // Allow another idle source to be added while this one is busy.
@@ -582,13 +655,18 @@ bool wxApp::Initialize(int& argc_, wxChar **argv_)
     // make sure GtkWidget type is loaded, signal emission hooks need it
     g_type_class_ref(widgetType);
 
+#ifndef __WXGTK4__
     // focus in/out hooks used for generating wxEVT_ACTIVATE_APP
+    //
+    // Under GTK4 these signals are gone; wxGTKAppNotifyWindowActivated() above
+    // is called from toplevel.cpp instead.
     g_signal_add_emission_hook(
         g_signal_lookup("focus_in_event", widgetType),
         0, wx_focus_event_hook, GINT_TO_POINTER(1), nullptr);
     g_signal_add_emission_hook(
         g_signal_lookup("focus_out_event", widgetType),
         0, wx_focus_event_hook, GINT_TO_POINTER(2), nullptr);
+#endif // !__WXGTK4__
 
     WakeUpIdle();
 
@@ -640,7 +718,15 @@ bool wxApp::EventsPending()
         m_idleSourceId = 0;
         wx_add_idle_hooks();
     }
+#ifdef __WXGTK4__
+    // gtk_events_pending() was removed under GTK4 -- it was always just a
+    // thin wrapper around the default GMainContext check (GTK3 no longer
+    // needed to special-case flushing X11 events here either), so call
+    // that directly.
+    return g_main_context_pending(nullptr) != 0;
+#else
     return gtk_events_pending() != 0;
+#endif
 }
 
 void wxApp::OnAssertFailure(const wxChar *file,

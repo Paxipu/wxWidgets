@@ -22,8 +22,26 @@
     #define WXUNUSED_IN_GTK3(x) x
 #endif
 
+// The native key event passed along the input-method path. GTK4 removed the
+// concrete GdkEventKey struct in favour of an opaque GdkEvent, but the IM
+// context still consumes a native event either way, so the code paths only
+// need the type to differ, not their shape.
+#ifdef __WXGTK4__
+typedef struct _GdkEvent GdkEvent;
+typedef GdkEvent wxGTKNativeKeyEvent;
+
+// See the comment on m_scrollBar below.
+typedef struct _GtkScrollbar GtkScrollbar;
+typedef GtkScrollbar wxGtkScrollbar;
+#else
 typedef struct _GdkEventKey GdkEventKey;
+typedef GdkEventKey wxGTKNativeKeyEvent;
+
+typedef struct _GtkRange GtkRange;
+typedef GtkRange wxGtkScrollbar;
+#endif
 typedef struct _GtkIMContext GtkIMContext;
+typedef struct _GdkFrameClock GdkFrameClock;
 
 WX_DEFINE_EXPORTED_ARRAY_PTR(GdkWindow *, wxArrayGdkWindows);
 
@@ -162,6 +180,12 @@ public:
     // It is also responsible for background erase events.
 #ifdef __WXGTK3__
     void GTKSendPaintEvents(cairo_t* cr);
+#if defined(__WXGTK4__) && !defined(__WXUNIVERSAL__)
+    // Paint the wxBORDER_* decoration. GTK3 did this from a handler on the
+    // parent's draw signal; GTK4 has neither that signal nor a per-widget
+    // window, so wx draws it itself at the end of the paint path.
+    void GTKDrawBorder(cairo_t* cr);
+#endif
 #else
     void GTKSendPaintEvents(const GdkRegion* region);
 #endif
@@ -187,6 +211,27 @@ public:
     // base version just calls HandleWindowEvent()
     virtual bool GTKProcessEvent(wxEvent& event) const;
 
+#ifdef __WXGTK4__
+    // Override this and return true for the keys this window binds itself, so
+    // that a menu accelerator using the same key does not fire while this
+    // window has the focus. This is wxGTK4's half of what
+    // MSWShouldPreProcessMessage() does for wxMSW.
+    //
+    // GTK4 gives no way to ask a widget whether it has a binding for a key,
+    // and a window shortcut runs whatever the focused widget does with it --
+    // in every scope GTK offers -- so the only thing that knows is the
+    // control itself. See wxWidgets issue #221 and
+    // docs/gtk/probes/gtk4-shortcut-scope-vs-focus.c.
+    //
+    // keyval and modifiers are a GDK keyval and GdkModifierType; they are
+    // taken as int here to keep this header free of GDK types.
+    virtual bool GTKShouldPreProcessKey(int WXUNUSED(keyval),
+                                        int WXUNUSED(modifiers)) const
+    {
+        return false;
+    }
+#endif // __WXGTK4__
+
     // Map GTK widget direction of the given widget to/from wxLayoutDirection
     static wxLayoutDirection GTKGetLayout(GtkWidget *widget);
     static void GTKSetLayout(GtkWidget *widget, wxLayoutDirection dir);
@@ -196,7 +241,14 @@ public:
     void GTKReleaseMouseAndNotify();
     static void GTKHandleCaptureLost();
 
+#ifdef __WXGTK4__
+    // GdkWindow is gone: these return the toplevel's GdkSurface, which is as
+    // close as GTK4 gets. Note that unlike a GdkWindow it is shared by every
+    // widget under that toplevel rather than being per-widget.
+    GdkSurface* GTKGetDrawingWindow() const;
+#else
     GdkWindow* GTKGetDrawingWindow() const;
+#endif
 
     bool GTKHandleFocusIn();
     virtual bool GTKHandleFocusOut();
@@ -231,6 +283,7 @@ protected:
     virtual bool GTKWidgetNeedsMnemonic() const;
     virtual void GTKWidgetDoSetMnemonic(GtkWidget* w);
 
+#ifndef __WXGTK4__
     // Get the GdkWindows making part of this window: usually there will be
     // only one of them in which case it should be returned directly by this
     // function. If there is more than one GdkWindow (can be the case for
@@ -238,10 +291,16 @@ protected:
     //
     // This is not pure virtual for backwards compatibility but almost
     // certainly must be overridden in any wxControl-derived class!
+    //
+    // This doesn't exist under GTK4, where widgets don't have windows at all:
+    // its only purpose was enumerating the windows to set a cursor on each of
+    // them, and gtk_widget_set_cursor() sets the cursor for a widget and all
+    // of its children in a single call there.
     virtual GdkWindow *GTKGetWindow(wxArrayGdkWindows& windows) const;
 
     // Check if the given window makes part of this widget
     bool GTKIsOwnWindow(GdkWindow *window) const;
+#endif // !__WXGTK4__
 
     // Return the GdkWindow associated with either m_wxwindow or m_widget.
     //
@@ -250,10 +309,18 @@ protected:
     //
     // Unlike GTKGetDrawingWindow(), this function always returns something
     // non-null for a mapped window.
+#ifdef __WXGTK4__
+    GdkSurface* GTKGetMainWindow() const;
+#else
     GdkWindow* GTKGetMainWindow() const;
+#endif
 
     // Return the GdkWindow associated with GetConnectWidget().
+#ifdef __WXGTK4__
+    GdkSurface* GTKGetConnectWindow() const;
+#else
     GdkWindow* GTKGetConnectWindow() const;
+#endif
 
 public:
     // Returns the default context which usually is anti-aliased
@@ -274,8 +341,29 @@ public:
     // is this window transparent for the mouse events (as wxStaticBox is)?
     virtual bool GTKIsTransparentForMouse() const { return false; }
 
+#ifdef __WXGTK4__
+    // Detach m_widget from its parent using that parent's own removal call.
+    void GTKDetachFromParent();
+#endif
+
+    // Undo the frame clock "layout" connections GTKHandleRealized() makes.
+    // Declared unconditionally: this header forward-declares its GTK types
+    // rather than including gtk.h, so GTK_CHECK_VERSION() is not available
+    // here to match the guard on the definition.
+    void GTKDisconnectFrameClock();
+
+    // The frame clock GTKHandleRealized() connected to, or null.
+    //
+    // Remembering it is what makes disconnecting reliable:
+    // gtk_widget_get_frame_clock() only answers while the widget is still
+    // rooted, so by the time a window is being destroyed it can already
+    // return null while the clock is still alive and still holding handlers
+    // that take this window as their user data. A weak pointer is kept on it
+    // so this goes back to null by itself if the clock dies first.
+    GdkFrameClock* m_frameClock = nullptr;
+
     // Common scroll event handling code for wxWindow and wxScrollBar
-    wxEventType GTKGetScrollEventType(GtkRange* range);
+    wxEventType GTKGetScrollEventType(wxGtkScrollbar* range);
 
     // position and size of the window
     int                  m_x, m_y;
@@ -287,6 +375,12 @@ public:
     bool m_useCachedClientSize;
     // Whether the GtkAllocation and GdkWindow positions are known to be correct
     bool m_isGtkPositionValid;
+
+#ifdef __WXGTK4__
+    // Creation order, used only to recognize the focus GTK4 hands to a window
+    // created after the one holding it was destroyed: see GTKHandleFocusIn().
+    unsigned m_creationSerial;
+#endif // __WXGTK4__
 
     // see the docs in src/gtk/window.cpp
     GtkWidget           *m_widget;          // mostly the widget seen by the rest of GTK
@@ -318,13 +412,13 @@ public:
 
     // Pointer to the event being currently processed by the IME or nullptr if not
     // inside key handling.
-    GdkEventKey* m_imKeyEvent;
+    wxGTKNativeKeyEvent* m_imKeyEvent;
 
     // This method generalizes gtk_im_context_filter_keypress(): for the
     // generic windows it does just that but it's overridden by the classes
     // wrapping native widgets that use IM themselves and so provide specific
     // methods for accessing it such gtk_entry_im_context_filter_keypress().
-    virtual int GTKIMFilterKeypress(GdkEventKey* event) const;
+    virtual int GTKIMFilterKeypress(wxGTKNativeKeyEvent* event) const;
 
     // This method must be called from the derived classes "insert-text" signal
     // handlers to check if the text is not being inserted by the IM and, if
@@ -343,7 +437,11 @@ public:
     enum ScrollDir { ScrollDir_Horz, ScrollDir_Vert, ScrollDir_Max };
 
     // horizontal/vertical scroll bar
-    GtkRange* m_scrollBar[ScrollDir_Max];
+    // GTK4's GtkScrollbar is not a GtkRange any more -- the two are unrelated
+    // widgets now, and a scrollbar's state is reached through its adjustment.
+    // wxGtkScrollbar and the wxGtkScrollbar*() helpers in wx/gtk/private.h
+    // hide the difference; see the comment there.
+    wxGtkScrollbar* m_scrollBar[ScrollDir_Max];
 
     // horizontal/vertical scroll position
     double m_scrollPos[ScrollDir_Max];
@@ -362,7 +460,13 @@ public:
     }
 
     // find the direction of the given scrollbar (must be one of ours)
-    ScrollDir ScrollDirFromRange(GtkRange *range) const;
+    ScrollDir ScrollDirFromRange(wxGtkScrollbar *range) const;
+#ifdef __WXGTK4__
+    // Under GTK4 the value-changed notification comes from the scrollbar's
+    // adjustment rather than from the scrollbar, so the handler has to find
+    // its way back. Returns nullptr if the adjustment is not one of ours.
+    wxGtkScrollbar* GTKScrollbarFromAdjustment(GtkAdjustment* adj) const;
+#endif // __WXGTK4__
 
     // Set the given cursor for the window.
     void GTKSetCursor(const wxCursor& cursor);
@@ -455,6 +559,12 @@ protected:
     // allocated, and remains owned, by the caller.
     void GTKApplyCssStyle(GtkCssProvider* provider, const char* style);
     void GTKApplyCssStyle(const char* style);
+
+    // Same, but for rules that describe this window's own frame rather than
+    // anything inside it. Under GTK4 the two are not the same thing: providers
+    // are display-wide there, so without this a container styles the controls
+    // it holds as well.
+    void GTKApplyCssStyleToSelf(const char* style);
 #else // GTK+ < 3
     // Called by ApplyWidgetStyle (which is called by SetFont() and
     // SetXXXColour etc to apply style changed to native widgets) to create
@@ -463,6 +573,13 @@ protected:
 #endif
 
     void GTKApplyWidgetStyle(bool forceStyle = false);
+
+#ifdef __WXGTK4__
+    // Apply again, on this window and everything inside it, what was applied
+    // while the window was off screen: under GTK4 that does not always take
+    // effect until the window is on it. See the definition.
+    void GTKReapplyStyleAfterShow();
+#endif
 
     // Helper function to ease native widgets wrapping, called by
     // GTKApplyWidgetStyle() and supposed to be overridden, not called.
@@ -485,8 +602,10 @@ protected:
     void ConstrainSize();
 
 #ifdef __WXGTK3__
+#ifndef __WXGTK4__
     static GdkWindow* GTKFindWindow(GtkWidget* widget);
     static void GTKFindWindow(GtkWidget* widget, wxArrayGdkWindows& windows);
+#endif // !__WXGTK4__
 
     bool m_needSizeEvent;
 #endif
@@ -510,10 +629,12 @@ private:
     bool DoScrollByUnits(ScrollDir dir, ScrollUnit unit, int units);
     virtual void AddChildGTK(wxWindowGTK* child);
 
+#ifndef __WXGTK4__
     // Set the given (possibly null) cursor for all GdkWindows of this window.
     //
     // Return all windows for which we changed the cursor (may be empty).
     wxArrayGdkWindows GTKSetCursorForAllWindows(GdkCursor* cursor);
+#endif // !__WXGTK4__
 
 #ifdef __WXGTK3__
     // paint context is stashed here so wxPaintDC can use it

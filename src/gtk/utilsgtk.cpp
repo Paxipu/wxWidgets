@@ -47,7 +47,10 @@
 #include <unistd.h>
 #endif
 
+#ifndef __WXGTK4__
 GdkWindow* wxGetTopLevelGDK();
+#endif
+GdkDisplay* wxGetTopLevelGdkDisplay();
 
 //----------------------------------------------------------------------------
 // misc.
@@ -73,7 +76,7 @@ wxDisplayInfo wxGetDisplayInfo()
 {
     wxDisplayInfo info = { nullptr, wxDisplayNone };
 #if defined(GDK_WINDOWING_WAYLAND) || defined(GDK_WINDOWING_X11)
-    GdkDisplay *display = gdk_window_get_display(wxGetTopLevelGDK());
+    GdkDisplay *display = wxGetTopLevelGdkDisplay();
 #endif
 
 #ifdef GDK_WINDOWING_X11
@@ -276,10 +279,15 @@ bool wxGUIAppTraits::ShowAssertDialog(const wxString& msg)
         GtkWidget *dialog = gtk_assert_dialog_new();
         gtk_assert_dialog_set_message(GTK_ASSERT_DIALOG(dialog), msg.mb_str());
 
-        GdkDisplay* display = gtk_widget_get_display(dialog);
 #ifdef __WXGTK4__
-        gdk_seat_ungrab(gdk_display_get_default_seat(display));
-#elif defined(__WXGTK3__)
+        // Nothing to ungrab: GTK4 removed explicit grabs entirely (see
+        // wxWindowGTK::DoReleaseMouse()). This existed so an assert raised
+        // while the pointer was grabbed could still be dismissed; under GTK4
+        // the implicit grab a gesture holds ends with its own sequence, so
+        // there is nothing here that could block the dialog.
+#else
+        GdkDisplay* display = gtk_widget_get_display(dialog);
+#if defined(__WXGTK3__)
         GdkDevice* const device = wx_get_gdk_device_from_display(display);
 
         wxGCC_WARNING_SUPPRESS(deprecated-declarations)
@@ -287,7 +295,8 @@ bool wxGUIAppTraits::ShowAssertDialog(const wxString& msg)
         wxGCC_WARNING_RESTORE()
 #else
         gdk_display_pointer_ungrab(display, unsigned(GDK_CURRENT_TIME));
-#endif
+#endif // __WXGTK3__/!__WXGTK3__
+#endif // __WXGTK4__/!__WXGTK4__
 
 #if wxUSE_STACKWALKER
         // save the current stack ow...
@@ -303,7 +312,12 @@ bool wxGUIAppTraits::ShowAssertDialog(const wxString& msg)
         );
 #endif // wxUSE_STACKWALKER
 
+#ifdef __WXGTK4__
+        // Not a GtkDialog there: see wx/gtk/assertdlg_gtk.h.
+        gint result = gtk_assert_dialog_run(GTK_ASSERT_DIALOG(dialog));
+#else
         gint result = gtk_dialog_run(GTK_DIALOG (dialog));
+#endif
         bool returnCode = false;
         switch (result)
         {
@@ -328,7 +342,11 @@ bool wxGUIAppTraits::ShowAssertDialog(const wxString& msg)
                 wxFAIL_MSG( wxT("unexpected return code from GtkAssertDialog") );
         }
 
+#ifdef __WXGTK4__
+        gtk_window_destroy(GTK_WINDOW(dialog));
+#else
         gtk_widget_destroy(dialog);
+#endif
         return returnCode;
     }
 #endif // wxDEBUG_LEVEL

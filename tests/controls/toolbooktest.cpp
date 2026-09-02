@@ -20,6 +20,10 @@
 #include "wx/toolbar.h"
 #include "bookctrlbasetest.h"
 
+#ifdef __WXGTK4__
+    #include "wx/gtk/private/wrapgtk.h"
+#endif // __WXGTK4__
+
 class ToolbookTestCase : public BookCtrlBaseTestCase, public CppUnit::TestCase
 {
 public:
@@ -42,9 +46,15 @@ private:
     CPPUNIT_TEST_SUITE( ToolbookTestCase );
         wxBOOK_CTRL_BASE_TESTS();
         CPPUNIT_TEST( ToolBar );
+#ifdef __WXGTK4__
+        CPPUNIT_TEST( ToolPacking );
+#endif // __WXGTK4__
     CPPUNIT_TEST_SUITE_END();
 
     void ToolBar();
+#ifdef __WXGTK4__
+    void ToolPacking();
+#endif // __WXGTK4__
 
     wxToolbook *m_toolbook;
 
@@ -75,5 +85,39 @@ void ToolbookTestCase::ToolBar()
     CPPUNIT_ASSERT(toolbar);
     CPPUNIT_ASSERT_EQUAL(3, toolbar->GetToolsCount());
 }
+
+#ifdef __WXGTK4__
+void ToolbookTestCase::ToolPacking()
+{
+    wxToolBar* const toolbar =
+        static_cast<wxToolBar*>(m_toolbook->GetToolBar());
+    GtkBox* const box = GTK_BOX(toolbar->GTKGetToolbar());
+
+    CPPUNIT_ASSERT_EQUAL(0, toolbar->GetToolPacking());
+    CPPUNIT_ASSERT_EQUAL(0, gtk_box_get_spacing(box));
+
+    toolbar->SetToolPacking(7);
+    CPPUNIT_ASSERT_EQUAL(7, toolbar->GetToolPacking());
+    CPPUNIT_ASSERT_EQUAL(7, gtk_box_get_spacing(box));
+
+    toolbar->SetToolPacking(0);
+    CPPUNIT_ASSERT_EQUAL(0, toolbar->GetToolPacking());
+    CPPUNIT_ASSERT_EQUAL(0, gtk_box_get_spacing(box));
+
+    // Invalid negative values must not put the wx value and the native value
+    // out of sync. This also keeps the sample's Decrease command at zero.
+    toolbar->SetToolPacking(-1);
+    CPPUNIT_ASSERT_EQUAL(0, toolbar->GetToolPacking());
+    CPPUNIT_ASSERT_EQUAL(0, gtk_box_get_spacing(box));
+
+    wxToolBar toolbarCreatedLater;
+    toolbarCreatedLater.SetToolPacking(5);
+    CPPUNIT_ASSERT(toolbarCreatedLater.Create(wxTheApp->GetTopWindow(),
+                                              wxID_ANY));
+    CPPUNIT_ASSERT_EQUAL(
+        5,
+        gtk_box_get_spacing(GTK_BOX(toolbarCreatedLater.GTKGetToolbar())));
+}
+#endif // __WXGTK4__
 
 #endif //wxUSE_TOOLBOOK

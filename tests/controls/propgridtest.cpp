@@ -20,6 +20,9 @@
 #include "wx/propgrid/propgrid.h"
 #include "wx/propgrid/manager.h"
 #include "wx/propgrid/advprops.h"
+#if wxUSE_TOOLBAR
+#include "wx/toolbar.h"
+#endif
 
 #include "waitfor.h"
 
@@ -1810,6 +1813,27 @@ TEST_CASE("PropertyGridTestCase", "[propgrid]")
         }
         SUCCEED();
     }
+
+#if wxUSE_TOOLBAR
+    SECTION("ToolbarLayoutAfterAddingPage")
+    {
+        std::unique_ptr<wxPropertyGridManager> manager(
+            new wxPropertyGridManager(wxTheApp->GetTopWindow(), wxID_ANY,
+                                      wxDefaultPosition, wxSize(400, 300),
+                                      wxPG_TOOLBAR));
+        wxToolBar* const toolbar = manager->GetToolBar();
+
+        REQUIRE(toolbar);
+        REQUIRE(toolbar->GetToolsCount() == 0);
+
+        manager->AddPage("Page");
+
+        REQUIRE(toolbar->GetToolsCount() == 1);
+        INFO("toolbar size: " << toolbar->GetSize());
+        INFO("toolbar best size: " << toolbar->GetBestSize());
+        CHECK(toolbar->GetSize().y >= toolbar->GetBestSize().y);
+    }
+#endif // wxUSE_TOOLBAR
 
     SECTION("WindowStyles")
     {

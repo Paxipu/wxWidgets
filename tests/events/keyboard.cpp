@@ -24,6 +24,10 @@
 #include "wx/uiaction.h"
 #include "wx/vector.h"
 
+#ifdef __WXGTK3__
+    #include "wx/gtk/private/backend.h"
+#endif // __WXGTK3__
+
 #include "waitfor.h"
 
 namespace
@@ -372,5 +376,21 @@ void KeyboardEventTestCase::ShiftSpecial()
     ASSERT_KEY_EVENT_IS( m_win->GetKeyUpEvent(1),
                          ModKeyUp(WXK_SHIFT) );
 }
+
+#ifdef __WXGTK3__
+
+TEST_CASE("wxUIActionSimulator is unavailable under Wayland",
+          "[uiaction][wayland]")
+{
+    if ( !wxGTKImpl::IsWayland(nullptr) )
+        return;
+
+    wxUIActionSimulator sim;
+
+    CHECK_FALSE(sim.MouseMove(0, 0));
+    CHECK_FALSE(sim.KeyDown('A'));
+}
+
+#endif // __WXGTK3__
 
 #endif // wxUSE_UIACTIONSIMULATOR

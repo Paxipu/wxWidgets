@@ -20,17 +20,37 @@
 #include "asserthelper.h"
 #include "testableframe.h"
 #include "testwindow.h"
+#include "testpaint.h"
 #include "waitfor.h"
 
 #include "wx/uiaction.h"
 #include "wx/caret.h"
 #include "wx/cshelp.h"
 #include "wx/dcclient.h"
+#include "wx/overlay.h"
+#include "wx/frame.h"
+#include "wx/panel.h"
+#include "wx/stattext.h"
+#include "wx/stopwatch.h"
+#include "wx/textctrl.h"
 #include "wx/timer.h"
+
+#ifdef __WXGTK3__
+    #include "wx/gtk/private/backend.h"
+#endif
 #include "wx/tooltip.h"
 #include "wx/wupdlock.h"
 
 #include "wx/private/make_unique.h"
+
+#ifdef __WXGTK4__
+    #include "wx/button.h"
+    #include "wx/popupwin.h"
+    #include "wx/scrolwin.h"
+    #include "wx/gtk/private/wrapgtk.h"
+    #include "wx/gtk/private/win_gtk.h"
+
+#endif // __WXGTK4__
 
 class WindowTestCase
 {
@@ -253,6 +273,146 @@ TEST_CASE_METHOD(WindowTestCase, "Window::Mouse", "[window]")
     CHECK(!m_window->HasCapture());
 }
 
+#ifdef __WXGTK4__
+TEST_CASE_METHOD(WindowTestCase, "Window::DestroyOverlayRemovesNativeChild",
+                 "[window][overlay]")
+{
+    m_window->SetSize(200, 150);
+    m_window->Show();
+    wxYield();
+
+    wxPizza* const pizza = WX_PIZZA(m_window->GetConnectWidget());
+    const unsigned int initialChildCount = g_list_length(pizza->m_children);
+
+    unsigned int state = 0x28;
+    for (int i = 0; i < 32; ++i)
+    {
+        state = state * 1664525u + 1013904223u;
+        m_window->SetSize(100 + state % 200, 100 + (state >> 16) % 150);
+
+        {
+            wxOverlay overlay;
+            wxClientDC dc(m_window);
+            {
+                wxDCOverlay overlayDC(overlay, &dc);
+            }
+
+            REQUIRE( g_list_length(pizza->m_children) == initialChildCount + 1 );
+        }
+
+        CHECK( g_list_length(pizza->m_children) == initialChildCount );
+    }
+}
+
+TEST_CASE_METHOD(WindowTestCase, "Window::MoveVisibleCaret",
+                 "[window][caret]")
+{
+    class BlinkTimeRestorer
+    {
+    public:
+        BlinkTimeRestorer()
+            : m_blinkTime(wxCaret::GetBlinkTime())
+        {
+            wxCaret::SetBlinkTime(0);
+        }
+
+        ~BlinkTimeRestorer()
+        {
+            wxCaret::SetBlinkTime(m_blinkTime);
+        }
+
+    private:
+        const int m_blinkTime;
+    } restoreBlinkTime;
+
+    constexpr int windowWidth = 200;
+    constexpr int windowHeight = 150;
+    constexpr int caretWidth = 3;
+    constexpr int caretHeight = 12;
+
+    m_window->SetSize(windowWidth, windowHeight);
+    m_window->Show();
+    wxYield();
+
+    wxCaret* const caret = new wxCaret(m_window, caretWidth, caretHeight);
+    m_window->SetCaret(caret);
+
+    const wxPoint initialPosition(7, 9);
+    caret->Move(initialPosition);
+    caret->Show();
+    wxYield();
+
+    GtkWidget* overlay = nullptr;
+    GtkWidget* const connectWidget = m_window->GetConnectWidget();
+    for (GtkWidget* child = gtk_widget_get_first_child(connectWidget);
+         child;
+         child = gtk_widget_get_next_sibling(child))
+    {
+        if (GTK_IS_DRAWING_AREA(child) && !gtk_widget_get_can_target(child))
+        {
+            overlay = child;
+            break;
+        }
+    }
+    REQUIRE( overlay );
+
+    const auto getOverlayPosition = [overlay]
+    {
+        graphene_rect_t bounds;
+        REQUIRE( gtk_widget_compute_bounds(overlay,
+                                            gtk_widget_get_parent(overlay),
+                                            &bounds) );
+        return wxPoint(wxRound(bounds.origin.x), wxRound(bounds.origin.y));
+    };
+
+    CHECK( getOverlayPosition() == initialPosition );
+
+    const wxPoint positions[] =
+    {
+        wxPoint(31, 17),
+        wxPoint(0, 0),
+        wxPoint(177, 133),
+        wxPoint(83, 61)
+    };
+    for (const wxPoint& position : positions)
+    {
+        caret->Move(position);
+        wxYield();
+        CHECK( getOverlayPosition() == position );
+    }
+
+    // Exercise the same position invariant over a wider deterministic sample
+    // without allowing the caret to extend beyond the window.
+    unsigned state = 0x71;
+    for (int i = 0; i < 32; ++i)
+    {
+        state = state * 1664525u + 1013904223u;
+        const wxPoint position(
+            state % (windowWidth - caretWidth + 1),
+            (state >> 16) % (windowHeight - caretHeight + 1));
+        caret->Move(position);
+        wxYield();
+        CHECK( getOverlayPosition() == position );
+    }
+
+    caret->OnTimer();
+    const wxPoint blinkedOutMovePosition(47, 29);
+    caret->Move(blinkedOutMovePosition);
+    wxYield();
+    caret->OnTimer();
+    wxYield();
+    CHECK( getOverlayPosition() == blinkedOutMovePosition );
+
+    caret->Hide();
+    const wxPoint hiddenMovePosition(19, 23);
+    caret->Move(hiddenMovePosition);
+    wxYield();
+    caret->Show();
+    wxYield();
+    CHECK( getOverlayPosition() == hiddenMovePosition );
+}
+#endif // __WXGTK4__
+
 #if wxUSE_HELP
 TEST_CASE_METHOD(WindowTestCase, "Window::ContextHelpCaptureLost",
                  "[window][help]")
@@ -303,6 +463,36 @@ TEST_CASE_METHOD(WindowTestCase, "Window::Properties", "[window]")
 
     CHECK( m_window->GetId() == wxID_HIGHEST + 10 );
 }
+
+#ifdef __WXGTK4__
+TEST_CASE_METHOD(WindowTestCase, "Window::TransparentBackgroundSupport",
+                 "[window][transparent]")
+{
+    wxString reason;
+    CHECK( m_window->IsTransparentBackgroundSupported(&reason) );
+}
+
+TEST_CASE_METHOD(WindowTestCase, "Window::TransientPopupClientSize",
+                 "[window][popup][scroll]")
+{
+    wxWindow* const parent = wxTheApp->GetTopWindow();
+    wxPopupTransientWindow popup(parent);
+    new wxScrolledWindow(&popup, wxID_ANY, wxDefaultPosition,
+                         wxSize(300, 300));
+    popup.SetClientSize(300, 300);
+    popup.Position(parent->ClientToScreen(wxPoint(20, 20)), wxSize(1, 1));
+
+    popup.Popup();
+    wxYield();
+
+    GtkWidget* const content =
+        gtk_popover_get_child(GTK_POPOVER(popup.GetHandle()));
+    CHECK( gtk_widget_get_width(content) == 300 );
+    CHECK( gtk_widget_get_height(content) == 300 );
+
+    popup.Dismiss();
+}
+#endif // __WXGTK4__
 
 #if wxUSE_TOOLTIPS
 TEST_CASE_METHOD(WindowTestCase, "Window::ToolTip", "[window]")
@@ -634,3 +824,216 @@ TEST_CASE_METHOD(WindowTestCase, "Window::Refresh", "[window]")
     CHECK(isChild2Painted == true);
     CHECK(isChild3Painted == true);
 }
+
+// Window::Refresh above only asks whether a paint event arrived. Code that
+// repaints just the damaged part -- the Life demo redraws exactly the cells
+// GetUpdateRegion() reports, and has to, since wxClientDC cannot draw outside
+// a paint handler on several platforms -- also needs the update region to
+// actually cover what was refreshed. Too small a region draws too little, and
+// nothing above would notice.
+TEST_CASE_METHOD(WindowTestCase, "Window::RefreshRectUpdateRegion", "[window]")
+{
+    wxWindow* const win = m_window;
+
+    win->SetSize(300, 200);
+    win->Refresh();
+
+    wxRect updated;
+    bool painted = false;
+    win->Bind(wxEVT_PAINT, [&](wxPaintEvent&)
+    {
+        wxPaintDC dc(win);
+        updated = win->GetUpdateRegion().GetBox();
+        painted = true;
+    });
+
+    // Settle any repaint still owed from the resize above.
+    YieldForAWhile();
+
+    const wxRect refreshed(20, 30, 100, 40);
+
+    painted = false;
+    updated = wxRect();
+    win->RefreshRect(refreshed);
+
+    REQUIRE( WaitFor("repaint", [&]() { return painted; }, 500) );
+
+    INFO("refreshed "
+         << refreshed.x << "," << refreshed.y << " "
+         << refreshed.width << "x" << refreshed.height
+         << " -- update region "
+         << updated.x << "," << updated.y << " "
+         << updated.width << "x" << updated.height);
+    CHECK( updated.Contains(refreshed) );
+
+    // Measured while adding this: GTK+ 3 reports exactly the refreshed
+    // rectangle here, GTK4 reports the whole window. Both satisfy the check
+    // above -- repainting more than asked is correct, only wasteful -- so this
+    // is deliberately not asserted, but it is why the check is a Contains()
+    // and not an equality.
+}
+
+#ifdef __WXGTK4__
+
+// A window given a size has to report that size back, whatever GTK would
+// rather draw. Without this, a clamp in wxPizza::size_allocate_child() that
+// keeps a child at least its GTK minimum quietly replaced any smaller size
+// with that minimum -- and since the size_allocate handler reads wx's own
+// m_height back out of the allocation, GetSize() then reported the
+// replacement. An application placing siblings by hand got overlapping
+// controls under GTK4 and not under GTK+ 2 or GTK+ 3, which both report the
+// size that was asked for.
+TEST_CASE_METHOD(WindowTestCase, "wxWindow::SetSizeIsHonoured", "[window][size]")
+{
+    // A button with a real label has a native minimum size well above what is
+    // asked for below. The fixture destroys it with the rest of the children.
+    wxButton* const button =
+        new wxButton(wxTheApp->GetTopWindow(), wxID_ANY,
+                     "A button with a fairly long label");
+
+    // GTK warns once here, and is meant to:
+    //   gtk_widget_size_allocate(): attempt to allocate GtkLabel label
+    //   with width -24 and height -6
+    // The button gets the 10x4 it was asked for, and Adwaita's button padding
+    // (17px each side, 5px above and below) leaves its label that much less
+    // than nothing. Honouring the size and never allocating below a widget's
+    // minimum cannot both hold; wx promises the first. Removing the warning
+    // means reinstating the clamp described above, which is the fault this
+    // case exists to catch. See #256.
+    button->SetSize(0, 0, 10, 4);
+    YieldForAWhile();
+
+    CHECK( button->GetSize() == wxSize(10, 4) );
+}
+
+// A window's background colour is its own, and the controls it holds keep
+// theirs.
+//
+// The invariant is not GTK4's, but this is where it broke. GTK4 has no
+// per-widget CSS providers, so wx puts its rules on the display under a class
+// of the window's own, and "*" was expanded to that class and its descendants
+// -- which is every node below the window, the controls it contains included.
+// A panel given a colour painted every unstyled control on it: entries stopped
+// being white, buttons stopped looking like buttons. See #243.
+//
+// The check is on the screen because that is where the fault was: the wx-side
+// values were right throughout, and every geometry and value assertion in this
+// file passed while a panel was repainting the controls on it.
+TEST_CASE_METHOD(WindowTestCase, "wxWindow::BackgroundStaysInTheWindow",
+                 "[window][colour]")
+{
+    // Nothing to read on a display that does not let a client see the screen.
+    if ( wxGTKImpl::IsWayland(nullptr) )
+        return;
+
+    wxWindow* const parent = wxTheApp->GetTopWindow();
+
+    // Unmissable, and nothing a theme would arrive at on its own.
+    const wxColour garish(255, 0, 255);
+
+    wxPanel* const panel = new wxPanel(parent, wxID_ANY,
+                                       wxPoint(0, 0), wxSize(200, 60));
+    panel->SetBackgroundColour(garish);
+
+    // Left alone, so that what it shows is the theme's or the panel's and
+    // nothing of its own.
+    wxTextCtrl* const text = new wxTextCtrl(panel, wxID_ANY, wxString(),
+                                            wxPoint(20, 15), wxSize(120, 30));
+
+    panel->Show();
+    wxTestWaitForPaint(text);
+
+    const wxBitmap shot = wxTestCaptureWindow(text);
+    REQUIRE( shot.IsOk() );
+
+    const wxImage img = shot.ConvertToImage();
+    REQUIRE( img.IsOk() );
+
+    const int x = img.GetWidth() / 2;
+    const int y = img.GetHeight() / 2;
+    const wxColour read(img.GetRed(x, y), img.GetGreen(x, y), img.GetBlue(x, y));
+
+    INFO("read back " << read.GetAsString(wxC2S_HTML_SYNTAX)
+         << ", the panel is " << garish.GetAsString(wxC2S_HTML_SYNTAX));
+
+    CHECK( read != garish );
+}
+
+// A style set while the window was off screen has to be there when it arrives
+// on it.
+//
+// Under GTK4 it was not. A widget measured while it is not on screen keeps the
+// style that measurement computed, and a later load of the rules behind it
+// does not replace it -- so a colour set after a font, which is a second load,
+// never took effect. wxStaticText is the control it shows on, because it is the
+// one that measures itself in SetFont(), and only the window styled last before
+// its frame was shown was affected: styling anything else afterwards rescued
+// the ones before it. See #245.
+TEST_CASE_METHOD(WindowTestCase, "wxWindow::StyleSetWhileHiddenTakesEffect",
+                 "[window][colour]")
+{
+    if ( wxGTKImpl::IsWayland(nullptr) )
+        return;
+
+    const wxColour garish(255, 0, 255);
+
+    // A frame of its own, because the fault needs a window that is not yet on
+    // screen and the test frame is on it.
+    std::unique_ptr<wxFrame> frame(
+        new wxFrame(wxTheApp->GetTopWindow(), wxID_ANY, "hidden style",
+                    wxPoint(60, 60), wxSize(260, 100)));
+
+    wxStaticText* const text = new wxStaticText(frame.get(), wxID_ANY, "text",
+                                                wxPoint(10, 10), wxSize(200, 50));
+
+    // This order and no other: SetFont() makes wxStaticText measure itself,
+    // which is what computes the style that then went stale, and the colour
+    // arrives in the load after it.
+    wxFont font = text->GetFont();
+    font.SetPointSize(font.GetPointSize() + 4);
+    text->SetFont(font);
+    text->SetBackgroundColour(garish);
+
+    frame->Show();
+    wxTestWaitForPaint(text);
+
+    // Any of it will do: with the fault there is none of the colour at all,
+    // and the middle of the label may be under a glyph.
+    int found = 0;
+    wxStopWatch sw;
+    for ( ;; )
+    {
+        const wxBitmap shot = wxTestCaptureWindow(text);
+        const wxImage img = shot.IsOk() ? shot.ConvertToImage() : wxImage();
+
+        if ( img.IsOk() )
+        {
+            for ( int y = 0; y < img.GetHeight() && !found; ++y )
+            {
+                for ( int x = 0; x < img.GetWidth(); ++x )
+                {
+                    if ( img.GetRed(x, y) == garish.Red() &&
+                         img.GetGreen(x, y) == garish.Green() &&
+                         img.GetBlue(x, y) == garish.Blue() )
+                    {
+                        found = 1;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if ( found || sw.Time() >= 5000 )
+            break;
+
+        for ( int n = 0; n < 10; ++n )
+        {
+            wxYield();
+            wxMilliSleep(25);
+        }
+    }
+
+    CHECK( found );
+}
+
+#endif // __WXGTK4__

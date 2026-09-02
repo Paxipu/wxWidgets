@@ -41,7 +41,7 @@ public:
 class MyDialog: public wxDialog
 {
 public:
-    MyDialog(const wxString& title);
+    MyDialog(const wxString& title, bool taskBarAvailable);
     virtual ~MyDialog();
 
 protected:

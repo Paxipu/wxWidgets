@@ -32,7 +32,8 @@ FortyCanvas::FortyCanvas(wxWindow* parent, const wxPoint& pos, const wxSize& siz
              m_helpingHand(true),
              m_rightBtnUndo(true),
              m_playerDialog(0),
-             m_leftBtnDown(false)
+             m_leftBtnDown(false),
+             m_backingStoreValid(false)
 {
     SetScrollbars(0, 0, 0, 0);
 
@@ -81,10 +82,72 @@ void FortyCanvas::UpdateScores()
 }
 
 
+/*
+The game draws every change as it happens: clicking the pack deals a card and
+draws it there and then, and dragging a card saves the pixels underneath it,
+blits the card, then puts the saved pixels back.
+
+Both halves of that need a drawing surface which keeps what was drawn on it and
+can be read back again. A wxClientDC is not required to be either --
+wxClientDC::CanBeUsedForDrawing() reports false under wxGTK on Wayland and on
+the macOS and Qt ports, and under GTK4 there is no way to draw outside a
+widget's snapshot or to read the screen back at all. There the game ran
+correctly while nothing appeared: the board only caught up when an unrelated
+repaint made OnDraw() redraw it from the game state.
+
+So the game draws into a bitmap this canvas owns, which behaves the way it
+expects everywhere, and OnDraw() puts that bitmap on the screen. The game code
+itself is unchanged.
+*/
+bool FortyCanvas::PrepareBackingStore()
+{
+    const wxSize size = GetClientSize();
+    if ( size.x <= 0 || size.y <= 0 )
+        return false;
+
+    if ( !m_backingStore.IsOk() || m_backingStoreSize != size )
+    {
+        if ( !m_backingStore.CreateWithLogicalSize(size, GetDPIScaleFactor()) )
+            return false;
+
+        m_backingStoreSize = size;
+        m_backingStoreValid = false;
+    }
+
+    if ( !m_backingStoreValid )
+    {
+        wxMemoryDC dc(m_backingStore);
+
+        // Game::Redraw() draws the piles and the score but not the baize
+        // between them, which is the window's background colour when drawing
+        // to the screen.
+        dc.SetBackground(FortyApp::BackgroundBrush());
+        dc.Clear();
+
+        dc.SetFont(* m_font);
+        m_game->Redraw(dc);
+
+        m_backingStoreValid = true;
+
+    }
+
+    return true;
+}
+
+
+void FortyCanvas::InvalidateBackingStore()
+{
+    m_backingStoreValid = false;
+    Refresh(false);
+}
+
+
 void FortyCanvas::OnDraw(wxDC& dc)
 {
-    dc.SetFont(* m_font);
-    m_game->Redraw(dc);
+    if ( !PrepareBackingStore() )
+        return;
+
+    dc.DrawBitmap(m_backingStore, 0, 0);
 #if 0
     // if player name not set (and selection dialog is not displayed)
     // then ask the player for their name
@@ -129,12 +192,12 @@ void FortyCanvas::ShowPlayerDialog()
             m_scoreFile->ReadPlayersScore(m_player, wins, games, score);
             m_game->NewPlayer(wins, games, score);
 
-            wxClientDC dc(this);
-            dc.SetFont(* m_font);
-            m_game->DisplayScore(dc);
             m_playerDialog->Destroy();
             m_playerDialog = 0;
-            Refresh(false);
+
+            // The score box has changed as a whole, so let the next paint draw
+            // the board from the game again rather than patching it here.
+            InvalidateBackingStore();
         }
         else
         {
@@ -163,9 +226,16 @@ void FortyCanvas::OnMouseEvent(wxMouseEvent& event)
     int mouseX = (int)event.GetX();
     int mouseY = (int)event.GetY();
 
-    wxClientDC dc(this);
+    if ( !PrepareBackingStore() )
+        return;
+
+    wxMemoryDC dc(m_backingStore);
     PrepareDC(dc);
     dc.SetFont(* m_font);
+
+    // Most of the events arriving here are plain pointer motion, which only
+    // changes the cursor. Repaint for the ones that actually draw something.
+    bool drew = false;
 
     if (event.LeftDClick())
     {
@@ -176,6 +246,7 @@ void FortyCanvas::OnMouseEvent(wxMouseEvent& event)
             m_game->LButtonUp(dc, mouseX, mouseY);
         }
         m_game->LButtonDblClk(dc, mouseX, mouseY);
+        drew = true;
     }
     else if (event.LeftDown())
     {
@@ -184,6 +255,7 @@ void FortyCanvas::OnMouseEvent(wxMouseEvent& event)
             m_leftBtnDown = true;
             CaptureMouse();
             m_game->LButtonDown(dc, mouseX, mouseY);
+            drew = true;
         }
     }
     else if (event.LeftUp())
@@ -193,6 +265,7 @@ void FortyCanvas::OnMouseEvent(wxMouseEvent& event)
             m_leftBtnDown = false;
             ReleaseMouse();
             m_game->LButtonUp(dc, mouseX, mouseY);
+            drew = true;
         }
     }
     else if (event.RightDown() && !event.LeftIsDown())
@@ -208,11 +281,21 @@ void FortyCanvas::OnMouseEvent(wxMouseEvent& event)
             {
                 m_game->Undo(dc);
             }
+            drew = true;
         }
     }
     else if (event.Dragging())
     {
         m_game->MouseMove(dc, mouseX, mouseY);
+        drew = true;
+    }
+
+    if (drew)
+    {
+        // What the game drew went into the backing store, so ask for a paint
+        // to put it on the screen. That paint runs after this handler has
+        // returned and released the bitmap.
+        Refresh(false);
     }
 
     if (!event.LeftIsDown())
@@ -239,26 +322,38 @@ void FortyCanvas::SetCursorStyle(int x, int y)
 void FortyCanvas::NewGame()
 {
     m_game->Deal();
-    Refresh();
+    InvalidateBackingStore();
 }
 
 void FortyCanvas::Undo()
 {
-    wxClientDC dc(this);
+    if ( !PrepareBackingStore() )
+        return;
+
+    wxMemoryDC dc(m_backingStore);
     PrepareDC(dc);
     dc.SetFont(* m_font);
     m_game->Undo(dc);
+    Refresh(false);
 }
 
 void FortyCanvas::Redo()
 {
-    wxClientDC dc(this);
+    if ( !PrepareBackingStore() )
+        return;
+
+    wxMemoryDC dc(m_backingStore);
     PrepareDC(dc);
     dc.SetFont(* m_font);
     m_game->Redo(dc);
+    Refresh(false);
 }
 
 void FortyCanvas::LayoutGame()
 {
        m_game->Layout();
+       // Every pile has moved, and Game::Layout() has dropped the bitmaps the
+       // game drags cards with, so the board has to be drawn again from
+       // scratch.
+       InvalidateBackingStore();
 }

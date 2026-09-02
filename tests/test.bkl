@@ -184,6 +184,8 @@
             graphics/colour.cpp
             graphics/ellipsization.cpp
             graphics/measuring.cpp
+            graphics/renderer.cpp
+            graphics/screendc.cpp
             graphics/affinematrix.cpp
             graphics/boundingbox.cpp
             graphics/clipper.cpp

@@ -37,6 +37,10 @@
 #include "wx/private/localeset.h"
 #include "wx/private/make_unique.h"
 
+#ifdef __WXGTK4__
+    #include "wx/gtk/private/wrapgtk.h"
+#endif // __WXGTK4__
+
 #include "textentrytest.h"
 #include "testableframe.h"
 #include "asserthelper.h"
@@ -75,6 +79,7 @@ private:
 
     CPPUNIT_TEST_SUITE( TextCtrlTestCase );
         // These tests run for single line text controls.
+        CPPUNIT_TEST( ForceUpper );
         wxTEXT_ENTRY_TESTS();
         WXUISIM_TEST( MaxLength );
         CPPUNIT_TEST( PositionToXYSingleLine );
@@ -123,6 +128,7 @@ private:
 
     void MultiLineReplace();
     void ReadOnly();
+    void ForceUpper();
     void MaxLength();
     void StreamInput();
     void Redirector();
@@ -214,6 +220,35 @@ void TextCtrlTestCase::tearDown()
 // ----------------------------------------------------------------------------
 // tests themselves
 // ----------------------------------------------------------------------------
+
+void TextCtrlTestCase::ForceUpper()
+{
+    m_text->SetValue("Initial");
+    m_text->ForceUpper();
+    CPPUNIT_ASSERT_EQUAL("INITIAL", m_text->GetValue());
+
+    m_text->SetInsertionPointEnd();
+    m_text->WriteText(" via API");
+    CPPUNIT_ASSERT_EQUAL("INITIAL VIA API", m_text->GetValue());
+
+#ifdef __WXGTK4__
+    // Text typed into GtkEntry is inserted into its GtkEditable delegate.
+    // Exercise this native path instead of WriteText(), which inserts through
+    // the outer GtkEntry and would not catch a missing delegate connection.
+    GtkEditable* const editable = GTK_EDITABLE(m_text->GetHandle());
+    GtkEditable* const delegate = gtk_editable_get_delegate(editable);
+    CPPUNIT_ASSERT(delegate);
+
+    m_text->SetInsertionPointEnd();
+    int pos = gtk_editable_get_position(delegate);
+    gtk_editable_insert_text(delegate, " typed Case", -1, &pos);
+#else
+    m_text->SetInsertionPointEnd();
+    m_text->WriteText(" typed Case");
+#endif // __WXGTK4__/!__WXGTK4__
+
+    CPPUNIT_ASSERT_EQUAL("INITIAL VIA API TYPED CASE", m_text->GetValue());
+}
 
 void TextCtrlTestCase::MultiLineReplace()
 {
@@ -1806,4 +1841,144 @@ TEST_CASE("wxTextCtrl::RichWithHint", "[wxTextCtrl][hint][rich]")
 
 #endif // wxUSE_RICHEDIT
 
+#if wxUSE_UIACTIONSIMULATOR
+
+TEST_CASE("wxTextCtrl::KeyEventsWhenFocused", "[wxTextCtrl][key][event]")
+{
+    // A focused text control has to see the key events for the text typed
+    // into it.
+    //
+    // Under GTK+ 4 it did not: the native entry handles a key press on the
+    // widget the event is delivered to and claims it there, so wx's own event
+    // controller, sitting on the entry in the default bubble phase, never ran
+    // and neither wxEVT_KEY_DOWN nor wxEVT_CHAR was generated. What made this
+    // easy to overlook is that the two things one would check first both
+    // looked right: the typed text still arrived, and wxEVT_KEY_UP still came
+    // through, because a key release is not claimed.
+    //
+    // Both control kinds are exercised because they are different native
+    // widgets -- a GtkEntry and a GtkTextView -- handled separately.
+    long style = 0;
+
+    SECTION("Single line")
+    {
+        style = 0;
+    }
+
+    SECTION("Multi line")
+    {
+        style = wxTE_MULTILINE;
+    }
+
+    auto text = std::make_unique<wxTextCtrl>
+                (
+                    wxTheApp->GetTopWindow(), wxID_ANY, "",
+                    wxDefaultPosition, wxSize(200, 100), style
+                );
+
+    text->SetFocus();
+
+    // Simulated input is delivered asynchronously, so a key release synthesized
+    // by an earlier test can still be on its way here and would be counted as
+    // one of ours. Let everything queued arrive before the counters below start
+    // counting -- the same precaution KeyboardEventTestCase::setUp() takes.
+    YieldForAWhile();
+    REQUIRE( text->HasFocus() );
+
+    EventCounter keyDown(text.get(), wxEVT_KEY_DOWN);
+    EventCounter keyUp(text.get(), wxEVT_KEY_UP);
+    EventCounter charEvents(text.get(), wxEVT_CHAR);
+
+    wxUIActionSimulator sim;
+
+    // KeyDown() reports whether the simulator can synthesize input at all: it
+    // cannot under Wayland, where there is nothing for this test to check.
+    // Char() is not usable for that -- it reports success either way.
+    if ( !sim.KeyDown('a') )
+        return;
+
+    sim.KeyUp('a');
+
+    // Wait for the release too, not just for the press: with a plain wxYield()
+    // the process can get as far as the checks below while the key up event is
+    // still in flight.
+    YieldForAWhile();
+
+    CHECK( keyDown.GetCount() == 1 );
+    CHECK( charEvents.GetCount() == 1 );
+    CHECK( keyUp.GetCount() == 1 );
+
+    // The text arriving is what still worked before, so a failure here would
+    // mean something different from a failure above.
+    CHECK( text->GetValue() == "a" );
+}
+
+#endif // wxUSE_UIACTIONSIMULATOR
+
 #endif //wxUSE_TEXTCTRL
+
+#if wxUSE_UIACTIONSIMULATOR && defined(__WXGTK4__)
+
+// wxTextEntry::AutoComplete() had no test at all, on any platform.
+//
+// Under GTK4 it is no longer GtkEntryCompletion -- that is deprecated with no
+// replacement -- but a popup wxWidgets builds itself from a GtkPopover, a
+// GtkListView and a filtered model. None of that is visible through the wx
+// API except the two things that matter, and both are checked here: that the
+// popup goes up while a prefix matches, and that choosing a completion and
+// accepting it puts that completion into the control.
+//
+// Only under GTK4, and the reason is measured rather than assumed. wx clears
+// wxTE_PROCESS_ENTER while the completion popup is up, so the flag says
+// whether wx knows the popup is there. After typing a matching prefix:
+//
+//     GTK4     flag 0 -- the popup is up and wx knows it
+//     GTK+ 3   flag 1 -- wx never learns of it
+//
+// So on GTK+ 2 and 3 either GtkEntryCompletion's popup does not appear under
+// synthesised input at all, or it appears without grabbing and the
+// "grab-notify" the port listens for never comes. Both leave nothing for a
+// test to observe, which is why this one does not run there.
+TEST_CASE("wxTextCtrl::AutoComplete", "[wxTextCtrl][autocomplete]")
+{
+    if ( !EnableUITests() )
+        return;
+
+    std::unique_ptr<wxTextCtrl>
+        text(new wxTextCtrl(wxTheApp->GetTopWindow(), wxID_ANY, "",
+                            wxDefaultPosition, wxDefaultSize,
+                            wxTE_PROCESS_ENTER));
+
+    wxArrayString completions;
+    completions.push_back("alpha");
+    completions.push_back("alpine");
+    completions.push_back("beta");
+
+    REQUIRE( text->AutoComplete(completions) );
+
+    text->SetFocus();
+    wxYield();
+
+    wxUIActionSimulator sim;
+    sim.Text("al");
+    wxYield();
+
+    // Both "alpha" and "alpine" start with this, so the popup must be up --
+    // and while it is, Enter belongs to it rather than to wxTE_PROCESS_ENTER.
+    INFO("after typing a matching prefix");
+    CHECK( !text->HasFlag(wxTE_PROCESS_ENTER) );
+
+    // Down highlights the first match, Return accepts it.
+    sim.Char(WXK_DOWN);
+    wxYield();
+    sim.Char(WXK_RETURN);
+    wxYield();
+
+    INFO("value after typing \"al\", Down, Return: " << text->GetValue());
+    CHECK( text->GetValue() == "alpha" );
+
+    // And the popup is gone again, so the flag comes back.
+    CHECK( text->HasFlag(wxTE_PROCESS_ENTER) );
+}
+
+#endif // wxUSE_UIACTIONSIMULATOR && __WXGTK4__

@@ -13,10 +13,129 @@
 
 #include "wx/msgdlg.h"
 #include "wx/filedlg.h"
+#include "wx/colordlg.h"
+#include "wx/fontdlg.h"
+#include "wx/dirdlg.h"
 
-// This test suite tests helpers from wx/testing.h intended for testing of code
-// that calls modal dialogs. It does not test the implementation of wxWidgets'
-// dialogs.
+#if wxUSE_COLOURDLG
+
+// Under GTK4 wxColourDialog no longer goes through wxDialog::ShowModal(),
+// because GtkColorDialog is a controller object rather than a widget and
+// there is nothing to show. That means the modal dialog hook, which
+// wxTEST_DIALOG and wxExpectModal are built on, has to be called by the
+// replacement -- and if it is not, ShowModal() opens a real dialog and waits
+// for a user who is not there, which is a hung test run rather than a failed
+// one.
+TEST_CASE("Modal::ColourDialog", "[modal]")
+{
+    wxColourData data;
+    data.SetColour(*wxRED);
+
+    wxColourDialog dlg(nullptr, &data);
+
+    int rc = wxID_NONE;
+    wxTEST_DIALOG
+    (
+        rc = dlg.ShowModal(),
+        wxExpectDismissableModal<wxColourDialog>(wxID_CANCEL)
+    );
+
+    CHECK( rc == wxID_CANCEL );
+
+    // Cancelling leaves the colour as it was.
+    CHECK( dlg.GetColourData().GetColour() == *wxRED );
+}
+
+#endif // wxUSE_COLOURDLG
+
+#if wxUSE_FONTDLG
+
+// See the comment on Modal::ColourDialog above: the same applies to
+// GtkFontDialog.
+TEST_CASE("Modal::FontDialog", "[modal]")
+{
+    wxFontData data;
+    data.SetInitialFont(*wxNORMAL_FONT);
+
+    wxFontDialog dlg(nullptr, data);
+
+    int rc = wxID_NONE;
+    wxTEST_DIALOG
+    (
+        rc = dlg.ShowModal(),
+        wxExpectDismissableModal<wxFontDialog>(wxID_CANCEL)
+    );
+
+    CHECK( rc == wxID_CANCEL );
+}
+
+#endif // wxUSE_FONTDLG
+
+#if wxUSE_DIRDLG
+
+// See the comment on Modal::ColourDialog above: under GTK4 this no longer goes
+// through the base class ShowModal() either, because GtkFileDialog is a
+// controller object rather than a widget.
+TEST_CASE("Modal::DirDialog", "[modal]")
+{
+    wxDirDialog dlg(nullptr, "Pick a folder", wxGetCwd());
+
+    int rc = wxID_NONE;
+    wxTEST_DIALOG
+    (
+        rc = dlg.ShowModal(),
+        wxExpectDismissableModal<wxDirDialog>(wxID_CANCEL)
+    );
+
+    CHECK( rc == wxID_CANCEL );
+}
+
+#endif // wxUSE_DIRDLG
+#if wxUSE_FILEDLG
+
+// wxFileDialog::SetExtraControlCreator() reports whether the port can show an
+// extra control, and an application is entitled to act on the answer. Under
+// GTK4 it cannot: gtk_file_chooser_set_extra_widget() is gone and a chooser
+// only takes the fixed choices gtk_file_chooser_add_choice() offers.
+//
+// Saying "yes" anyway ran the application's creator and then owned the control
+// it returned without ever showing it, so the application was told it had an
+// extra control and had none. This pins the answer to the truth on every
+// platform rather than only noticing when someone looks at a dialog.
+static wxWindow* CreateExtraControlForTest(wxWindow* parent)
+{
+    return new wxWindow(parent, wxID_ANY);
+}
+
+TEST_CASE("wxFileDialog::ExtraControl", "[filedlg]")
+{
+    wxFileDialog dlg(nullptr, "Test", "", "",
+                     wxFileSelectorDefaultWildcardStr, wxFD_OPEN);
+
+    const bool accepted = dlg.SetExtraControlCreator(&CreateExtraControlForTest);
+
+    // This used to except GTK4, whose native file chooser is a GtkFileDialog
+    // -- a controller object rather than a widget, with nowhere to put an
+    // arbitrary control. wxGTK4 now uses the generic dialog instead, which is
+    // a wxDialog and can host one like every other port that uses it.
+    INFO("this port can host an extra control, so it must accept one");
+    CHECK( accepted );
+
+    // Whatever the answer, it has to be the same one the port reports.
+    CHECK( accepted == dlg.SupportsExtraControl() );
+}
+
+#endif // wxUSE_FILEDLG
+
+#if wxUSE_WIZARDDLG && defined(__WXGTK4__)
+    #include "wx/sizer.h"
+    #include "wx/stattext.h"
+    #include "wx/wizard.h"
+#endif
+
+// The modal tests below exercise helpers from wx/testing.h intended for
+// testing code that calls modal dialogs. They don't test the implementation of
+// wxWidgets dialogs themselves.
 
 TEST_CASE("Modal::MessageDialog", "[modal]")
 {
@@ -143,3 +262,29 @@ TEST_CASE("Modal::InitDialog", "[modal]")
     dlg.ShowModal();
     CHECK( dlg.WasModal() );
 }
+
+#if wxUSE_WIZARDDLG && defined(__WXGTK4__)
+
+TEST_CASE("Wizard::LayoutAdaptation", "[wizard][layout]")
+{
+    wxWizard wizard(nullptr, wxID_ANY, "Wizard");
+    auto* const firstPage = new wxWizardPageSimple(&wizard);
+    auto* const page = new wxWizardPageSimple(&wizard);
+    firstPage->Chain(page);
+
+    auto* const text = new wxStaticText(page, wxID_ANY, "Page content");
+    auto* const pageSizer = new wxBoxSizer(wxVERTICAL);
+    pageSizer->Add(text);
+    page->SetSizer(pageSizer);
+    wizard.GetPageAreaSizer()->Add(firstPage);
+
+    REQUIRE( wizard.ShowPage(firstPage) );
+    REQUIRE( wizard.DoLayoutAdaptation() );
+
+    wxWindow* const scrolledWindow = text->GetParent();
+    CHECK( scrolledWindow != page );
+    CHECK( scrolledWindow->GetParent() == page );
+    CHECK( pageSizer->GetContainingWindow() == scrolledWindow );
+}
+
+#endif // wxUSE_WIZARDDLG && defined(__WXGTK4__)

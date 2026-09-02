@@ -13,10 +13,13 @@
 
 #ifndef WX_PRECOMP
     #include "wx/app.h"
+    #include "wx/button.h"
     #include "wx/radiobox.h"
 #endif // WX_PRECOMP
 
 #include "wx/tooltip.h"
+#include "testableframe.h"
+#include "testwindow.h"
 
 #include <memory>
 
@@ -175,6 +178,50 @@ TEST_CASE_METHOD(RadioBoxTestCase, "RadioBox::Selection", "[radiobox][selection]
 
     CHECK( m_radio->GetSelection() == 2 );
     CHECK( m_radio->GetStringSelection() == "item 2" );
+}
+
+// Under wxQt focusing the box leaves the focus on no wxWindow at all --
+// wxWindow::FindFocus() returns null -- even though the box does get the focus
+// event, so only the events are checked there and this helper is not needed.
+#ifndef __WXQT__
+
+// Where the focus really ends up after giving it to a wxRadioBox is not the
+// same everywhere: under MSW the control is composite and wxRadioBox::SetFocus()
+// forwards to one of the wxRadioButtons inside it, so the focus is in the box
+// rather than on it. Both count as focusing the box here.
+static wxWindow* FocusInsideRadioBoxAsBox(wxRadioBox* radio)
+{
+    wxWindow* const focus = wxWindow::FindFocus();
+
+    return focus && radio->IsDescendant(focus) ? radio : focus;
+}
+
+#endif // !__WXQT__
+
+TEST_CASE_METHOD(RadioBoxTestCase, "RadioBox::Focus", "[radiobox][focus]")
+{
+    wxButton* const button =
+        new wxButton(wxTheApp->GetTopWindow(), wxID_ANY, "Button");
+
+    EventCounter setFocus(m_radio, wxEVT_SET_FOCUS);
+    EventCounter killFocus(m_radio, wxEVT_KILL_FOCUS);
+
+    m_radio->SetFocus();
+    wxYield();
+
+#ifndef __WXQT__
+    CHECK_SAME_WINDOW( FocusInsideRadioBoxAsBox(m_radio), m_radio );
+#endif // !__WXQT__
+    CHECK( setFocus.GetCount() == 1 );
+
+    button->SetFocus();
+    wxYield();
+
+    CHECK_FOCUS_IS( button );
+    CHECK( killFocus.GetCount() == 1 );
+
+    wxTheApp->GetTopWindow()->SetFocus();
+    wxYield();
 }
 
 TEST_CASE_METHOD(RadioBoxTestCase, "RadioBox::Count", "[radiobox]")

@@ -23,6 +23,7 @@
 #include "wx/fontpicker.h"
 #include "pickerbasetest.h"
 #include "asserthelper.h"
+#include "testableframe.h"
 
 #if wxUSE_COLOURPICKERCTRL
 
@@ -40,7 +41,12 @@ private:
 
     CPPUNIT_TEST_SUITE( ColourPickerCtrlTestCase );
         wxPICKER_BASE_TESTS();
+        CPPUNIT_TEST( ColourRoundTrip );
+        CPPUNIT_TEST( NoEventOnSetColour );
     CPPUNIT_TEST_SUITE_END();
+
+    void ColourRoundTrip();
+    void NoEventOnSetColour();
 
     wxColourPickerCtrl *m_colour;
 
@@ -64,6 +70,32 @@ void ColourPickerCtrlTestCase::setUp()
 void ColourPickerCtrlTestCase::tearDown()
 {
     wxDELETE(m_colour);
+}
+
+void ColourPickerCtrlTestCase::ColourRoundTrip()
+{
+    const wxColour colour(0x42, 0x69, 0xAB);
+
+    REQUIRE( m_colour->GetColour() != colour );
+
+    m_colour->SetColour(colour);
+
+    CHECK( m_colour->GetColour() == colour );
+}
+
+// Setting the colour from code is not the user picking one, so it must not
+// raise the event. This is not a hypothetical: under GTK4 the native button
+// reports its colour through a property notify, which -- unlike the
+// "color-set" signal it replaced -- fires for our own writes as well, so the
+// notification has to be suppressed while we write.
+void ColourPickerCtrlTestCase::NoEventOnSetColour()
+{
+    EventCounter changed(m_colour, wxEVT_COLOURPICKER_CHANGED);
+
+    m_colour->SetColour(wxColour(0x12, 0x34, 0x56));
+    wxYield();
+
+    CHECK( changed.GetCount() == 0 );
 }
 
 #endif //wxUSE_COLOURPICKERCTRL
@@ -176,9 +208,13 @@ private:
     CPPUNIT_TEST_SUITE( FontPickerCtrlTestCase );
         wxPICKER_BASE_TESTS();
         CPPUNIT_TEST( ColourSelection );
+        CPPUNIT_TEST( FontRoundTrip );
+        CPPUNIT_TEST( NoEventOnSetFont );
     CPPUNIT_TEST_SUITE_END();
 
     void ColourSelection();
+    void FontRoundTrip();
+    void NoEventOnSetFont();
 
     wxFontPickerCtrl *m_font;
 
@@ -214,6 +250,39 @@ void FontPickerCtrlTestCase::ColourSelection()
 
     CPPUNIT_ASSERT_EQUAL_MESSAGE("Font picker did not react to color selection",
         m_font->GetSelectedColour(), selectedColour);
+}
+
+void FontPickerCtrlTestCase::FontRoundTrip()
+{
+    // A face the picker cannot possibly be showing already, in a size that is
+    // not the default either, so that neither half can pass by accident.
+    wxFont font(*wxNORMAL_FONT);
+    font.SetPointSize(font.GetPointSize() + 3);
+    font.SetWeight(wxFONTWEIGHT_BOLD);
+    font.SetStyle(wxFONTSTYLE_ITALIC);
+
+    REQUIRE( m_font->GetSelectedFont() != font );
+
+    m_font->SetSelectedFont(font);
+
+    const wxFont& got = m_font->GetSelectedFont();
+    CHECK( got.GetPointSize() == font.GetPointSize() );
+    CHECK( got.GetWeight() == font.GetWeight() );
+    CHECK( got.GetStyle() == font.GetStyle() );
+}
+
+// See the comment on ColourPickerCtrlTestCase::NoEventOnSetColour(): the same
+// property-notify trap applies to the GTK4 font button.
+void FontPickerCtrlTestCase::NoEventOnSetFont()
+{
+    EventCounter changed(m_font, wxEVT_FONTPICKER_CHANGED);
+
+    wxFont font(*wxNORMAL_FONT);
+    font.SetPointSize(font.GetPointSize() + 5);
+    m_font->SetSelectedFont(font);
+    wxYield();
+
+    CHECK( changed.GetCount() == 0 );
 }
 #endif //wxUSE_FONTPICKERCTRL
 

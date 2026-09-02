@@ -153,7 +153,17 @@ public:
     explicit NativeWindow(wxWindow* parent)
         : wxNativeWindow()
     {
-#if GTK_CHECK_VERSION(3,6,0)
+#if defined(__WXGTK4__)
+        // GtkMenuButton takes a GMenuModel rather than a GtkMenu under GTK4,
+        // and wxMenu is built out of one, so hand it that instead. There is no
+        // m_menu to pass any more: GtkMenu is gone.
+        BuildTestMenu(&m_menu);
+
+        GtkWidget* const widget = gtk_menu_button_new();
+        gtk_menu_button_set_menu_model(
+            GTK_MENU_BUTTON(widget),
+            G_MENU_MODEL(m_menu.GTKGetMenuModel()));
+#elif GTK_CHECK_VERSION(3,6,0)
         BuildTestMenu(&m_menu);
 
         GtkWidget* const widget = gtk_menu_button_new();

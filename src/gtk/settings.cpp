@@ -702,6 +702,27 @@ void wxGtkStyleContext::PopulateForStyleQuery(GtkWidget* widget)
     }
 }
 
+// A widget that exists to carry a CSS node and nothing else.
+//
+// Style queries instantiate the widget whose node they want, but a real
+// GtkTextView builds an input method context on construction, and with the
+// ibus module loaded that recurses until the process runs out of memory
+// (#249).  A query never needs a text view's behaviour, only its node, so it
+// gets a widget that has the node and no behaviour at all.
+#define WX_TYPE_STYLE_NODE (wx_style_node_get_type())
+G_DECLARE_FINAL_TYPE(wxStyleNode, wx_style_node, WX, STYLE_NODE, GtkWidget)
+struct _wxStyleNode { GtkWidget parent_instance; };
+G_DEFINE_TYPE(wxStyleNode, wx_style_node, GTK_TYPE_WIDGET)
+
+static void wx_style_node_init(wxStyleNode*)
+{
+}
+
+static void wx_style_node_class_init(wxStyleNodeClass* klass)
+{
+    gtk_widget_class_set_css_name(GTK_WIDGET_CLASS(klass), "textview");
+}
+
 void wxGtkStyleContext::AddWidget(GType type)
 {
     GtkWidget* const widget = GTK_WIDGET(g_object_new(type, nullptr));
@@ -966,7 +987,7 @@ wxGtkStyleContext& wxGtkStyleContext::AddMenuItem()
 
 wxGtkStyleContext& wxGtkStyleContext::AddTextview(const char* child1, const char* child2)
 {
-    Add(GTK_TYPE_TEXT_VIEW, "textview", "view", nullptr);
+    Add(WX_TYPE_STYLE_NODE, "textview", "view", nullptr);
     if (child1 && gtk_check_version(3,20,0) == nullptr)
     {
         Add(child1);

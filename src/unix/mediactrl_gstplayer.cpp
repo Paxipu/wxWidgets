@@ -130,7 +130,27 @@ wxIMPLEMENT_DYNAMIC_CLASS(wxGStreamerMediaBackend, wxMediaBackend);
 // (Returns TRUE to pass to other handlers, FALSE if not)
 //
 //-----------------------------------------------------------------------------
-#ifdef __WXGTK__
+#if defined(__WXGTK4__)
+
+// Under GTK4 the video is overlaid on the top level's surface, so it has to be
+// confined to the control's area explicitly -- and kept there as the control
+// is moved or resized, which is what wxGStreamerMediaBackend::Move() does.
+static void update_render_rectangle(GtkWidget* widget, wxGStreamerMediaBackend* be)
+{
+    if (!be->m_video_renderer)
+        return;
+
+    GdkRectangle rect;
+    if (!wxGtkGetVideoRect(widget, &rect))
+        return;
+
+    gst_player_video_overlay_video_renderer_set_render_rectangle(
+        GST_PLAYER_VIDEO_OVERLAY_VIDEO_RENDERER(be->m_video_renderer),
+        rect.x, rect.y, rect.width, rect.height
+    );
+}
+
+#elif defined(__WXGTK__)
 static gboolean
 #ifdef __WXGTK3__
 draw_callback(GtkWidget* widget, cairo_t* cr, wxGStreamerMediaBackend* be)
@@ -198,6 +218,13 @@ static void realize_callback(GtkWidget* widget, wxGStreamerMediaBackend* be)
         GST_PLAYER_VIDEO_OVERLAY_VIDEO_RENDERER(be->m_video_renderer),
         wxGtkGetIdFromWidget(widget)
     );
+#ifdef __WXGTK4__
+    // The handle above is the whole top level's, so the render rectangle is
+    // needed for both backends, not just Wayland, and there is no "draw"
+    // signal to connect to any more: wxPizza paints from a snapshot vfunc and
+    // this control doesn't paint at all, see m_noExpose in CreateControl().
+    update_render_rectangle(widget, be);
+#else
 #ifdef __WXGTK3__
     GdkWindow* window = gtk_widget_get_window(widget);
     if (wxGTKImpl::IsWayland(window))
@@ -219,6 +246,7 @@ static void realize_callback(GtkWidget* widget, wxGStreamerMediaBackend* be)
 #else
     g_signal_connect(w, "expose_event", G_CALLBACK(expose_event_callback), be);
 #endif
+#endif // __WXGTK4__/!__WXGTK4__
 }
 }
 #endif // wxGTK
@@ -353,10 +381,14 @@ bool wxGStreamerMediaBackend::CreateControl(wxControl* ctrl, wxWindow* parent,
         return false;
     }
 
-#ifdef __WXGTK__
+#if defined(__WXGTK__) && !defined(__WXGTK4__)
     // Turn off double-buffering so that
     // so it doesn't draw over the video and cause sporadic
     // disappearances of the video
+    //
+    // GTK4 removed gtk_widget_set_double_buffered() (it was already a no-op
+    // under GTK3), and m_noExpose above means we don't paint over the video
+    // in the first place there.
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     gtk_widget_set_double_buffered(m_ctrl->m_wxwindow, FALSE);
     wxGCC_WARNING_RESTORE(deprecated-declarations)
@@ -381,12 +413,14 @@ bool wxGStreamerMediaBackend::CreateControl(wxControl* ctrl, wxWindow* parent,
     {
         window_handle = wxGtkGetIdFromWidget(m_ctrl->m_wxwindow);
 
+#ifndef __WXGTK4__
         GtkWidget* w = m_ctrl->m_wxwindow;
 #ifdef __WXGTK3__
         g_signal_connect(w, "draw", G_CALLBACK(draw_callback), this);
 #else
         g_signal_connect(w, "expose_event", G_CALLBACK(expose_event_callback), this);
 #endif
+#endif // !__WXGTK4__
     }
 #else
     window_handle = ctrl->GetHandle();
@@ -538,8 +572,16 @@ wxLongLong wxGStreamerMediaBackend::GetDuration()
 
 void wxGStreamerMediaBackend::Move(int WXUNUSED(x), int WXUNUSED(y), int WXUNUSED(w), int WXUNUSED(h))
 {
-    /* Nothing to be done here, at least for GTK+. For other toolkits we might
-     * have to call
+#ifdef __WXGTK4__
+    // The overlay covers the whole top level surface here, so it does have to
+    // be repositioned whenever the control moves or is resized. The values
+    // passed in are relative to the parent, so recompute them from the widget
+    // rather than using them directly.
+    if (m_ctrl && m_ctrl->m_wxwindow)
+        update_render_rectangle(m_ctrl->m_wxwindow, this);
+#endif
+    /* Nothing to be done here, at least for GTK+ up to version 3. For other
+     * toolkits we might have to call
      * gst_player_video_overlay_video_renderer_set_render_rectangle() here
      */
 }

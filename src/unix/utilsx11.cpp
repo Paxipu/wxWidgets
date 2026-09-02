@@ -27,10 +27,17 @@
 #include "wx/gtk/private/wrapgtk.h"
 #include "wx/gtk/private/backend.h"
 #ifdef GDK_WINDOWING_X11
+#ifdef __WXGTK4__
+#include <gdk/x11/gdkx.h>
+#else
 #include <gdk/gdkx.h>
+#endif
 #define wxHAS_X11_SUPPORT
 #endif
+#ifndef __WXGTK4__
 GdkWindow* wxGetTopLevelGDK();
+#endif
+GdkDisplay* wxGetTopLevelGdkDisplay();
 GtkWidget* wxGetTopLevelGTK();
 
 #if GTK_CHECK_VERSION(3,4,0)
@@ -64,7 +71,9 @@ static Atom _NET_WM_WINDOW_TYPE_NORMAL = 0;
 static Atom _KDE_NET_WM_WINDOW_TYPE_OVERRIDE = 0;
 static Atom _WIN_LAYER = 0;
 static Atom KWIN_RUNNING = 0;
-#ifndef __WXGTK__
+// These are only used by the plain X11 wxQueryWMspecSupport() below, which is
+// also the one used under GTK4, see the comment there.
+#if !defined(__WXGTK__) || defined(__WXGTK4__)
 static Atom _NET_SUPPORTING_WM_CHECK = 0;
 static Atom _NET_SUPPORTED = 0;
 #endif
@@ -280,7 +289,11 @@ static void wxWinHintsSetLayer(Display *display, Window rootWnd,
 
 
 
-#ifdef __WXGTK__
+// The GTK+ version of this can't be used under GTK4: GdkAtom and GdkScreen are
+// both gone and gdk_x11_screen_supports_net_wm_hint() takes a property name
+// instead. The plain X11 implementation below does the same job and this file
+// is X11-specific anyway, so just use that one there.
+#if defined(__WXGTK__) && !defined(__WXGTK4__)
 static bool wxQueryWMspecSupport(Display* WXUNUSED(display),
                                  Window WXUNUSED(rootWnd),
                                  Atom feature)
@@ -2598,14 +2611,27 @@ static bool wxGetKeyStateGTK(wxKeyCode key)
     if (gtk_check_version(3,4,0) != nullptr)
         return false;
 
-    GdkDisplay* display = gdk_window_get_display(wxGetTopLevelGDK());
+#ifdef __WXGTK4__
+    // GdkKeymap doesn't exist any more under GTK4: query the keyboard
+    // device directly instead, it has the same caps/num/scroll lock and
+    // modifier state accessors GdkKeymap used to.
+    GdkDisplay* display = wxGetTopLevelGdkDisplay();
+    GdkSeat* seat = gdk_display_get_default_seat(display);
+    GdkDevice* keymap = gdk_seat_get_keyboard(seat);
+#else
+    GdkDisplay* display = wxGetTopLevelGdkDisplay();
     GdkKeymap* keymap = gdk_keymap_get_for_display(display);
+#endif
 
     guint mask = 0;
     switch (key)
     {
         case WXK_ALT:
+#ifdef __WXGTK4__
+            mask = GDK_ALT_MASK;    // GDK_MOD1_MASK was renamed under GTK4
+#else
             mask = GDK_MOD1_MASK;
+#endif
             break;
 
         case WXK_CONTROL:
@@ -2617,15 +2643,29 @@ static bool wxGetKeyStateGTK(wxKeyCode key)
             break;
 
         case WXK_CAPITAL:
+#ifdef __WXGTK4__
+            return gdk_device_get_caps_lock_state(keymap) != FALSE;
+#else
             return gdk_keymap_get_caps_lock_state(keymap) != FALSE;
+#endif
 
         case WXK_NUMLOCK:
+#ifdef __WXGTK4__
+            return gdk_device_get_num_lock_state(keymap) != FALSE;
+#else
             return gdk_keymap_get_num_lock_state(keymap) != FALSE;
+#endif
 
 #if GTK_CHECK_VERSION(3,18,0)
         case WXK_SCROLL:
             if (gtk_check_version(3,18,0) == nullptr)
+            {
+#ifdef __WXGTK4__
+                return gdk_device_get_scroll_lock_state(keymap) != FALSE;
+#else
                 return gdk_keymap_get_scroll_lock_state(keymap) != FALSE;
+#endif
+            }
             wxFALLTHROUGH;
 #endif // GTK 3.18+
 
@@ -2639,8 +2679,11 @@ static bool wxGetKeyStateGTK(wxKeyCode key)
     }
 
     // Mask is set if we get here, so it must be one of the modifier keys.
+#ifdef __WXGTK4__
+    return (gdk_device_get_modifier_state(keymap) & mask) != 0;
+#else
     return (gdk_keymap_get_modifier_state(keymap) & mask) != 0;
-
+#endif
 }
 #endif // wxHAS_GETKEYSTATE_GTK
 
@@ -2700,11 +2743,15 @@ wxDoLaunchDefaultBrowser(const wxLaunchBrowserParams& params)
 {
 #ifdef __WXGTK__
 #ifdef __WXGTK4__
-    if (gtk_show_uri_on_window((GtkWindow*)wxGetTopLevelGTK(),
-            params.url.utf8_str(), GDK_CURRENT_TIME, nullptr))
-    {
-        return true;
-    }
+    // GTK4 only has this fire and forget version, which reports failure by
+    // showing its own error dialog rather than to the caller. So we can't fall
+    // back to xdg-open below on failure, as we'd risk opening the URL twice on
+    // success, and have to just assume it worked.
+    wxGCC_WARNING_SUPPRESS(deprecated-declarations)
+    gtk_show_uri((GtkWindow*)wxGetTopLevelGTK(),
+                 params.url.utf8_str(), GDK_CURRENT_TIME);
+    wxGCC_WARNING_RESTORE()
+    return true;
 #elif GTK_CHECK_VERSION(2,14,0)
     if (wx_is_at_least_gtk2(14))
     {

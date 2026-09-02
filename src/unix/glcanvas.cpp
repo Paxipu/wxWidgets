@@ -218,6 +218,14 @@ void wxGLBackend::PreferGLX()
 wxGLBackend* wxGLBackend::Init()
 {
 #ifdef wxHAS_EGL
+#ifdef __WXGTK4__
+    // GLX needs a window created with the visual matching the chosen fbconfig,
+    // but GTK4 has neither per-widget visuals (GdkVisual is gone) nor
+    // per-widget windows to apply one to, so GLX can't be used at all here and
+    // PreferGLX() has no effect.
+    return &wxGLBackendEGL::Get();
+#endif // __WXGTK4__
+
     // Only EGL can be used when using Wayland, so ignore calls to PreferGLX()
     // and system option in that case.
     //
@@ -321,6 +329,11 @@ void wxGLCanvasUnix::CallOnRealized()
 void wxGLCanvasUnix::CallOnUnrealized()
 {
     m_impl->OnUnrealized();
+}
+
+void wxGLCanvasUnix::CallOnSizeChanged()
+{
+    m_impl->OnSizeChanged();
 }
 
 /* static */

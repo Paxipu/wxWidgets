@@ -64,6 +64,9 @@ public:
 
     virtual void OnRealized() override;
     virtual void OnUnrealized() override;
+#ifdef __WXGTK4__
+    virtual void OnSizeChanged() override;
+#endif
 
     virtual bool HasWindow() const override;
 

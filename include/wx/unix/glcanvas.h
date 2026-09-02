@@ -95,6 +95,7 @@ protected:
     // These functions are currently only called by wxGTK but always defined.
     void CallOnRealized();
     void CallOnUnrealized();
+    void CallOnSizeChanged();
 
 private:
     std::unique_ptr<wxGLCanvasUnixImpl> m_impl;

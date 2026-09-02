@@ -75,18 +75,11 @@ void wxCaretBase::SetBlinkTime(int milliseconds)
 {
     gs_blinkTime = milliseconds;
 
-#ifdef _WXGTK__
-    GtkSettings *settings = gtk_settings_get_default();
-    if (millseconds == 0)
-    {
-        gtk_settings_set_long_property(settings, "gtk-cursor-blink", gtk_false, nullptr);
-    }
-    else
-    {
-        gtk_settings_set_long_property(settings, "gtk-cursor-blink", gtk_true, nullptr);
-        gtk_settings_set_long_property(settings, "gtk-cursor-time", milliseconds, nullptr);
-    }
-#endif
+    // Deliberately wxCaret-only: passing the blink time on to GtkSettings
+    // ("gtk-cursor-blink", "gtk-cursor-blink-time") would reach past wxCaret
+    // into every native widget in the process, and GtkSettings is per display.
+    // That is a decision about what this function is allowed to affect rather
+    // than something missing.
 }
 
 // ----------------------------------------------------------------------------
@@ -140,6 +133,12 @@ void wxCaret::DoMove()
     if (m_overlay.IsNative())
     {
         m_overlay.Reset();
+
+        // Resetting a native overlay clears its contents, so redraw the caret
+        // immediately at its new position if it is currently visible.
+        if ( IsVisible() && !m_blinkedOut )
+            Refresh();
+
         return;
     }
 

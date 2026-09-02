@@ -448,6 +448,26 @@ void wxGLCanvasEGL::UpdateSubsurfacePosition()
         return;
     }
 
+#ifdef __WXGTK4__
+    // The parent of our subsurface is the top level's surface, so we need our
+    // own position within it. GdkWindow origins are gone, but this is exactly
+    // what gtk_widget_compute_bounds() gives us -- modulo the shadow offset
+    // between the top level widget and its surface under CSD.
+    GtkNative* const native = gtk_widget_get_native(m_canvas->m_widget);
+    if ( !native )
+        return;
+
+    graphene_rect_t bounds;
+    if ( !gtk_widget_compute_bounds(m_canvas->m_widget, GTK_WIDGET(native),
+                                    &bounds) )
+        return;
+
+    double dx = 0, dy = 0;
+    gtk_native_get_surface_transform(native, &dx, &dy);
+
+    const int x = int(bounds.origin.x + dx);
+    const int y = int(bounds.origin.y + dy);
+#else
     // We need to position the subsurface at the canvas window position inside
     // its top level ancestor, so get it by computing the offset between the
     // canvas origin and the window origin.
@@ -465,6 +485,7 @@ void wxGLCanvasEGL::UpdateSubsurfacePosition()
 
     x -= tlwx;
     y -= tlwy;
+#endif // __WXGTK4__/!__WXGTK4__
 
     wl_subsurface_set_position(m_wlSubsurface, x, y);
 }
@@ -523,15 +544,21 @@ static const struct wl_callback_listener wl_frame_listener = {
     wl_frame_callback_handler
 };
 
+#ifdef __WXGTK4__
+
+// GTK4 has no "map-event": the "map" signal is emitted after the widget's
+// top level surface exists, which is all the GTK3 code needed "map-event" for.
+static void gtk_glcanvas_map_callback(GtkWidget *, wxGLCanvasEGL *win)
+{
+    win->CreateWaylandSubsurface();
+}
+
+#else // !__WXGTK4__
+
 static gboolean gtk_glcanvas_map_callback(GtkWidget *, GdkEventAny *, wxGLCanvasEGL *win)
 {
     win->CreateWaylandSubsurface();
     return FALSE;
-}
-
-static void gtk_glcanvas_unmap_callback(GtkWidget *, wxGLCanvasEGL *win)
-{
-    win->DestroyWaylandSubsurface();
 }
 
 static void gtk_glcanvas_size_callback(GtkWidget *widget,
@@ -539,6 +566,13 @@ static void gtk_glcanvas_size_callback(GtkWidget *widget,
                                        wxGLCanvasEGL *win)
 {
     wxEGLUpdateGeometry(widget, win);
+}
+
+#endif // __WXGTK4__/!__WXGTK4__
+
+static void gtk_glcanvas_unmap_callback(GtkWidget *, wxGLCanvasEGL *win)
+{
+    win->DestroyWaylandSubsurface();
 }
 
 static void gtk_glcanvas_scale_factor_notify(GtkWidget* widget,
@@ -623,7 +657,9 @@ void wxGLCanvasEGL::OnRealized()
         return;
     }
 
-    GdkWindow *window = m_canvas->GTKGetDrawingWindow();
+    // Under GTK4 this is the top level's GdkSurface rather than a GdkWindow of
+    // our own, which widgets don't have any more.
+    auto* const window = m_canvas->GTKGetDrawingWindow();
 #ifdef GDK_WINDOWING_X11
     if (wxGTKImpl::IsX11(window))
     {
@@ -633,7 +669,11 @@ void wxGLCanvasEGL::OnRealized()
             m_surface = EGL_NO_SURFACE;
         }
 
+#ifdef __WXGTK4__
+        m_xwindow = GDK_SURFACE_XID(window);
+#else
         m_xwindow = GDK_WINDOW_XID(window);
+#endif
         m_surface = CallCreatePlatformWindowSurface(m_xwindow);
     }
 #endif
@@ -647,9 +687,16 @@ void wxGLCanvasEGL::OnRealized()
             return;
         }
 
+#ifdef __WXGTK4__
+        // The surface is the top level's, so take our size from the widget.
+        int w = gtk_widget_get_width(m_canvas->m_wxwindow);
+        int h = gtk_widget_get_height(m_canvas->m_wxwindow);
+        struct wl_display *display = gdk_wayland_display_get_wl_display(gdk_surface_get_display(window));
+#else
         int w = gdk_window_get_width(window);
         int h = gdk_window_get_height(window);
         struct wl_display *display = gdk_wayland_display_get_wl_display(gdk_window_get_display(window));
+#endif
         struct wl_registry *registry = wl_display_get_registry(display);
         wl_registry_add_listener(registry, &wl_registry_listener, this);
         wl_display_roundtrip(display);
@@ -661,7 +708,11 @@ void wxGLCanvasEGL::OnRealized()
         m_wlSurface = wl_compositor_create_surface(m_wlCompositor);
         m_wlRegion = wl_compositor_create_region(m_wlCompositor);
         wl_surface_set_input_region(m_wlSurface, m_wlRegion);
+#ifdef __WXGTK4__
+        int scale = gtk_widget_get_scale_factor(m_canvas->m_wxwindow);
+#else
         int scale = gdk_window_get_scale_factor(window);
+#endif
         wl_surface_set_buffer_scale(m_wlSurface, scale);
         m_wlEGLWindow = wl_egl_window_create(m_wlSurface, w * scale,
                                              h * scale);
@@ -669,6 +720,13 @@ void wxGLCanvasEGL::OnRealized()
 
         GtkWidget* const widget = m_canvas->m_widget;
 
+#ifdef __WXGTK4__
+        // "map-event" is gone, but its plain "map" replacement is emitted late
+        // enough here: the surface we need is the top level's, and it exists
+        // by the time any widget inside it is mapped.
+        g_signal_connect(widget, "map",
+                         G_CALLBACK(gtk_glcanvas_map_callback), this);
+#else
         // We need to use "map-event" instead of "map" to ensure that the
         // widget's underlying Wayland surface has been created.
         // Otherwise, gdk_wayland_window_get_wl_surface may return nullptr,
@@ -676,6 +734,7 @@ void wxGLCanvasEGL::OnRealized()
         gtk_widget_add_events(widget, GDK_STRUCTURE_MASK);
         g_signal_connect(widget, "map-event",
                          G_CALLBACK(gtk_glcanvas_map_callback), this);
+#endif
         // However, note the use of "unmap" instead of the later "unmap-event"
         // Not unmapping the canvas as soon as possible causes problems when reparenting
         g_signal_connect(widget, "unmap",
@@ -687,8 +746,12 @@ void wxGLCanvasEGL::OnRealized()
         // "notify::scale-factor" to catch scale changes, which is especially
         // important initially, as we don't get a "size-allocate" with the
         // correct scale when the window is created.
+#ifndef __WXGTK4__
+        // GTK4 removed "size-allocate": wxGLCanvas forwards its own size
+        // events to OnSizeChanged() below instead.
         g_signal_connect(widget, "size-allocate",
                          G_CALLBACK(gtk_glcanvas_size_callback), this);
+#endif
         g_signal_connect(widget, "notify::scale-factor",
                          G_CALLBACK (gtk_glcanvas_scale_factor_notify), this);
     }
@@ -700,6 +763,21 @@ void wxGLCanvasEGL::OnRealized()
         return;
     }
 }
+
+#ifdef __WXGTK4__
+
+void wxGLCanvasEGL::OnSizeChanged()
+{
+    // This replaces the "size-allocate" handler used under GTK3, see
+    // OnRealized(). Only the Wayland path has anything to do here: under X11
+    // the EGL surface follows the (top level) X window on its own.
+#ifdef GDK_WINDOWING_WAYLAND
+    if ( m_wlEGLWindow )
+        wxEGLUpdateGeometry(m_canvas->m_wxwindow, this);
+#endif // GDK_WINDOWING_WAYLAND
+}
+
+#endif // __WXGTK4__
 
 void wxGLCanvasEGL::OnUnrealized()
 {
@@ -764,8 +842,12 @@ void wxGLCanvasEGL::CreateWaylandSubsurface()
         return;
     }
 
-    GdkWindow *window = m_canvas->GTKGetDrawingWindow();
+    auto* const window = m_canvas->GTKGetDrawingWindow();
+#ifdef __WXGTK4__
+    struct wl_surface *surface = gdk_wayland_surface_get_wl_surface(window);
+#else
     struct wl_surface *surface = gdk_wayland_window_get_wl_surface(window);
+#endif
 
     m_wlSubsurface = wl_subcompositor_get_subsurface(m_wlSubcompositor,
                                                      m_wlSurface,
@@ -953,7 +1035,7 @@ bool wxGLCanvasEGL::SwapBuffers()
         m_swapIntervalToSet = wxGLCanvas::DefaultSwapInterval;
     }
 
-    GdkWindow* const window = m_canvas->GTKGetDrawingWindow();
+    auto* const window = m_canvas->GTKGetDrawingWindow();
 #ifdef GDK_WINDOWING_X11
     if (wxGTKImpl::IsX11(window))
     {

@@ -24,7 +24,10 @@ public:
 
     // port-specific constructors
     // ------------
+#ifndef __WXGTK4__
+    // GdkColor is gone under GTK4; GdkRGBA is the only representation left.
     wxColourImpl(const GdkColor& gdkColor);
+#endif
 #ifdef __WXGTK3__
     wxColourImpl(const GdkRGBA& gdkRGBA);
 #endif
@@ -44,7 +47,9 @@ public:
     void CalcPixel( GdkColormap *cmap );
     int GetPixel() const;
 #endif
+#ifndef __WXGTK4__
     const GdkColor *GetColor() const;
+#endif
 
 protected:
     virtual void

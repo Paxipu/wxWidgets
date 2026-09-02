@@ -22,6 +22,14 @@
 
 #include "wx/gtk/private/wrapgtk.h"
 #include "wx/gtk/private/cairo.h"
+#include "wx/gtk/private/gtk3-compat.h"
+
+#if defined(__WXGTK4__) && defined(GDK_WINDOWING_X11)
+    // For the X11 fallback in wxScreenDCImpl below: GTK4 has no root window,
+    // but X11 still does, and cairo can be pointed straight at it.
+    #include <gdk/x11/gdkx.h>
+    #include <cairo-xlib.h>
+#endif
 
 wxGTKCairoDCImpl::wxGTKCairoDCImpl(wxDC* owner)
     : wxGCDCImpl(owner)
@@ -44,11 +52,19 @@ wxGTKCairoDCImpl::wxGTKCairoDCImpl(wxDC* owner, wxWindow* window, wxLayoutDirect
     }
 }
 
+#ifdef __WXGTK4__
+void wxGTKCairoDCImpl::InitSize(GtkWidget* widget)
+{
+    m_size.x = gtk_widget_get_width(widget);
+    m_size.y = gtk_widget_get_height(widget);
+}
+#else
 void wxGTKCairoDCImpl::InitSize(GdkWindow* window)
 {
     m_size.x = gdk_window_get_width(window);
     m_size.y = gdk_window_get_height(window);
 }
+#endif // __WXGTK4__/!__WXGTK4__
 
 void wxGTKCairoDCImpl::DoDrawBitmap(const wxBitmap& bitmap, int x, int y, bool useMask)
 {
@@ -411,6 +427,86 @@ void wxGTKCairoDCImpl::AdjustForRTL(cairo_t* cr)
 }
 //-----------------------------------------------------------------------------
 
+#ifdef __WXGTK4__
+
+// Under GTK4 there is nothing to draw on outside of a paint handler: a
+// GdkSurface has no cairo context of its own and GTK only hands one out from
+// its snapshot vfunc. So wxWindowDC and wxClientDC still report the right
+// size, which is what most of their users actually want, but what they draw
+// never reaches the screen. wxPaintDC, which is the supported way to draw on a
+// window, is unaffected.
+//
+// wxClientDCImpl::CanBeUsedForDrawing() below reports this, exactly as it
+// already did for Wayland under GTK3, where the same restriction applied.
+//
+// They must still have somewhere real to draw, though.
+// wxGraphicsContext::Create() hands back a 1x1 measuring context, and its clip
+// silently discards everything drawn outside that one pixel -- which is not
+// the same thing as the drawing not being shown. wxOverlay is what makes the
+// difference visible: it captures whatever was drawn on the DC as a cairo
+// group and displays that in a widget of its own, which is how wxCaret and
+// wxDragImage draw and is a supported way to draw on a window under GTK4. With
+// a 1x1 clip it captured an empty group every time, so the caret was never
+// visible.
+static void wxGTKSetSurfaceGraphicsContext(wxGTKCairoDCImpl* impl,
+                                           const wxSize& size,
+                                           double scale)
+{
+    cairo_surface_t* const surface =
+        cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
+                                   wxMax(size.x, 1), wxMax(size.y, 1));
+    cairo_t* const cr = cairo_create(surface);
+    cairo_surface_destroy(surface);
+
+    // wxCairoContext takes a reference of its own, so ours goes back below.
+    wxGraphicsContext* const gc = wxGraphicsContext::CreateFromNative(cr);
+    gc->SetContentScaleFactor(scale);
+    impl->SetGraphicsContext(gc);
+
+    cairo_destroy(cr);
+}
+
+wxWindowDCImpl::wxWindowDCImpl(wxWindowDC* owner, wxWindow* window)
+    : wxGTKCairoDCImpl(owner, window)
+{
+    GtkWidget* widget = window->m_wxwindow;
+    if (widget == nullptr)
+        widget = window->m_widget;
+
+    if (widget)
+    {
+        m_ok = true;
+        InitSize(widget);
+    }
+
+    wxGTKSetSurfaceGraphicsContext(this, m_size, m_contentScaleFactor);
+}
+//-----------------------------------------------------------------------------
+
+wxClientDCImpl::wxClientDCImpl(wxClientDC* owner, wxWindow* window)
+    : wxGTKCairoDCImpl(owner, window)
+{
+    GtkWidget* widget = window->m_wxwindow;
+    if (widget == nullptr)
+        widget = window->m_widget;
+
+    if (widget)
+    {
+        window->GetClientSize(&m_size.x, &m_size.y);
+        m_ok = true;
+    }
+
+    wxGTKSetSurfaceGraphicsContext(this, m_size, m_contentScaleFactor);
+}
+
+/* static */
+bool wxClientDCImpl::CanBeUsedForDrawing(const wxWindow* WXUNUSED(window))
+{
+    return false;
+}
+
+#else // !__WXGTK4__
+
 wxWindowDCImpl::wxWindowDCImpl(wxWindowDC* owner, wxWindow* window)
     : wxGTKCairoDCImpl(owner, window)
 {
@@ -510,6 +606,8 @@ bool wxClientDCImpl::CanBeUsedForDrawing(const wxWindow* WXUNUSED(window))
     return true;
 }
 
+#endif // __WXGTK4__/!__WXGTK4__
+
 //-----------------------------------------------------------------------------
 
 wxPaintDCImpl::wxPaintDCImpl(wxPaintDC* owner, wxWindow* window)
@@ -517,7 +615,11 @@ wxPaintDCImpl::wxPaintDCImpl(wxPaintDC* owner, wxWindow* window)
 {
     cairo_t* cr = window->GTKPaintContext();
     wxCHECK_RET(cr, "using wxPaintDC without being in a native paint event");
+#ifdef __WXGTK4__
+    InitSize(window->m_wxwindow);
+#else
     InitSize(gtk_widget_get_window(window->m_wxwindow));
+#endif
     wxGraphicsContext* gc = wxGraphicsContext::CreateFromNative(cr);
     gc->SetContentScaleFactor(m_contentScaleFactor);
     SetGraphicsContext(gc);
@@ -529,6 +631,72 @@ wxPaintDCImpl::wxPaintDCImpl(wxPaintDC* owner, wxWindow* window)
 wxScreenDCImpl::wxScreenDCImpl(wxScreenDC* owner)
     : wxGTKCairoDCImpl(owner, static_cast<wxWindow*>(nullptr))
 {
+#ifdef __WXGTK4__
+    // There is no root window under GTK4: gdk_get_default_root_window() went
+    // with the rest of GdkWindow, and so did gdk_cairo_create(), which is how
+    // the GTK+ 3 code below gets a context for the screen. GTK4 offers nothing
+    // backend-independent in their place.
+    //
+    // Under X11 there is still a root window, though, and cairo can be pointed
+    // straight at it -- which is what gdk_cairo_create() did anyway. So that is
+    // what this does, and wxScreenDC keeps working there for both reading the
+    // screen and drawing on it.
+    //
+    // Measured in docs/gtk/probes/gtk4-screen-readback.c. Without it a
+    // screenshot comes back black with no error at all, which is worse than
+    // failing: under GTK+ 3 every pixel reads its real colour, under GTK4
+    // every pixel was (0,0,0).
+    //
+    // Wayland has no screen to read and no desktop to draw on -- that is a
+    // deliberate part of its design, not a gap in GTK -- so there the size is
+    // still all wxScreenDC can offer.
+    bool haveScreen = false;
+
+#ifdef GDK_WINDOWING_X11
+    GdkDisplay* const display = gdk_display_get_default();
+    if ( display && GDK_IS_X11_DISPLAY(display) )
+    {
+        Display* const xdpy = gdk_x11_display_get_xdisplay(display);
+        const Window root = DefaultRootWindow(xdpy);
+
+        XWindowAttributes attrs;
+        if ( XGetWindowAttributes(xdpy, root, &attrs) )
+        {
+            cairo_surface_t* const surface =
+                cairo_xlib_surface_create(xdpy, root, attrs.visual,
+                                          attrs.width, attrs.height);
+
+            if ( cairo_surface_status(surface) == CAIRO_STATUS_SUCCESS )
+            {
+                m_size.x = attrs.width;
+                m_size.y = attrs.height;
+
+                cairo_t* const cr = cairo_create(surface);
+                wxGraphicsContext* const gc =
+                    wxGraphicsContext::CreateFromNative(cr);
+                gc->SetContentScaleFactor(m_contentScaleFactor);
+                SetGraphicsContext(gc);
+                cairo_destroy(cr);
+
+                haveScreen = true;
+            }
+
+            cairo_surface_destroy(surface);
+        }
+    }
+#endif // GDK_WINDOWING_X11
+
+    if ( !haveScreen )
+    {
+        // Report the size of the primary monitor, which is what wxScreenDC's
+        // non-drawing users want, and leave the drawing to go nowhere.
+        const wxSize size = wxGetDisplaySize();
+        m_size.x = size.x;
+        m_size.y = size.y;
+
+        SetGraphicsContext(wxGraphicsContext::Create());
+    }
+#else // !__WXGTK4__
     GdkWindow* window = gdk_get_default_root_window();
     InitSize(window);
 
@@ -536,6 +704,7 @@ wxScreenDCImpl::wxScreenDCImpl(wxScreenDC* owner)
     wxGraphicsContext* gc = wxGraphicsContext::CreateFromNative(cr);
     gc->SetContentScaleFactor(m_contentScaleFactor);
     SetGraphicsContext(gc);
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 wxSize wxScreenDCImpl::GetPPI() const

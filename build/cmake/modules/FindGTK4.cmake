@@ -42,6 +42,12 @@ set(VERSION_OK FALSE)
 endif ()
 endif ()
 endif ()
+# Which GDK backends this GTK+ 4 was built with: init.cmake keys the
+# Wayland client code and the X11-only checks off these.
+include(CheckSymbolExists)
+set(CMAKE_REQUIRED_INCLUDES ${GTK4_INCLUDE_DIRS})
+check_symbol_exists(GDK_WINDOWING_WAYLAND "gdk/gdk.h" wxHAVE_GDK_WAYLAND)
+check_symbol_exists(GDK_WINDOWING_X11 "gdk/gdk.h" wxHAVE_GDK_X11)
 include(FindPackageHandleStandardArgs)
 FIND_PACKAGE_HANDLE_STANDARD_ARGS(GTK4 DEFAULT_MSG GTK4_INCLUDE_DIRS GTK4_LIBRARIES VERSION_OK)
 

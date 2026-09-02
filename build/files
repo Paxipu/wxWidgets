@@ -1327,6 +1327,7 @@ GTK_LOWLEVEL_SRC =
     src/gtk/tooltip.cpp
     src/gtk/toplevel.cpp
     src/gtk/utilsgtk.cpp
+    src/gtk/accessgtk.cpp
     src/gtk/wayland.cpp
     src/gtk/win_gtk.cpp
     src/gtk/window.cpp
@@ -1334,11 +1335,13 @@ GTK2_LOWLEVEL_SRC =
     $(GTK_LOWLEVEL_SRC)
     src/gtk/dcclient.cpp
     src/gtk/dcmemory.cpp
+    src/gtk/dbusmenu.cpp
     src/gtk/dcscreen.cpp
 GTK_LOWLEVEL_HDR =
     $(GTK_PLATFORM_HDR)
     wx/generic/icon.h
     wx/generic/paletteg.h
+    wx/gtk/access.h
     wx/gtk/app.h
     wx/gtk/assertdlg_gtk.h
     wx/gtk/bitmap.h
@@ -1367,7 +1370,11 @@ GTK_LOWLEVEL_HDR =
 GTK_SRC =
     # Generic implementations used by wxGTK:
     src/generic/accel.cpp
+    # Used by GTK4, whose own folder and file choosers cannot be relied on to
+    # open at all:
+    src/generic/dirdlgg.cpp
     src/generic/fdrepdlg.cpp
+    src/generic/filedlgg.cpp
     # Needed as long as we support GTK+ < 2.6
     src/generic/filepickerg.cpp
     src/generic/imaglist.cpp
@@ -1425,6 +1432,7 @@ GTK_SRC =
     src/gtk/statbox.cpp
     src/gtk/statline.cpp
     src/gtk/stattext.cpp
+    src/gtk/statusnotifier.cpp
     src/gtk/taskbar.cpp
     src/gtk/textctrl.cpp
     src/gtk/textentry.cpp
@@ -1439,7 +1447,9 @@ GTK2_SRC =
 
 GTK_HDR =
     wx/generic/activityindicator.h
+    wx/generic/dirdlgg.h
     wx/generic/fdrepdlg.h
+    wx/generic/filedlgg.h
     wx/generic/filepickerg.h
     wx/generic/imaglist.h
     wx/generic/listctrl.h

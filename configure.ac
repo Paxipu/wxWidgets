@@ -2928,7 +2928,12 @@ if test "$wxUSE_GUI" = "yes"; then
                 fi
                 if test -z "$wx_cv_lib_gtk"; then
                     if test "$wxGTK_VERSION" = 4 -o "$wxGTK_VERSION" = any; then
-                        PKG_CHECK_MODULES(GTK, gtk4, wx_cv_lib_gtk=4)
+                        dnl 4.10 is the floor the port actually has: it uses
+                        dnl gtk_snapshot_push_mask() unguarded, for the window
+                        dnl shape support GTK4 otherwise removed, and that
+                        dnl arrived in 4.10. Asking for no version at all, as
+                        dnl this did, promised GTK 4.0 and did not deliver it.
+                        PKG_CHECK_MODULES(GTK, [gtk4 >= 4.10], wx_cv_lib_gtk=4)
                     fi
                 fi
 
@@ -3175,7 +3180,29 @@ installed, where VER is 2, 3 or 4.
 
         if test "$wxUSE_TASKBARICON" = "yes"; then
             if test "$wxUSE_APPINDICATOR" = "yes"; then
-                if test "$WXGTK3" = 1; then
+                if test "$WXGTK4" = 1; then
+                    dnl WXGTK3 is set for GTK4 too, so this branch has to come
+                    dnl first or the GTK3 one below would claim GTK4 builds.
+                    dnl
+                    dnl There is no GTK4 build of AppIndicator: the only
+                    dnl pkg-config module, ayatana-appindicator3-0.1, is built
+                    dnl against GTK+ 3 and brings libgtk-3 and libdbusmenu-gtk3
+                    dnl with it.  GTK4 aborts any process that contains GTK 2/3
+                    dnl symbols, so an application linked that way dies on
+                    dnl startup with
+                    dnl
+                    dnl   Gtk-ERROR **: GTK 2/3 symbols detected. Using GTK 2/3
+                    dnl   and GTK 4 in the same process is not supported
+                    dnl
+                    dnl and it buys nothing in return, because wxTaskBarIcon is
+                    dnl a stub under GTK4 anyway -- see the __WXGTK4__ branch at
+                    dnl the end of src/gtk/taskbar.cpp, where every method
+                    dnl returns false.
+                    if test "${with_appindicator+set}" = set; then
+                        AC_MSG_WARN([AppIndicator is not usable under GTK4: it exists only as a GTK+ 3 library, and GTK4 refuses to run in a process containing GTK 2/3 symbols])
+                    fi
+                    wxUSE_APPINDICATOR=no
+                elif test "$WXGTK3" = 1; then
                     PKG_CHECK_MODULES(APPINDICATOR,
                         [ayatana-appindicator3-0.1],
                         [
@@ -4917,6 +4944,23 @@ if test "$wxUSE_GTK" = 1 ; then
 
     if test "$WXGTK4" = 1 ; then
         AC_DEFINE_UNQUOTED(__WXGTK4__, 1)
+
+        dnl Tell GTK which version we support, which it otherwise has to guess.
+        dnl Left unset, it assumes we target whatever we happen to compile
+        dnl against and reports every deprecation of every release since 4.0 --
+        dnl including ones whose replacement does not exist in the version we
+        dnl require. 4.10 is the floor asked for above.
+        dnl
+        dnl This does not restrict which API may be used: that is
+        dnl GDK_VERSION_MAX_ALLOWED, deliberately left at its default of the
+        dnl version being compiled against, so newer calls behind
+        dnl GTK_CHECK_VERSION() guards stay warning-free.
+        dnl
+        dnl In CPPFLAGS rather than AC_DEFINE, i.e. in wx's own compilation
+        dnl rather than in the installed setup.h, for the same reason as
+        dnl G_DISABLE_CAST_CHECKS below: which deprecations an application
+        dnl wants to hear about is its own decision, not ours.
+        CPPFLAGS="$CPPFLAGS -DGDK_VERSION_MIN_REQUIRED=GDK_VERSION_4_10"
     fi
     if test "$WXGTK3" = 1 ; then
         AC_DEFINE_UNQUOTED(__WXGTK3__, 1)
@@ -5307,7 +5351,22 @@ if test "$wxUSE_SPELLCHECK" = "yes"; then
     dnl implement support for spell checking in the other ports, but for GTK 3
     dnl we need to check for the gspell library.
 
-    if test "$WXGTK3" = 1; then
+    dnl gspell-1 is a GTK3 library and linking it into a GTK4 build would pull
+    dnl libgtk-3 into the same process as libgtk-4, so GTK4 uses libspelling
+    dnl instead. Note that we only use its checker: its view integration works
+    dnl on GtkSourceBuffer, which wxTextCtrl doesn't use.
+    if test "$WXGTK4" = 1; then
+        PKG_CHECK_MODULES(SPELLING, [libspelling-1],
+            [
+                CXXFLAGS="$SPELLING_CFLAGS $CXXFLAGS"
+                GUI_TK_LIBRARY="$GUI_TK_LIBRARY $SPELLING_LIBS"
+            ],
+            [
+                AC_MSG_WARN([libspelling-1 not found, spell checking in wxTextCtrl won't be available])
+                wxUSE_SPELLCHECK=no
+            ]
+        )
+    elif test "$WXGTK3" = 1; then
         PKG_CHECK_MODULES(GSPELL, [gspell-1],
             [
                 CXXFLAGS="$GSPELL_CFLAGS $CXXFLAGS"
@@ -5444,7 +5503,9 @@ if test "$wxUSE_GTK" = 1; then
     if test "$wxUSE_PRINTING_ARCHITECTURE" = "yes" ; then
 
         if test "$wxUSE_GTKPRINT" = "yes" ; then
-            if test "$WXGTK3" = 1; then
+            if test "$WXGTK4" = 1; then
+                gtk_unix_print="gtk4-unix-print"
+            elif test "$WXGTK3" = 1; then
                 gtk_unix_print="gtk+-unix-print-${TOOLKIT_VERSION}.0"
             else
                 gtk_unix_print="gtk+-unix-print-2.0 >= 2.10"
@@ -6929,6 +6990,19 @@ dnl ---------------------------------------------------------------------------
 
 dnl please keep the settings below in alphabetical order
 if test "$wxUSE_ACCESSIBILITY" = "yes"; then
+    dnl Outside wxMSW only wxGTK implements this, and only against GTK 4.10 or
+    dnl later: that is where an accessible object stopped having to be a
+    dnl widget, without which a wxAccessible cannot describe a grid cell or a
+    dnl list item, which is most of what the API exists for.
+    if test "$wxUSE_MSW" != 1; then
+        if test "$WXGTK4" = 1; then
+            PKG_CHECK_EXISTS([gtk4 >= 4.10], [],
+                [AC_MSG_ERROR([--enable-accessibility requires GTK 4.10 or later])])
+        else
+            AC_MSG_ERROR([--enable-accessibility is only supported in wxMSW and wxGTK4])
+        fi
+    fi
+
     AC_DEFINE(wxUSE_ACCESSIBILITY)
     SAMPLES_SUBDIRS="$SAMPLES_SUBDIRS access"
 fi
@@ -7116,7 +7190,22 @@ if test "$wxUSE_WEBVIEW" = "yes"; then
     USE_WEBVIEW_WEBKIT2=0
     if test "$wxUSE_WEBVIEW_WEBKIT" = "yes"; then
         if test "$wxUSE_GTK" = 1; then
-            if test "$WXGTK3" = 1; then
+            if test "$WXGTK4" = 1; then
+                dnl WebKitGTK has a separate API version for GTK4 and the
+                dnl GTK3 ones can't be used at all here: their headers refer
+                dnl to GtkContainer, GtkAction and GdkEvent* structs which
+                dnl don't exist under GTK4, so they don't even compile.
+                PKG_CHECK_MODULES([WEBKIT],
+                                  [webkitgtk-6.0],
+                                  [
+                                    USE_WEBVIEW_WEBKIT2=1
+                                    CXXFLAGS="$CXXFLAGS $WEBKIT_CFLAGS"
+                                    EXTRALIBS_WEBVIEW="$WEBKIT_LIBS"
+                                  ],
+                                  [
+                                    AC_MSG_WARN([webkitgtk-6.0 not found, wxWebView will be disabled])
+                                  ])
+            elif test "$WXGTK3" = 1; then
                 PKG_CHECK_MODULES([WEBKIT],
                                   [webkit2gtk-4.1],
                                   [
@@ -7140,7 +7229,9 @@ if test "$wxUSE_WEBVIEW" = "yes"; then
                                       ])
                 fi
             fi
-            if test "$USE_WEBVIEW_WEBKIT2" = 0; then
+            dnl The legacy WebKit1 backend is GTK2/GTK3 only, there has never
+            dnl been a GTK4 version of it, so don't look for one.
+            if test "$USE_WEBVIEW_WEBKIT2" = 0 -a "$WXGTK4" != 1; then
                 webkitgtk=webkit-1.0
                 if test "$WXGTK3" = 1; then
                     webkitgtk="webkitgtk-${TOOLKIT_VERSION}.0"

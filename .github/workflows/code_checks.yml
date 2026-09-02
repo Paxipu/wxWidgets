@@ -5,9 +5,15 @@ on:
   push:
     branches:
       - master
+      # Fork only, not for upstream: without this branch here none of
+      # these workflows ever run on any of the port's commits.
+      - claude/gtk4-wxwidgets-port-plan-pwo52u
   pull_request:
     branches:
       - master
+      # Fork only, not for upstream: without this branch here none of
+      # these workflows ever run on any of the port's commits.
+      - claude/gtk4-wxwidgets-port-plan-pwo52u
 
 permissions:
   contents: read
@@ -70,6 +76,39 @@ jobs:
                 ':!**/*.xpm'
 
 
+  check-gtk-min-versions:
+    runs-on: ubuntu-latest
+    name: Check GTK Minimum Versions
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check that configure.ac and CMake agree
+        run: |
+            python3 build/tools/check-gtk-min-versions.py
+
+  check-commit-trailers:
+    runs-on: ubuntu-latest
+    name: Check Commit Trailers
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # The check compares against the base of the pull request, so it
+          # needs more than the single commit a shallow clone gives it.
+          fetch-depth: 0
+
+      - name: Check the attribution on the commits this branch adds
+        run: |
+            base="${{ github.event.pull_request.base.sha }}"
+            if [ -z "$base" ]; then
+              echo "not a pull request, nothing to compare against"
+              exit 0
+            fi
+            python3 build/tools/check-commit-trailers.py "$base"
+
   check-mixed-eol:
     runs-on: ubuntu-latest
     name: Check Mixed EOL
@@ -115,3 +154,32 @@ jobs:
       - name: Check that all headers are listed in tests/allheaders.h
         run: |
             ./misc/scripts/check_allheaders.sh
+
+  check-files-lists:
+    runs-on: ubuntu-latest
+    name: Check Generated File Lists
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check that the generated file lists match build/files
+        run: |
+            ./misc/scripts/check_files_lists.sh
+
+  check-configure:
+    runs-on: ubuntu-24.04
+    name: Check Generated configure
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install autoconf 2.69
+        run: |
+            sudo apt-get update -qq
+            sudo apt-get install -qq --no-install-recommends autoconf2.69
+
+      - name: Check that configure matches configure.ac
+        run: |
+            ./misc/scripts/check_configure.sh

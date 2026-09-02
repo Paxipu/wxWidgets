@@ -1013,6 +1013,8 @@ SDL_LIBS
 SDL_CFLAGS
 GSPELL_LIBS
 GSPELL_CFLAGS
+SPELLING_LIBS
+SPELLING_CFLAGS
 LIBSECRET_LIBS
 LIBSECRET_CFLAGS
 XKBCOMMON_LIBS
@@ -1116,7 +1118,6 @@ infodir
 docdir
 oldincludedir
 includedir
-runstatedir
 localstatedir
 sharedstatedir
 sysconfdir
@@ -1514,6 +1515,8 @@ XKBCOMMON_CFLAGS
 XKBCOMMON_LIBS
 LIBSECRET_CFLAGS
 LIBSECRET_LIBS
+SPELLING_CFLAGS
+SPELLING_LIBS
 GSPELL_CFLAGS
 GSPELL_LIBS
 SDL_CFLAGS
@@ -1574,7 +1577,6 @@ datadir='${datarootdir}'
 sysconfdir='${prefix}/etc'
 sharedstatedir='${prefix}/com'
 localstatedir='${prefix}/var'
-runstatedir='${localstatedir}/run'
 includedir='${prefix}/include'
 oldincludedir='/usr/include'
 docdir='${datarootdir}/doc/${PACKAGE_TARNAME}'
@@ -1827,15 +1829,6 @@ do
   | -silent | --silent | --silen | --sile | --sil)
     silent=yes ;;
 
-  -runstatedir | --runstatedir | --runstatedi | --runstated \
-  | --runstate | --runstat | --runsta | --runst | --runs \
-  | --run | --ru | --r)
-    ac_prev=runstatedir ;;
-  -runstatedir=* | --runstatedir=* | --runstatedi=* | --runstated=* \
-  | --runstate=* | --runstat=* | --runsta=* | --runst=* | --runs=* \
-  | --run=* | --ru=* | --r=*)
-    runstatedir=$ac_optarg ;;
-
   -sbindir | --sbindir | --sbindi | --sbind | --sbin | --sbi | --sb)
     ac_prev=sbindir ;;
   -sbindir=* | --sbindir=* | --sbindi=* | --sbind=* | --sbin=* \
@@ -1973,7 +1966,7 @@ fi
 for ac_var in	exec_prefix prefix bindir sbindir libexecdir datarootdir \
 		datadir sysconfdir sharedstatedir localstatedir includedir \
 		oldincludedir docdir infodir htmldir dvidir pdfdir psdir \
-		libdir localedir mandir runstatedir
+		libdir localedir mandir
 do
   eval ac_val=\$$ac_var
   # Remove trailing slashes.
@@ -2126,7 +2119,6 @@ Fine tuning of the installation directories:
   --sysconfdir=DIR        read-only single-machine data [PREFIX/etc]
   --sharedstatedir=DIR    modifiable architecture-independent data [PREFIX/com]
   --localstatedir=DIR     modifiable single-machine data [PREFIX/var]
-  --runstatedir=DIR       modifiable per-process data [LOCALSTATEDIR/run]
   --libdir=DIR            object code libraries [EPREFIX/lib]
   --includedir=DIR        C header files [PREFIX/include]
   --oldincludedir=DIR     C header files for non-gcc [/usr/include]
@@ -2576,6 +2568,10 @@ Some influential environment variables:
               C compiler flags for LIBSECRET, overriding pkg-config
   LIBSECRET_LIBS
               linker flags for LIBSECRET, overriding pkg-config
+  SPELLING_CFLAGS
+              C compiler flags for SPELLING, overriding pkg-config
+  SPELLING_LIBS
+              linker flags for SPELLING, overriding pkg-config
   GSPELL_CFLAGS
               C compiler flags for GSPELL, overriding pkg-config
   GSPELL_LIBS linker flags for GSPELL, overriding pkg-config
@@ -27914,19 +27910,19 @@ fi
                     if test "$wxGTK_VERSION" = 4 -o "$wxGTK_VERSION" = any; then
 
 pkg_failed=no
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for gtk4" >&5
-$as_echo_n "checking for gtk4... " >&6; }
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for gtk4 >= 4.10" >&5
+$as_echo_n "checking for gtk4 >= 4.10... " >&6; }
 
 if test -n "$GTK_CFLAGS"; then
     pkg_cv_GTK_CFLAGS="$GTK_CFLAGS"
  elif test -n "$PKG_CONFIG"; then
     if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"gtk4\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "gtk4") 2>&5
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"gtk4 >= 4.10\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "gtk4 >= 4.10") 2>&5
   ac_status=$?
   $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
   test $ac_status = 0; }; then
-  pkg_cv_GTK_CFLAGS=`$PKG_CONFIG --cflags "gtk4" 2>/dev/null`
+  pkg_cv_GTK_CFLAGS=`$PKG_CONFIG --cflags "gtk4 >= 4.10" 2>/dev/null`
               test "x$?" != "x0" && pkg_failed=yes
 else
   pkg_failed=yes
@@ -27938,12 +27934,12 @@ if test -n "$GTK_LIBS"; then
     pkg_cv_GTK_LIBS="$GTK_LIBS"
  elif test -n "$PKG_CONFIG"; then
     if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"gtk4\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "gtk4") 2>&5
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"gtk4 >= 4.10\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "gtk4 >= 4.10") 2>&5
   ac_status=$?
   $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
   test $ac_status = 0; }; then
-  pkg_cv_GTK_LIBS=`$PKG_CONFIG --libs "gtk4" 2>/dev/null`
+  pkg_cv_GTK_LIBS=`$PKG_CONFIG --libs "gtk4 >= 4.10" 2>/dev/null`
               test "x$?" != "x0" && pkg_failed=yes
 else
   pkg_failed=yes
@@ -27964,14 +27960,14 @@ else
         _pkg_short_errors_supported=no
 fi
         if test $_pkg_short_errors_supported = yes; then
-            GTK_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "gtk4" 2>&1`
+            GTK_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "gtk4 >= 4.10" 2>&1`
         else
-            GTK_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "gtk4" 2>&1`
+            GTK_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "gtk4 >= 4.10" 2>&1`
         fi
     # Put the nasty error message in config.log where it belongs
     echo "$GTK_PKG_ERRORS" >&5
 
-    as_fn_error $? "Package requirements (gtk4) were not met:
+    as_fn_error $? "Package requirements (gtk4 >= 4.10) were not met:
 
 $GTK_PKG_ERRORS
 
@@ -28513,7 +28509,13 @@ $as_echo "$as_me: WARNING: Wayland-specific code will be disabled" >&2;}
 
         if test "$wxUSE_TASKBARICON" = "yes"; then
             if test "$wxUSE_APPINDICATOR" = "yes"; then
-                if test "$WXGTK3" = 1; then
+                if test "$WXGTK4" = 1; then
+                                                                                                                                                                                                                                                                                                                                                                        if test "${with_appindicator+set}" = set; then
+                        { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: AppIndicator is not usable under GTK4: it exists only as a GTK+ 3 library, and GTK4 refuses to run in a process containing GTK 2/3 symbols" >&5
+$as_echo "$as_me: WARNING: AppIndicator is not usable under GTK4: it exists only as a GTK+ 3 library, and GTK4 refuses to run in a process containing GTK 2/3 symbols" >&2;}
+                    fi
+                    wxUSE_APPINDICATOR=no
+                elif test "$WXGTK3" = 1; then
 
 pkg_failed=no
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking for ayatana-appindicator3-0.1" >&5
@@ -35993,6 +35995,8 @@ _ACEOF
 #define __WXGTK4__ 1
 _ACEOF
 
+
+                                                                                                                                CPPFLAGS="$CPPFLAGS -DGDK_VERSION_MIN_REQUIRED=GDK_VERSION_4_10"
     fi
     if test "$WXGTK3" = 1 ; then
         cat >>confdefs.h <<_ACEOF
@@ -36611,7 +36615,92 @@ fi
 
 if test "$wxUSE_SPELLCHECK" = "yes"; then
 
-    if test "$WXGTK3" = 1; then
+                    if test "$WXGTK4" = 1; then
+
+pkg_failed=no
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for libspelling-1" >&5
+$as_echo_n "checking for libspelling-1... " >&6; }
+
+if test -n "$SPELLING_CFLAGS"; then
+    pkg_cv_SPELLING_CFLAGS="$SPELLING_CFLAGS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libspelling-1\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "libspelling-1") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_SPELLING_CFLAGS=`$PKG_CONFIG --cflags "libspelling-1" 2>/dev/null`
+              test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+if test -n "$SPELLING_LIBS"; then
+    pkg_cv_SPELLING_LIBS="$SPELLING_LIBS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libspelling-1\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "libspelling-1") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_SPELLING_LIBS=`$PKG_CONFIG --libs "libspelling-1" 2>/dev/null`
+              test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+
+
+
+if test $pkg_failed = yes; then
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+
+if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
+        _pkg_short_errors_supported=yes
+else
+        _pkg_short_errors_supported=no
+fi
+        if test $_pkg_short_errors_supported = yes; then
+            SPELLING_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "libspelling-1" 2>&1`
+        else
+            SPELLING_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "libspelling-1" 2>&1`
+        fi
+    # Put the nasty error message in config.log where it belongs
+    echo "$SPELLING_PKG_ERRORS" >&5
+
+
+                { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: libspelling-1 not found, spell checking in wxTextCtrl won't be available" >&5
+$as_echo "$as_me: WARNING: libspelling-1 not found, spell checking in wxTextCtrl won't be available" >&2;}
+                wxUSE_SPELLCHECK=no
+
+
+elif test $pkg_failed = untried; then
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+
+                { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: libspelling-1 not found, spell checking in wxTextCtrl won't be available" >&5
+$as_echo "$as_me: WARNING: libspelling-1 not found, spell checking in wxTextCtrl won't be available" >&2;}
+                wxUSE_SPELLCHECK=no
+
+
+else
+    SPELLING_CFLAGS=$pkg_cv_SPELLING_CFLAGS
+    SPELLING_LIBS=$pkg_cv_SPELLING_LIBS
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+
+                CXXFLAGS="$SPELLING_CFLAGS $CXXFLAGS"
+                GUI_TK_LIBRARY="$GUI_TK_LIBRARY $SPELLING_LIBS"
+
+fi
+    elif test "$WXGTK3" = 1; then
 
 pkg_failed=no
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking for gspell-1" >&5
@@ -38116,7 +38205,9 @@ if test "$wxUSE_GTK" = 1; then
     if test "$wxUSE_PRINTING_ARCHITECTURE" = "yes" ; then
 
         if test "$wxUSE_GTKPRINT" = "yes" ; then
-            if test "$WXGTK3" = 1; then
+            if test "$WXGTK4" = 1; then
+                gtk_unix_print="gtk4-unix-print"
+            elif test "$WXGTK3" = 1; then
                 gtk_unix_print="gtk+-unix-print-${TOOLKIT_VERSION}.0"
             else
                 gtk_unix_print="gtk+-unix-print-2.0 >= 2.10"
@@ -40666,6 +40757,23 @@ fi
 
 
 if test "$wxUSE_ACCESSIBILITY" = "yes"; then
+                    if test "$wxUSE_MSW" != 1; then
+        if test "$WXGTK4" = 1; then
+            if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"gtk4 >= 4.10\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "gtk4 >= 4.10") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  :
+else
+  as_fn_error $? "--enable-accessibility requires GTK 4.10 or later" "$LINENO" 5
+fi
+        else
+            as_fn_error $? "--enable-accessibility is only supported in wxMSW and wxGTK4" "$LINENO" 5
+        fi
+    fi
+
     $as_echo "#define wxUSE_ACCESSIBILITY 1" >>confdefs.h
 
     SAMPLES_SUBDIRS="$SAMPLES_SUBDIRS access"
@@ -40909,7 +41017,89 @@ if test "$wxUSE_WEBVIEW" = "yes"; then
     USE_WEBVIEW_WEBKIT2=0
     if test "$wxUSE_WEBVIEW_WEBKIT" = "yes"; then
         if test "$wxUSE_GTK" = 1; then
-            if test "$WXGTK3" = 1; then
+            if test "$WXGTK4" = 1; then
+
+pkg_failed=no
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for webkitgtk-6.0" >&5
+$as_echo_n "checking for webkitgtk-6.0... " >&6; }
+
+if test -n "$WEBKIT_CFLAGS"; then
+    pkg_cv_WEBKIT_CFLAGS="$WEBKIT_CFLAGS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"webkitgtk-6.0\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "webkitgtk-6.0") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_WEBKIT_CFLAGS=`$PKG_CONFIG --cflags "webkitgtk-6.0" 2>/dev/null`
+              test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+if test -n "$WEBKIT_LIBS"; then
+    pkg_cv_WEBKIT_LIBS="$WEBKIT_LIBS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"webkitgtk-6.0\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "webkitgtk-6.0") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_WEBKIT_LIBS=`$PKG_CONFIG --libs "webkitgtk-6.0" 2>/dev/null`
+              test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+
+
+
+if test $pkg_failed = yes; then
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+
+if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
+        _pkg_short_errors_supported=yes
+else
+        _pkg_short_errors_supported=no
+fi
+        if test $_pkg_short_errors_supported = yes; then
+            WEBKIT_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "webkitgtk-6.0" 2>&1`
+        else
+            WEBKIT_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "webkitgtk-6.0" 2>&1`
+        fi
+    # Put the nasty error message in config.log where it belongs
+    echo "$WEBKIT_PKG_ERRORS" >&5
+
+
+                                    { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: webkitgtk-6.0 not found, wxWebView will be disabled" >&5
+$as_echo "$as_me: WARNING: webkitgtk-6.0 not found, wxWebView will be disabled" >&2;}
+
+elif test $pkg_failed = untried; then
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+
+                                    { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: webkitgtk-6.0 not found, wxWebView will be disabled" >&5
+$as_echo "$as_me: WARNING: webkitgtk-6.0 not found, wxWebView will be disabled" >&2;}
+
+else
+    WEBKIT_CFLAGS=$pkg_cv_WEBKIT_CFLAGS
+    WEBKIT_LIBS=$pkg_cv_WEBKIT_LIBS
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+
+                                    USE_WEBVIEW_WEBKIT2=1
+                                    CXXFLAGS="$CXXFLAGS $WEBKIT_CFLAGS"
+                                    EXTRALIBS_WEBVIEW="$WEBKIT_LIBS"
+
+fi
+            elif test "$WXGTK3" = 1; then
 
 pkg_failed=no
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking for webkit2gtk-4.1" >&5
@@ -41075,7 +41265,7 @@ $as_echo "yes" >&6; }
 fi
                 fi
             fi
-            if test "$USE_WEBVIEW_WEBKIT2" = 0; then
+                                    if test "$USE_WEBVIEW_WEBKIT2" = 0 -a "$WXGTK4" != 1; then
                 webkitgtk=webkit-1.0
                 if test "$WXGTK3" = 1; then
                     webkitgtk="webkitgtk-${TOOLKIT_VERSION}.0"

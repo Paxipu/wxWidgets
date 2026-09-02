@@ -70,6 +70,21 @@ case $(uname -s) in
                 *--disable-gui*)   ;;
                 *)
                     case "$wxGTK_VERSION" in
+                        4)  libtoolkit_dev=libgtk-4-dev
+                            # The GTK4 counterparts of the GTK3 packages
+                            # below: webkitgtk-6.0 rather than webkit2gtk,
+                            # and libspelling rather than gspell, both of
+                            # which are separate libraries and not newer
+                            # versions of the same ones. Without them the
+                            # GTK4 jobs configure wxWebView and wxTextCtrl's
+                            # spell checking out and never compile either.
+                            # No appindicator: it is GTK3-only here, by the
+                            # gate in configure.ac.
+                            # Both need noble; the GTK4 jobs run there
+                            # anyway, since the port requires GTK 4.10 and
+                            # jammy ships 4.6.
+                            extra_deps='libwebkitgtk-6.0-dev libspelling-1-dev'
+                            ;;
                         3)  libtoolkit_dev=libgtk-3-dev
                             extra_deps='libwebkit2gtk-4.0-dev libgspell-1-dev libayatana-appindicator3-dev'
                             ;;

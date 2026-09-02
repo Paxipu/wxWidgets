@@ -417,6 +417,12 @@ function(wx_set_target_properties target_name)
 
     # Set common compile definitions
     target_compile_definitions(${target_name} PRIVATE WXBUILDING)
+    # Definitions that belong to wx's own compilation and must not reach the
+    # applications built against it -- see wxTOOLKIT_OWN_DEFINITIONS in
+    # toolkit.cmake.
+    if(wxTOOLKIT_OWN_DEFINITIONS)
+        target_compile_definitions(${target_name} PRIVATE ${wxTOOLKIT_OWN_DEFINITIONS})
+    endif()
     if(wxTARGET_IS_MONO AND wxUSE_GUI)
         target_compile_definitions(${target_name} PUBLIC wxUSE_GUI=1 PRIVATE wxUSE_BASE=1)
     elseif(wxTARGET_IS_PLUGIN)

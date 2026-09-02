@@ -5,6 +5,9 @@ on:
   push:
     branches:
       - master
+      # Fork only, not for upstream: without this branch here none of
+      # these workflows ever run on any of the port's commits.
+      - claude/gtk4-wxwidgets-port-plan-pwo52u
     paths-ignore:
       - '.circleci/**'
       - '.github/ISSUE_TEMPLATE/**'
@@ -29,6 +32,9 @@ on:
   pull_request:
     branches:
       - master
+      # Fork only, not for upstream: without this branch here none of
+      # these workflows ever run on any of the port's commits.
+      - claude/gtk4-wxwidgets-port-plan-pwo52u
     paths-ignore:
       - '.circleci/**'
       - '.github/ISSUE_TEMPLATE/**'
@@ -82,6 +88,37 @@ jobs:
             runner: ubuntu-26.04
             gtk_version: 2
             use_xvfb: true
+          # The name is used as the ccache key, which GitHub rejects if it
+          # contains a comma, so keep it free of punctuation. The port's
+          # status is tracked in docs/gtk/gtk4-status.md.
+          - name: Ubuntu 24.04 wxGTK 4 - WIP port
+            runner: ubuntu-24.04
+            gtk_version: 4
+            # Input simulation is deliberately *not* disabled here, although
+            # it was until #126. wxUIActionSimulator's X11 backend has had a
+            # working GTK4 branch since progress update 39, and leaving the
+            # flag on compiled out every test that synthesises input -- so the
+            # job reported "all tests passed" while measuring a suite two dozen
+            # cases smaller than the one the wxGTK 2 and 3 jobs run. The cases
+            # it now runs included some that failed when this was written;
+            # those were #82 and are fixed, so the suite is green here and the
+            # job blocks like every other one. A job that measures less than it
+            # appears to is worse than a job with known red tests in it.
+            configure_flags: --enable-accessibility
+            # Still true: the port emits deprecation warnings, tracked in #78.
+            allow_warnings: true
+            use_xvfb: true
+            # The GUI library and all the samples build now, and test_gui runs
+            # the whole suite, so this job no longer restricts itself to the
+            # console tests -- it builds and tests what every other job does.
+            #
+            # It also blocks like every other job now. continue-on-error was
+            # set here while nobody knew how the port behaved on a runner
+            # rather than on a developer's machine, to be removed "once it has
+            # been green for a while". It has: six consecutive green runs
+            # across two days, both suites complete, since #126 stopped the job
+            # compiling the input tests out and #82 fixed what that exposed.
+            # Nothing protects a green that cannot fail.
           - name: Ubuntu 26.04 wxGTK UTF-8
             runner: ubuntu-26.04
             configure_flags: --enable-utf8 --enable-utf8only --enable-monolithic
@@ -320,6 +357,78 @@ jobs:
             exit $rc
           fi
 
+      - name: Checking GTK4 platform invariants
+        if: matrix.gtk_version == 4
+        run: |
+          # Assumptions about GTK4's own behaviour that the port depends on:
+          # widget tree shape, style resolution, widget ownership. A GTK
+          # upgrade can change these silently -- the symptom is wrong metrics,
+          # not a crash -- so check them explicitly. Needs only GTK, not libwx,
+          # so it runs regardless of how far the port currently builds.
+          # See docs/gtk/gtk4-stylecontext-design.md.
+          # XTest is optional: it enables the gesture-semantics checks, which
+          # need real injected clicks. Without it those are simply not built,
+          # and without a usable display they report SKIP rather than failing.
+          if pkg-config --exists xtst; then
+            xtest_flags="-DHAVE_XTEST $(pkg-config --cflags --libs xtst) -lX11"
+          else
+            xtest_flags=""
+            echo "note: XTest not available, gesture checks will be skipped"
+          fi
+          gcc -o /tmp/gtk4-invariants build/tools/gtk4-invariants.c \
+              $(pkg-config --cflags --libs gtk4) $xtest_flags \
+              -Wno-deprecated-declarations
+          xvfb-run -a /tmp/gtk4-invariants
+
+      - name: Checking GTK4 ownership annotations
+        if: matrix.gtk_version == 4
+        run: |
+          # Whether a GTK function hands you a reference to release, or takes
+          # one from you, is not in the headers -- only in the introspection
+          # annotations. A function whose signature is unchanged can have
+          # swapped sides between GTK3 and GTK4, and the symptom is a leak or a
+          # double free much later, never a compile error. This compares the
+          # two sets of annotations for every GTK function wxGTK calls and
+          # fails on any difference that has not been reviewed.
+          # Returns 77 and passes if the .gir files are not installed.
+          python3 build/tools/gtk4-ownership-diff.py || \
+            test $? -eq 77
+
+      - name: Checking GTK4 property names
+        if: matrix.gtk_version == 4
+        run: |
+          # GObject properties are addressed by string, so a renamed or removed
+          # one is not a compile error: setting it does nothing and reading it
+          # leaves the destination untouched. GtkSpinner's "active" became
+          # "spinning" and GtkCalendar lost "no-month-change" this way.
+          # Returns 77 and passes if the .gir files are not installed.
+          python3 build/tools/gtk4-property-names.py || \
+            test $? -eq 77
+
+      - name: Checking GTK4 accessibility against GTK itself
+        if: matrix.gtk_version == 4
+        run: |
+          # wxUSE_ACCESSIBILITY under GTK4 rests on three things GTK4 added in
+          # 4.10, and on one GTK bug. None of them are visible at compile time:
+          # a GTK upgrade that changed any of them would leave wxAccessible
+          # quietly describing nothing, or describing it wrongly, with the
+          # suite still green. These need only GTK, so they run before the
+          # library is built. See docs/gtk/gtk4-accessibility.md.
+          gcc -o /tmp/gtk4-a11y-virtual-child \
+              docs/gtk/probes/gtk4-a11y-virtual-child.c \
+              $(pkg-config --cflags --libs gtk4)
+          GTK_A11Y=test xvfb-run -a /tmp/gtk4-a11y-virtual-child
+
+          # And the clipboard: releasing the selection and claiming it again
+          # in one turn of the main loop loses what was just put on it, which
+          # is why wxClipboard::Clear() defers the release. If GTK ever fixes
+          # that, the deferral becomes unnecessary rather than wrong, but the
+          # other three orderings must stay reliable.
+          gcc -o /tmp/gtk4-clipboard-reclaim \
+              docs/gtk/probes/gtk4-clipboard-reclaim.c \
+              $(pkg-config --cflags --libs gtk4)
+          xvfb-run -a /tmp/gtk4-clipboard-reclaim
+
       - name: Building
         run: |
           if [ ${{ matrix.use_asan }} ]; then
@@ -335,16 +444,36 @@ jobs:
           fi
           make -k $wxBUILD_ARGS "CXXFLAGS=$wxMAKEFILE_ERROR_CXXFLAGS"
 
+      - name: Checking the wxAccessible bridge
+        if: matrix.gtk_version == 4
+        run: |
+          # The end-to-end check: a wxAccessible's name, role, states, bounds
+          # and child tree, and a real wxGrid's twelve cells and headers,
+          # read back out of GTK. Unlike the two probes above this needs the
+          # library, and an accessibility-enabled one, so it cannot live in
+          # tests/ -- wx-config does not name GTK's include paths.
+          g++ -o /tmp/gtk4-a11y-wx-bridge \
+              docs/gtk/probes/gtk4-a11y-wx-bridge.cpp \
+              $(./wx-config --cxxflags --libs core,base) \
+              $(pkg-config --cflags --libs gtk4)
+          GTK_A11Y=test LD_LIBRARY_PATH=$(pwd)/lib \
+              xvfb-run -a /tmp/gtk4-a11y-wx-bridge
+
       - name: Building tests
         working-directory: tests
         run: |
-          if [ ${{ matrix.check_headers }} ]; then
-            echo "Checking that all headers are self-contained..."
-            make allheaders_selfcontained
-            echo "Done."
+          if [ ${{ matrix.base_tests_only }} ]; then
+            # failtest and the full build both need the GUI library.
+            make $wxBUILD_ARGS "CXXFLAGS=$wxMAKEFILE_CXXFLAGS" "LDFLAGS=$wxMAKEFILE_LDFLAGS" test
+          else
+            if [ ${{ matrix.check_headers }} ]; then
+              echo "Checking that all headers are self-contained..."
+              make allheaders_selfcontained
+              echo "Done."
+            fi
+            make $wxBUILD_ARGS failtest
+            make -k $wxBUILD_ARGS "CXXFLAGS=$wxMAKEFILE_CXXFLAGS" "LDFLAGS=$wxMAKEFILE_LDFLAGS"
           fi
-          make $wxBUILD_ARGS failtest
-          make -k $wxBUILD_ARGS "CXXFLAGS=$wxMAKEFILE_CXXFLAGS" "LDFLAGS=$wxMAKEFILE_LDFLAGS"
 
       - name: Setup tmate
         uses: mxschmitt/action-tmate@v3
@@ -396,12 +525,13 @@ jobs:
           fi
 
       - name: Testing launching GUI test
+        if: '!matrix.base_tests_only'
         working-directory: tests
         run: |
           WX_TEST_DISABLE_GUI=1 ./test_gui
 
       - name: Testing GUI using Xvfb
-        if: matrix.use_xvfb
+        if: matrix.use_xvfb && !matrix.base_tests_only
         working-directory: tests
         run: |
           if [ ${{ matrix.use_asan }} ]; then

@@ -5,6 +5,9 @@ on:
   push:
     branches:
       - master
+      # Fork only, not for upstream: without this branch here none of
+      # these workflows ever run on any of the port's commits.
+      - claude/gtk4-wxwidgets-port-plan-pwo52u
     paths-ignore:
       - '.circleci/**'
       - '.github/ISSUE_TEMPLATE/**'
@@ -27,6 +30,9 @@ on:
   pull_request:
     branches:
       - master
+      # Fork only, not for upstream: without this branch here none of
+      # these workflows ever run on any of the port's commits.
+      - claude/gtk4-wxwidgets-port-plan-pwo52u
     paths-ignore:
       - '.circleci/**'
       - '.github/ISSUE_TEMPLATE/**'
@@ -67,6 +73,15 @@ jobs:
             cmake_generator: Unix Makefiles
             cmake_samples: ALL
             cmake_build_toolkit: gtk3
+          # There was no GTK4 row here at all, which is why the CMake GTK4
+          # build could stop working without anyone noticing. 24.04 rather
+          # than 22.04 because the port needs GTK 4.10 and jammy ships 4.6.
+          - name: Ubuntu 24.04 wxGTK 4
+            runner: ubuntu-24.04
+            cmake_generator: Unix Makefiles
+            cmake_samples: ALL
+            cmake_build_toolkit: gtk4
+            gtk_version: 4
           - name: macOS 14 wxOSX Xcode
             runner: macos-14
             cmake_generator: Xcode

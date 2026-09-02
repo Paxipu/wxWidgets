@@ -704,11 +704,10 @@ void wxGtkStyleContext::PopulateForStyleQuery(GtkWidget* widget)
 
 // A widget that exists to carry a CSS node and nothing else.
 //
-// Style queries instantiate the widget whose node they want, but a real
-// GtkTextView builds an input method context on construction, and with the
-// ibus module loaded that recurses until the process runs out of memory
-// (#249).  A query never needs a text view's behaviour, only its node, so it
-// gets a widget that has the node and no behaviour at all.
+// A style query resolves against a node and its classes, so that is all it
+// needs.  Instantiating the real widget also builds whatever that widget owns
+// -- for a GtkTextView an input method context, a buffer and a set of
+// controllers -- none of which a query ever reads.
 #define WX_TYPE_STYLE_NODE (wx_style_node_get_type())
 G_DECLARE_FINAL_TYPE(wxStyleNode, wx_style_node, WX, STYLE_NODE, GtkWidget)
 struct _wxStyleNode { GtkWidget parent_instance; };

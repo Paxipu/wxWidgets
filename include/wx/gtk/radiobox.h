@@ -130,7 +130,9 @@ protected:
 #endif
 
     virtual void DoApplyWidgetStyle(GtkRcStyle *style) override;
+#ifndef __WXGTK4__
     virtual GdkWindow *GTKGetWindow(wxArrayGdkWindows& windows) const override;
+#endif // !__WXGTK4__
 
     virtual void DoEnable(bool enable) override;
 

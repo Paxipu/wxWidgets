@@ -16,10 +16,12 @@
 
 #include "wx/gtk/private.h"
 #include "wx/gtk/private/treeview.h"
+#include "wx/gtk/private/treeentry_gtk.h"
 
 //-----------------------------------------------------------------------------
 // "toggled"
 //-----------------------------------------------------------------------------
+#ifndef __WXGTK4__
 extern "C" {
 static void gtk_checklist_toggled(GtkCellRendererToggle * WXUNUSED(renderer),
                                   gchar                 *stringpath,
@@ -37,6 +39,7 @@ static void gtk_checklist_toggled(GtkCellRendererToggle * WXUNUSED(renderer),
     listbox->HandleWindowEvent( new_event );
 }
 }
+#endif // !__WXGTK4__
 
 //-----------------------------------------------------------------------------
 // wxCheckListBox
@@ -75,6 +78,13 @@ wxCheckListBox::wxCheckListBox(wxWindow *parent, wxWindowID id,
 
 void wxCheckListBox::DoCreateCheckList()
 {
+#ifdef __WXGTK4__
+    // Nothing to do: GtkListView has no columns, so the check button is part
+    // of the row widget the list item factory builds, and m_hasCheckBoxes --
+    // already set by the time wxListBox::Create() gets here -- is what tells
+    // it to add one. The toggle is reported from there too, since only the
+    // GtkListItem knows which row a recycled row widget currently shows.
+#else
     //Create the checklist in our treeview and set up events for it
     GtkCellRenderer* renderer =
         gtk_cell_renderer_toggle_new();
@@ -92,10 +102,19 @@ void wxCheckListBox::DoCreateCheckList()
                       this);
 
     gtk_tree_view_append_column(m_treeview, column);
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 bool wxCheckListBox::IsChecked(unsigned int index) const
 {
+#ifdef __WXGTK4__
+    wxCHECK_MSG( m_listview != nullptr, false, wxT("invalid checklistbox") );
+
+    wxTreeEntry* const entry = GTKGetEntry(index);
+    wxCHECK_MSG( entry, false, wxT("invalid checklistbox index") );
+
+    return wx_tree_entry_get_checked(entry) != 0;
+#else
     wxCHECK_MSG( m_treeview != nullptr, false, wxT("invalid checklistbox") );
 
     GtkTreeIter iter;
@@ -114,10 +133,26 @@ bool wxCheckListBox::IsChecked(unsigned int index) const
                              &value);
 
     return g_value_get_boolean(&value) != 0;
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 void wxCheckListBox::Check(unsigned int index, bool check)
 {
+#ifdef __WXGTK4__
+    wxCHECK_RET( m_listview != nullptr, wxT("invalid checklistbox") );
+
+    wxTreeEntry* const entry = GTKGetEntry(index);
+    wxCHECK_RET( entry, wxT("invalid checklistbox index") );
+
+    if ( (wx_tree_entry_get_checked(entry) != 0) == check )
+        return;
+
+    wx_tree_entry_set_checked(entry, check);
+
+    // Re-bind the row so the check button follows. SetString() does the same
+    // thing for the same reason: a GListModel has no row-changed signal.
+    SetString(index, GetString(index));
+#else
     wxCHECK_RET( m_treeview != nullptr, wxT("invalid checklistbox") );
 
     GtkTreeIter iter;
@@ -133,10 +168,25 @@ void wxCheckListBox::Check(unsigned int index, bool check)
                        &iter,
                        0, //column
                        check ? TRUE : FALSE, -1);
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 int wxCheckListBox::GetItemHeight() const
 {
+#ifdef __WXGTK4__
+    wxCHECK_MSG( m_listview != nullptr, 0, wxT("invalid listbox"));
+
+    // No columns to ask, so measure what a row actually needs. A check button
+    // is the tallest thing in one, and the row adds nothing of its own.
+    int height = 0;
+    GtkWidget* const check = gtk_check_button_new();
+    g_object_ref_sink(check);
+    gtk_widget_measure(check, GTK_ORIENTATION_VERTICAL, -1,
+                       &height, nullptr, nullptr, nullptr);
+    g_object_unref(check);
+
+    return height;
+#else
     wxCHECK_MSG( m_treeview != nullptr, 0, wxT("invalid listbox"));
 
     gint height;
@@ -145,6 +195,7 @@ int wxCheckListBox::GetItemHeight() const
                                        nullptr, nullptr, nullptr, nullptr,
                                        &height);
     return height;
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 #endif //wxUSE_CHECKLISTBOX

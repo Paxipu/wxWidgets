@@ -18,7 +18,9 @@
 #include "wx/wxprec.h"
 
 
-#if wxUSE_BITMAPCOMBOBOX
+// Under GTK4 wxBitmapComboBox is the generic, wxOwnerDrawnComboBox-based one
+// (see wx/bmpcbox.h), so this file has nothing to define there.
+#if wxUSE_BITMAPCOMBOBOX && !defined(__WXGTK4__)
 
 #include "wx/bmpcbox.h"
 
@@ -116,7 +118,13 @@ void wxBitmapComboBox::GTKCreateComboBoxWidget()
 
     GType imageType;
     const char* imageAttr;
-#if GTK_CHECK_VERSION(3,10,0)
+#ifdef __WXGTK4__
+    // GtkCellRendererPixbuf has no "surface" property any more. Its GTK4
+    // replacement is "texture", taking a GdkTexture -- note that it is not
+    // "paintable", which the renderer does not have either.
+    imageType = GDK_TYPE_TEXTURE;
+    imageAttr = "texture";
+#elif GTK_CHECK_VERSION(3,10,0)
     if (wx_is_at_least_gtk3(10))
     {
         imageType = CAIRO_GOBJECT_TYPE_SURFACE;
@@ -124,10 +132,12 @@ void wxBitmapComboBox::GTKCreateComboBoxWidget()
     }
     else
 #endif
+#ifndef __WXGTK4__
     {
         imageType = G_TYPE_OBJECT;
         imageAttr = "pixbuf";
     }
+#endif // !__WXGTK4__
     store = gtk_list_store_new(2, imageType, G_TYPE_STRING);
 
     if ( HasFlag(wxCB_READONLY) )
@@ -142,11 +152,21 @@ void wxBitmapComboBox::GTKCreateComboBoxWidget()
 #else
         m_widget = gtk_combo_box_entry_new_with_model( GTK_TREE_MODEL(store), m_stringCellIndex );
 #endif
+#ifdef __WXGTK4__
+        m_entry = GTK_ENTRY(gtk_combo_box_get_child(GTK_COMBO_BOX(m_widget)));
+#else
         m_entry = GTK_ENTRY(gtk_bin_get_child(GTK_BIN(m_widget)));
+#endif
         g_object_add_weak_pointer(G_OBJECT(m_entry), (void**)&m_entry);
         gtk_editable_set_editable(GTK_EDITABLE(m_entry), true);
     }
     g_object_ref(m_widget);
+
+    // gtk_combo_box_new_with_model() and friends are (transfer none): the
+    // combo box takes a reference of its own, so the one gtk_list_store_new()
+    // returned above is ours to drop. Without this every wxBitmapComboBox
+    // leaked its store, and everything in it.
+    g_object_unref(store);
 
     // This must be called as gtk_combo_box_entry_new_with_model adds
     // automatically adds one text column.
@@ -177,6 +197,7 @@ GtkWidget* wxBitmapComboBox::GetConnectWidget() const
     return wxChoice::GetConnectWidget();
 }
 
+#ifndef __WXGTK4__
 GdkWindow *wxBitmapComboBox::GTKGetWindow(wxArrayGdkWindows& windows) const
 {
     if ( GetEntry() )
@@ -184,6 +205,7 @@ GdkWindow *wxBitmapComboBox::GTKGetWindow(wxArrayGdkWindows& windows) const
 
     return wxChoice::GTKGetWindow(windows);
 }
+#endif // !__WXGTK4__
 
 wxSize wxBitmapComboBox::DoGetBestSize() const
 {
@@ -217,6 +239,19 @@ void wxBitmapComboBox::SetItemBitmap(unsigned int n, const wxBitmapBundle& bitma
         if ( gtk_tree_model_iter_nth_child( model, &iter, nullptr, n ) )
         {
             wxGtkValue value0;
+#ifdef __WXGTK4__
+            // A texture carries no device scale, unlike the cairo surface it
+            // replaces, so the scale factor is not round-tripped through the
+            // model any more; GetItemBitmap() below says the same.
+            {
+                g_value_init(value0, GDK_TYPE_TEXTURE);
+
+                GdkTexture* const texture =
+                    gdk_texture_new_for_pixbuf(bmp.GetPixbuf());
+                g_value_set_object(value0, texture);
+                g_object_unref(texture);
+            }
+#else // !__WXGTK4__
 #if GTK_CHECK_VERSION(3,10,0)
             if (wx_is_at_least_gtk3(10))
             {
@@ -234,6 +269,7 @@ void wxBitmapComboBox::SetItemBitmap(unsigned int n, const wxBitmapBundle& bitma
                 g_value_init(value0, G_TYPE_OBJECT);
                 g_value_set_object( value0, bmp.GetPixbuf() );
             }
+#endif // __WXGTK4__/!__WXGTK4__
             gtk_list_store_set_value( GTK_LIST_STORE(model), &iter,
                                       m_bitmapCellIndex, value0 );
         }
@@ -253,6 +289,24 @@ wxBitmap wxBitmapComboBox::GetItemBitmap(unsigned int n) const
         wxGtkValue value;
         gtk_tree_model_get_value( model, &iter,
                                   m_bitmapCellIndex, value );
+#ifdef __WXGTK4__
+        {
+            // See SetItemBitmap(): a texture has no device scale, so the
+            // bitmap comes back at its default scale factor of 1.
+            GdkTexture* const texture = GDK_TEXTURE(g_value_get_object(value));
+            if (texture)
+            {
+                // Not gdk_texture_download() into a pixbuf's own buffer: that
+                // writes premultiplied ARGB in native byte order, which is not
+                // what a GdkPixbuf holds. This does the conversion.
+                //
+                // wxBitmap takes ownership of the pixbuf, which is why there
+                // is no unref here and why the GTK3 branch below, whose pixbuf
+                // is borrowed from the GValue, has to add a reference first.
+                bitmap = wxBitmap(gdk_pixbuf_get_from_texture(texture));
+            }
+        }
+#else // !__WXGTK4__
 #if GTK_CHECK_VERSION(3,10,0)
         if (wx_is_at_least_gtk3(10))
         {
@@ -277,6 +331,7 @@ wxBitmap wxBitmapComboBox::GetItemBitmap(unsigned int n) const
                 bitmap = wxBitmap(pixbuf);
             }
         }
+#endif // __WXGTK4__/!__WXGTK4__
     }
 
     return bitmap;
@@ -409,4 +464,4 @@ void wxBitmapComboBox::SetEditable(bool editable)
         wxComboBox::SetEditable(editable);
 }
 
-#endif // wxUSE_BITMAPCOMBOBOX
+#endif // wxUSE_BITMAPCOMBOBOX && !__WXGTK4__

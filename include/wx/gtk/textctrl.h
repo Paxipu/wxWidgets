@@ -163,6 +163,13 @@ public:
     // always let GTK have mouse release events for multiline controls
     virtual bool GTKProcessEvent(wxEvent& event) const override;
 
+#ifdef __WXGTK4__
+    // A text control binds the usual editing and navigation keys itself, so a
+    // menu accelerator sharing one must not fire while we have the focus.
+    virtual bool GTKShouldPreProcessKey(int keyval,
+                                        int modifiers) const override;
+#endif // __WXGTK4__
+
 
     static wxVisualAttributes
     GetClassDefaultAttributes(wxWindowVariant variant = wxWINDOW_VARIANT_NORMAL);
@@ -176,7 +183,9 @@ protected:
     // overridden wxWindow virtual methods
     virtual wxSize DoGetBestSize() const override;
     virtual void DoApplyWidgetStyle(GtkRcStyle *style) override;
+#ifndef __WXGTK4__
     virtual GdkWindow *GTKGetWindow(wxArrayGdkWindows& windows) const override;
+#endif // !__WXGTK4__
 
     virtual wxSize DoGetSizeFromTextSize(int xlen, int ylen = -1) const override;
 
@@ -193,7 +202,7 @@ protected:
 
     // Override this to use either GtkEntry or GtkTextView IME depending on the
     // kind of control we are.
-    virtual int GTKIMFilterKeypress(GdkEventKey* event) const override;
+    virtual int GTKIMFilterKeypress(wxGTKNativeKeyEvent* event) const override;
 
     virtual wxPoint DoPositionToCoords(long pos) const override;
 
@@ -243,9 +252,20 @@ private:
     // Length set by SetMaxLength() or 0 if there is no limit.
     int m_maxlen = 0;
 
+    // True while Paste() is inserting the clipboard contents, which is the one
+    // case where WriteText() must not waive the limit above.
+    bool m_pasting = false;
+
     // Our text buffer. Convenient, and holds the buffer while using
     // a dummy one when frozen
     GtkTextBuffer *m_buffer;
+
+#if wxUSE_SPELLCHECK && defined(__WXGTK4__)
+    // Owned; non-null exactly while spell checking is enabled. See the
+    // comment in front of the class in textctrl.cpp for why GTK4 needs one
+    // of these where GTK3 just hands the widget over to gspell.
+    class wxTextCtrlSpellCheck* m_spellCheck;
+#endif // wxUSE_SPELLCHECK && __WXGTK4__
 
     GtkTextMark* m_showPositionDefer;
     GSList* m_anonymousMarkList;

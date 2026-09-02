@@ -25,10 +25,23 @@
 #include "wx/gtk/private/stylecontext.h"
 
 
-#if GTK_CHECK_VERSION(3,6,0)
+#if GTK_CHECK_VERSION(3,6,0) && !defined(__WXGTK4__)
     // GtkSearchEntry is available only for GTK+ >= 3.6
     #define wxHAS_GTK_SEARCH_ENTRY
-#endif // GTK >= 3.6
+#endif // GTK >= 3.6 && !GTK4
+
+// Under GTK4 GtkSearchEntry is no longer a GtkEntry: it derives straight from
+// GtkWidget and only implements GtkEditable. It therefore has none of the
+// entry API this class is built on -- the icons that carry the search menu and
+// the cancel button, gtk_entry_set_activates_default(), the length limit, the
+// clipboard signals -- and every use of them here is a failed cast at runtime.
+//
+// Rather than reimplement all of that against a widget that does not offer it,
+// use the plain GtkEntry fallback which this file has carried since GTK 3.0
+// for exactly this situation: it draws the same two icons itself and behaves
+// identically apart from the search-as-you-type delay, which wx does not
+// expose in any case. wxSearchCtrl is thus fully functional under GTK4, just
+// not built out of the native search widget.
 
 namespace // anonymous
 {
@@ -65,10 +78,17 @@ inline GtkWidget* CreateGtkSearchEntryIfAvailable()
 extern "C" {
 
 static void
+#ifdef __WXGTK4__
+// GTK4's "icon-press" carries no event.
+wx_gtk_icon_press(GtkEntry* WXUNUSED(entry),
+                  gint position,
+                  wxSearchCtrl* ctrl)
+#else
 wx_gtk_icon_press(GtkEntry* WXUNUSED(entry),
                   gint position,
                   GdkEventButton* WXUNUSED(event),
                   wxSearchCtrl* ctrl)
+#endif
 {
     if ( position == GTK_ENTRY_ICON_PRIMARY )
     {
@@ -95,6 +115,10 @@ wx_gtk_icon_press(GtkEntry* WXUNUSED(entry),
     }
 }
 
+#ifndef __WXGTK4__
+// GtkEntry has no "event" signal under GTK4, and needs none here: the motion
+// this works around being swallowed over an inactive icon is delivered by the
+// window's own motion controller instead, see window.cpp.
 static gboolean
 wx_gtk_entry_event(GtkEntry* WXUNUSED(entry),
                    GdkEvent* event,
@@ -116,6 +140,7 @@ wx_gtk_entry_event(GtkEntry* WXUNUSED(entry),
 
     return FALSE;
 }
+#endif // !__WXGTK4__
 
 }
 
@@ -234,7 +259,9 @@ void wxSearchCtrl::GTKCreateSearchEntryWidget()
 
     g_signal_connect(m_entry, "icon-press", G_CALLBACK(wx_gtk_icon_press), this);
 
+#ifndef __WXGTK4__
     g_signal_connect(m_entry, "event", G_CALLBACK(wx_gtk_entry_event), this);
+#endif
 }
 
 GtkEditable *wxSearchCtrl::GetEditable() const
@@ -403,9 +430,19 @@ wxSize wxSearchCtrl::DoGetSizeFromTextSize(int xlen, int ylen) const
     {
         // If text is empty, there is no "clear" icon, and GtkEntry preferred size
         // does not account for it. So add in size of primary icon as a substitute.
+#ifdef __WXGTK4__
+        // gtk_entry_get_icon_pixbuf() is gone: the icon is a GdkPaintable now,
+        // which reports its own width directly.
+        if (GdkPaintable* const icon =
+                gtk_entry_get_icon_paintable(m_entry, GTK_ENTRY_ICON_PRIMARY))
+        {
+            size.x += gdk_paintable_get_intrinsic_width(icon);
+        }
+#else
         GdkPixbuf* pixbuf = gtk_entry_get_icon_pixbuf(m_entry, GTK_ENTRY_ICON_PRIMARY);
         if (pixbuf)
             size.x += gdk_pixbuf_get_width(pixbuf);
+#endif
 
         // Also account for secondary icon margin
         wxGtkStyleContext sc(GetContentScaleFactor());
@@ -420,6 +457,7 @@ wxSize wxSearchCtrl::DoGetSizeFromTextSize(int xlen, int ylen) const
     return size;
 }
 
+#ifndef __WXGTK4__
 GdkWindow* wxSearchCtrl::GTKGetWindow(wxArrayGdkWindows& windows) const
 {
 #ifdef __WXGTK3__
@@ -430,4 +468,5 @@ GdkWindow* wxSearchCtrl::GTKGetWindow(wxArrayGdkWindows& windows) const
     return gtk_entry_get_text_window(GTK_ENTRY(m_widget));
 #endif
 }
+#endif // !__WXGTK4__
 #endif // wxUSE_SEARCHCTRL

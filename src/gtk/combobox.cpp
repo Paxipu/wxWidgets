@@ -22,6 +22,16 @@
 
 #include "wx/gtk/private.h"
 
+#ifdef __WXGTK4__
+
+// Under GTK4 wxComboBox is the generic, wxOwnerDrawnComboBox-based one
+// declared in wx/gtk/combobox.h, and its runtime class comes from
+// combocmn.cpp like every other port's, so there is nothing left to define
+// here. Everything below is the GtkComboBox implementation, which GTK4
+// deprecated and which is not compiled there.
+
+#else // !__WXGTK4__
+
 // ----------------------------------------------------------------------------
 // GTK callbacks
 // ----------------------------------------------------------------------------
@@ -146,7 +156,9 @@ bool wxComboBox::Create( wxWindow *parent, wxWindowID id, const wxString& value,
                                          !HasFlag(wxTE_PROCESS_ENTER) );
 
         gtk_editable_set_editable(GTK_EDITABLE(entry), true);
-#ifdef __WXGTK3__
+#ifdef __WXGTK4__
+        gtk_editable_set_width_chars(GTK_EDITABLE(entry), 0);
+#elif defined(__WXGTK3__)
         gtk_entry_set_width_chars(entry, 0);
 #endif
     }
@@ -172,7 +184,11 @@ bool wxComboBox::Create( wxWindow *parent, wxWindowID id, const wxString& value,
         else // editable combobox
         {
             // any value is accepted, even if it's not in our list
+#ifdef __WXGTK4__
+            gtk_editable_set_text( GTK_EDITABLE(entry), value.utf8_str() );
+#else
             gtk_entry_set_text( entry, value.utf8_str() );
+#endif
         }
 
         GTKConnectChangedSignal();
@@ -203,7 +219,11 @@ void wxComboBox::GTKCreateComboBoxWidget()
 #endif
     g_object_ref(m_widget);
 
+#ifdef __WXGTK4__
+    m_entry = GTK_ENTRY(gtk_combo_box_get_child(GTK_COMBO_BOX(m_widget)));
+#else
     m_entry = GTK_ENTRY(gtk_bin_get_child(GTK_BIN(m_widget)));
+#endif
     g_object_add_weak_pointer(G_OBJECT(m_entry), (void**)&m_entry);
 }
 
@@ -269,6 +289,7 @@ GtkWidget* wxComboBox::GetConnectWidget() const
     return GTK_WIDGET( GetEntry() );
 }
 
+#ifndef __WXGTK4__
 GdkWindow* wxComboBox::GTKGetWindow(wxArrayGdkWindows& /* windows */) const
 {
 #ifdef __WXGTK3__
@@ -277,6 +298,7 @@ GdkWindow* wxComboBox::GTKGetWindow(wxArrayGdkWindows& /* windows */) const
     return gtk_entry_get_text_window(GetEntry());
 #endif
 }
+#endif // !__WXGTK4__
 
 // static
 wxVisualAttributes
@@ -419,5 +441,7 @@ wxSize wxComboBox::DoGetSizeFromTextSize(int xlen, int ylen) const
 
     return tsize;
 }
+
+#endif // __WXGTK4__/!__WXGTK4__
 
 #endif // wxUSE_COMBOBOX

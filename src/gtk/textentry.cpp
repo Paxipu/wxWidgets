@@ -31,6 +31,12 @@
 #include "wx/textcompleter.h"
 
 #include "wx/gtk/private.h"
+#if wxUSE_CLIPBOARD
+    #include "wx/clipbrd.h"
+    #include "wx/dataobj.h"
+#endif
+
+#include "wx/gtk/private/gtk3-compat.h"
 #include "wx/gtk/private/object.h"
 #include "wx/gtk/private/string.h"
 
@@ -41,6 +47,10 @@
 class wxTextCoalesceData
 {
 public:
+    // Under GTK4 handlerAfterKeyPress is 0: the "event-after" signal it refers
+    // to does not exist there and the end of the key press is signalled by
+    // wxTextEntry::GTKEntryOnKeypressEnd() instead, so every use of the id is
+    // guarded on it being real.
     wxTextCoalesceData(GtkWidget* widget, gulong handlerAfterKeyPress)
         : m_handlerAfterKeyPress(handlerAfterKeyPress)
         , m_widget(widget)
@@ -50,12 +60,14 @@ public:
 
         // This signal handler is unblocked in StartHandlingKeyPress(), so
         // we need to block it initially to compensate for this.
-        g_signal_handler_block(widget, m_handlerAfterKeyPress);
+        if ( m_handlerAfterKeyPress )
+            g_signal_handler_block(widget, m_handlerAfterKeyPress);
     }
 
     ~wxTextCoalesceData()
     {
-        g_signal_handler_disconnect(m_widget, m_handlerAfterKeyPress);
+        if ( m_handlerAfterKeyPress )
+            g_signal_handler_disconnect(m_widget, m_handlerAfterKeyPress);
     }
 
     void StartHandlingKeyPress()
@@ -63,8 +75,11 @@ public:
         m_inKeyPress = true;
         m_pendingTextChanged = false;
 
-        g_signal_handler_unblock(m_widget, m_handlerAfterKeyPress);
+        if ( m_handlerAfterKeyPress )
+            g_signal_handler_unblock(m_widget, m_handlerAfterKeyPress);
     }
+
+    bool IsHandlingKeyPress() const { return m_inKeyPress; }
 
     bool SetPendingIfInKeyPress()
     {
@@ -78,7 +93,8 @@ public:
 
     bool EndHandlingKeyPressAndCheckIfPending()
     {
-        g_signal_handler_block(m_widget, m_handlerAfterKeyPress);
+        if ( m_handlerAfterKeyPress )
+            g_signal_handler_block(m_widget, m_handlerAfterKeyPress);
 
         wxASSERT( m_inKeyPress );
         m_inKeyPress = false;
@@ -122,25 +138,33 @@ static int GetEntryTextLength(GtkEntry* entry)
 
 extern "C" {
 
+#ifndef __WXGTK4__
+
 // "event-after" handler is only connected when we get a "key-press-event", so
 // it's effectively called after the end of processing of this event and used
 // to send a single wxEVT_TEXT even if we received several (typically two, when
 // the selected text in the control is replaced by new text) "changed" signals.
+//
+// GTK4 removed "event-after" along with the rest of the GdkEvent-based
+// signals, so there this handler does not exist at all and the same point in
+// time is reached from the key controller instead -- see
+// wxTextEntry::GTKEntryOnKeypressEnd(), which holds the body below.
 static gboolean
 wx_gtk_text_after_key_press(GtkWidget*,
                             GdkEventKey* WXUNUSED(gdk_event),
                             wxTextEntry* entry)
 {
-    wxTextCoalesceData* const data = entry->GTKGetCoalesceData();
-    wxCHECK_MSG( data, FALSE, "must be non-null if this handler is called" );
+    // This handler stays blocked until a key press is being handled, so the
+    // coalescing data must exist by the time it runs.
+    wxCHECK_MSG( entry->GTKGetCoalesceData(), FALSE,
+                 "must be non-null if this handler is called" );
 
-    if ( data->EndHandlingKeyPressAndCheckIfPending() )
-    {
-        entry->GTKOnTextChanged();
-    }
+    entry->GTKEntryOnKeypressEnd();
 
     return FALSE;
 }
+
+#endif // !__WXGTK4__
 
 // "changed" handler for GtkEntry
 static void
@@ -166,7 +190,26 @@ wx_gtk_insert_text_callback(GtkEditable *editable,
                             gint * position,
                             wxTextEntry *text)
 {
-    GtkEntry *entry = GTK_ENTRY (editable);
+    GtkEntry* entry;
+#ifdef __WXGTK4__
+    // GtkEntry delegates editing to its GtkText child in GTK4, so text typed
+    // by the user emits "insert-text" on this child, not on the entry itself.
+    // We still need the owning entry for its maximum-length setting.
+    if ( GTK_IS_ENTRY(editable) )
+    {
+        entry = GTK_ENTRY(editable);
+    }
+    else
+    {
+        GtkWidget* const owner = gtk_widget_get_ancestor(GTK_WIDGET(editable),
+                                                         GTK_TYPE_ENTRY);
+        entry = owner ? GTK_ENTRY(owner) : nullptr;
+    }
+#else
+    entry = GTK_ENTRY(editable);
+#endif // __WXGTK4__/!__WXGTK4__
+
+    wxCHECK_RET(entry, "can't find GtkEntry owning the editable");
 
     const int text_max_length = gtk_entry_get_max_length(entry);
 
@@ -254,11 +297,42 @@ wx_gtk_insert_text_callback(GtkEditable *editable,
 // know its state is to connect to the "grab-notify" signal and be notified then
 // for its state. this is the best we can do for now than any other alternative.
 // (GtkEntryCompletion grabs/ungrabs keyboard and mouse events on popups/popdowns).
+//
+// None of which is available under GTK4: explicit grabs are gone, and so is the
+// signal that told a widget it had been shadowed by one. GtkEntryCompletion
+// still pops its window up, but nothing says when, so wxTE_PROCESS_ENTER stays
+// on while the popup is shown there. Connecting anyway is not free -- there is
+// no such signal on GtkWidget any more, so g_signal_connect() produces a
+// critical every time an auto-completing entry is created.
+#ifdef __WXGTK4__
+
+// The completion popup is ours under GTK4 -- see the constructor of
+// wxTextAutoCompleteData -- so these drive it.
+
+static void
+wx_gtk_completion_setup(GtkListItemFactory* factory, GtkListItem* item,
+                        wxTextAutoCompleteData* data);
+static void
+wx_gtk_completion_bind(GtkListItemFactory* factory, GtkListItem* item,
+                       wxTextAutoCompleteData* data);
+static void
+wx_gtk_completion_activated(GtkListView* view, guint position,
+                            wxTextAutoCompleteData* data);
+static gboolean
+wx_gtk_completion_key(GtkEventControllerKey* controller, guint keyval,
+                      guint keycode, GdkModifierType state,
+                      wxTextAutoCompleteData* data);
+static void
+wx_gtk_completion_changed(GtkEditable* editable, wxTextAutoCompleteData* data);
+
+#else // !__WXGTK4__
 
 static void
 wx_gtk_entry_parent_grab_notify (GtkWidget *widget,
                                  gboolean was_grabbed,
                                  wxTextAutoCompleteData *data);
+
+#endif // __WXGTK4__/!__WXGTK4__
 
 } // extern "C"
 
@@ -368,11 +442,107 @@ public:
         // instead and only after checking that it is still valid.
         if ( GTK_IS_ENTRY(m_widgetEntry) )
         {
+#ifdef __WXGTK4__
+            if ( m_popover )
+            {
+                gtk_popover_popdown(GTK_POPOVER(m_popover));
+                gtk_widget_unparent(m_popover);
+                m_popover = nullptr;
+            }
+#else
             gtk_entry_set_completion(m_widgetEntry, nullptr);
+#endif
 
             g_signal_handlers_disconnect_by_data(m_widgetEntry, this);
         }
     }
+
+#ifdef __WXGTK4__
+    // Called from the key controller on the entry. Returns true if the key
+    // belonged to the popup and the entry must not see it.
+    bool GTKHandleKey(guint keyval)
+    {
+        if ( !m_popover )
+            return false;
+
+        const bool shown = gtk_widget_get_visible(m_popover);
+        const guint count = g_list_model_get_n_items(G_LIST_MODEL(m_selection));
+
+        switch ( keyval )
+        {
+            case GDK_KEY_Down:
+            case GDK_KEY_KP_Down:
+            case GDK_KEY_Up:
+            case GDK_KEY_KP_Up:
+                if ( !count )
+                    return false;
+
+                if ( !shown )
+                    GTKShowPopup(true);
+
+                GTKMoveSelection(keyval == GDK_KEY_Down ||
+                                    keyval == GDK_KEY_KP_Down);
+                return true;
+
+            case GDK_KEY_Return:
+            case GDK_KEY_KP_Enter:
+                if ( !shown )
+                    return false;
+
+                // Only swallow Enter if it is actually accepting something:
+                // with nothing highlighted it still belongs to the entry, and
+                // so to wxTE_PROCESS_ENTER.
+                if ( gtk_single_selection_get_selected(m_selection)
+                        == GTK_INVALID_LIST_POSITION )
+                {
+                    GTKShowPopup(false);
+                    return false;
+                }
+
+                GTKAcceptSelection();
+                return true;
+
+            case GDK_KEY_Escape:
+                if ( !shown )
+                    return false;
+
+                GTKShowPopup(false);
+                return true;
+        }
+
+        return false;
+    }
+
+    // A row was clicked: take it.
+    void GTKActivate(guint position)
+    {
+        gtk_single_selection_set_selected(m_selection, position);
+        GTKAcceptSelection();
+    }
+
+    // Called when the entry text changed: re-filter and decide whether the
+    // popup should be up.
+    void GTKUpdateCompletionPopup()
+    {
+        if ( !m_popover )
+            return;
+
+        const wxString text = m_entry->GetValue();
+        gtk_string_filter_set_search(m_filter, text.utf8_str());
+
+        // Nothing is highlighted after the text changes: the user is typing,
+        // not choosing, and Enter must still reach the entry.
+        gtk_single_selection_set_selected(m_selection,
+                                          GTK_INVALID_LIST_POSITION);
+
+        // GtkEntryCompletion had minimum-key-length 1 and showed the popup
+        // only when something matched; both are kept.
+        const guint count = g_list_model_get_n_items(G_LIST_MODEL(m_selection));
+
+        GTKShowPopup(!text.empty() && count != 0);
+    }
+#endif // __WXGTK4__
+
 
 protected:
     // Check if completion can be used with this entry.
@@ -387,14 +557,91 @@ protected:
         : m_entry(entry),
           m_widgetEntry(entry->GetEntry())
     {
-        GtkEntryCompletion* const completion = gtk_entry_completion_new();
+#ifdef __WXGTK4__
+        // GtkEntryCompletion is deprecated since GTK 4.10 with no replacement
+        // at all, so the popup is built here out of parts:
+        //
+        //   GtkStringList  everything the completer offered
+        //     -> GtkFilterListModel with a prefix GtkStringFilter
+        //     -> GtkSingleSelection
+        //     -> GtkListView inside a GtkPopover under the entry
+        //
+        // The filter is what GtkEntryCompletion's default match function did:
+        // case-insensitive, matching the start of the string.
+        m_filter = gtk_string_filter_new(
+            GTK_EXPRESSION(gtk_property_expression_new(GTK_TYPE_STRING_OBJECT,
+                                                       nullptr, "string")));
+        gtk_string_filter_set_match_mode(m_filter,
+                                         GTK_STRING_FILTER_MATCH_MODE_PREFIX);
+        gtk_string_filter_set_ignore_case(m_filter, TRUE);
 
+        m_filtered = gtk_filter_list_model_new(nullptr,
+                                               GTK_FILTER(g_object_ref(m_filter)));
+
+        m_selection = gtk_single_selection_new(G_LIST_MODEL(m_filtered));
+        gtk_single_selection_set_autoselect(m_selection, FALSE);
+        gtk_single_selection_set_can_unselect(m_selection, TRUE);
+        gtk_single_selection_set_selected(m_selection, GTK_INVALID_LIST_POSITION);
+
+        GtkListItemFactory* const factory = gtk_signal_list_item_factory_new();
+        g_signal_connect(factory, "setup",
+                         G_CALLBACK(wx_gtk_completion_setup), this);
+        g_signal_connect(factory, "bind",
+                         G_CALLBACK(wx_gtk_completion_bind), this);
+
+        GtkWidget* const listview =
+            gtk_list_view_new(GTK_SELECTION_MODEL(m_selection), factory);
+        gtk_list_view_set_single_click_activate(GTK_LIST_VIEW(listview), TRUE);
+        g_signal_connect(listview, "activate",
+                         G_CALLBACK(wx_gtk_completion_activated), this);
+
+        GtkWidget* const scrolled = gtk_scrolled_window_new();
+        gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
+                                       GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+        gtk_scrolled_window_set_max_content_height(GTK_SCROLLED_WINDOW(scrolled),
+                                                   200);
+        gtk_scrolled_window_set_propagate_natural_height(
+            GTK_SCROLLED_WINDOW(scrolled), TRUE);
+        gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), listview);
+
+        m_popover = gtk_popover_new();
+        // Not autohiding is what makes this a completion popup rather than a
+        // menu: with autohide on, the popover takes the keyboard focus and the
+        // user cannot carry on typing. Verified in
+        // docs/gtk/probes/gtk4-entry-completion-parts.c, where the focus stays
+        // on the entry's inner GtkText across the popup.
+        gtk_popover_set_autohide(GTK_POPOVER(m_popover), FALSE);
+        gtk_popover_set_has_arrow(GTK_POPOVER(m_popover), FALSE);
+        gtk_popover_set_position(GTK_POPOVER(m_popover), GTK_POS_BOTTOM);
+        gtk_popover_set_child(GTK_POPOVER(m_popover), scrolled);
+        gtk_widget_set_parent(m_popover, GTK_WIDGET(m_widgetEntry));
+
+        GtkEventController* const keys = gtk_event_controller_key_new();
+        // Before the entry's own handling, or Down would move the caret
+        // instead of the highlight.
+        gtk_event_controller_set_propagation_phase(keys, GTK_PHASE_CAPTURE);
+        g_signal_connect(keys, "key-pressed",
+                         G_CALLBACK(wx_gtk_completion_key), this);
+        gtk_widget_add_controller(GTK_WIDGET(m_widgetEntry), keys);
+
+        g_signal_connect(m_widgetEntry, "changed",
+                         G_CALLBACK(wx_gtk_completion_changed), this);
+#else // !__WXGTK4__
+        GtkEntryCompletion* const completion = gtk_entry_completion_new();
         gtk_entry_completion_set_text_column (completion, 0);
         gtk_entry_set_completion(m_widgetEntry, completion);
+
+        // GtkEntryCompletion is a plain GObject, not a GInitiallyUnowned, so
+        // the reference above is ours; gtk_entry_set_completion() is
+        // (transfer none) and takes one of its own. Dropping ours here leaves
+        // the entry as the only owner, which is what the destructor's
+        // gtk_entry_set_completion(nullptr) then releases.
+        g_object_unref(completion);
 
         g_signal_connect (m_widgetEntry, "grab-notify",
                           G_CALLBACK (wx_gtk_entry_parent_grab_notify),
                           this);
+#endif // __WXGTK4__/!__WXGTK4__
     }
 
     // Provide access to wxTextEntry::GetEditableWindow() to the derived
@@ -403,6 +650,36 @@ protected:
     static wxWindow* GetEditableWindow(wxTextEntry* entry)
     {
         return entry->GetEditableWindow();
+    }
+
+#ifdef __WXGTK4__
+    // The store the completions are collected into before being shown. Under
+    // GTK4 the popup is a list view over a GListModel, so this is the simplest
+    // model that holds strings.
+    typedef GtkStringList wxGTKCompletionStore;
+
+    static wxGTKCompletionStore* NewStore()
+    {
+        return gtk_string_list_new(nullptr);
+    }
+
+    void AppendToStore(wxGTKCompletionStore* store, const wxString& s)
+    {
+        gtk_string_list_append(store, s.utf8_str());
+    }
+
+    // Really change the completion model (which may be null).
+    void UseModel(wxGTKCompletionStore* store)
+    {
+        gtk_filter_list_model_set_model(m_filtered, G_LIST_MODEL(store));
+        GTKUpdateCompletionPopup();
+    }
+#else // !__WXGTK4__
+    typedef GtkListStore wxGTKCompletionStore;
+
+    static wxGTKCompletionStore* NewStore()
+    {
+        return gtk_list_store_new(1, G_TYPE_STRING);
     }
 
     // Helper function for appending a string to GtkListStore.
@@ -420,6 +697,71 @@ protected:
         gtk_entry_completion_set_model (c, GTK_TREE_MODEL(store));
         gtk_entry_completion_complete (c);
     }
+#endif // __WXGTK4__/!__WXGTK4__
+
+
+#ifdef __WXGTK4__
+    // Show or hide the popup, keeping GTKOnPopupShown() told about it.
+    //
+    // The old code could not do this under GTK4 at all: it learnt about
+    // GtkEntryCompletion's popup from "grab-notify", and GTK4 has neither
+    // explicit grabs nor that signal, so wxTE_PROCESS_ENTER stayed on for as
+    // long as the popup was up. Owning the popup means simply knowing.
+    void GTKShowPopup(bool show)
+    {
+        if ( !m_popover || show == (gtk_widget_get_visible(m_popover) != 0) )
+            return;
+
+        if ( show )
+            gtk_popover_popup(GTK_POPOVER(m_popover));
+        else
+            gtk_popover_popdown(GTK_POPOVER(m_popover));
+
+        GTKOnPopupShown(show);
+    }
+
+    void GTKMoveSelection(bool down)
+    {
+        const guint count = g_list_model_get_n_items(G_LIST_MODEL(m_selection));
+        if ( !count )
+            return;
+
+        guint sel = gtk_single_selection_get_selected(m_selection);
+        if ( down )
+            sel = (sel == GTK_INVALID_LIST_POSITION || sel + 1 >= count)
+                    ? 0 : sel + 1;
+        else
+            sel = (sel == GTK_INVALID_LIST_POSITION || sel == 0)
+                    ? count - 1 : sel - 1;
+
+        gtk_single_selection_set_selected(m_selection, sel);
+    }
+
+    // Put the highlighted completion into the entry and close the popup.
+    void GTKAcceptSelection()
+    {
+        const guint sel = gtk_single_selection_get_selected(m_selection);
+        if ( sel == GTK_INVALID_LIST_POSITION )
+            return;
+
+        wxGtkObject<GObject>
+            item(G_OBJECT(g_list_model_get_item(G_LIST_MODEL(m_selection), sel)));
+        const char* const
+            str = gtk_string_object_get_string(GTK_STRING_OBJECT(item.get()));
+
+        GTKShowPopup(false);
+
+        // Setting the text emits "changed", which would re-open the popup for
+        // what was just accepted, so block ourselves while doing it.
+        g_signal_handlers_block_by_func(
+            m_widgetEntry, (gpointer)wx_gtk_completion_changed, this);
+        gtk_editable_set_text(GTK_EDITABLE(m_widgetEntry), str);
+        gtk_editable_set_position(GTK_EDITABLE(m_widgetEntry), -1);
+        g_signal_handlers_unblock_by_func(
+            m_widgetEntry, (gpointer)wx_gtk_completion_changed, this);
+    }
+
+#endif // __WXGTK4__
 
 
     // The text entry we're associated with.
@@ -435,6 +777,14 @@ protected:
     // True if the window had wxTE_PROCESS_ENTER flag before we turned it off
     // in GTKOnPopupShown().
     bool m_hadProcessEnterFlag = false;
+
+#ifdef __WXGTK4__
+    // Our own completion popup and the model chain behind it.
+    GtkWidget* m_popover = nullptr;
+    GtkStringFilter* m_filter = nullptr;
+    GtkFilterListModel* m_filtered = nullptr;
+    GtkSingleSelection* m_selection = nullptr;
+#endif // __WXGTK4__
 
     wxDECLARE_NO_COPY_CLASS(wxTextAutoCompleteData);
 };
@@ -454,7 +804,7 @@ public:
 
     virtual bool ChangeStrings(const wxArrayString& strings) override
     {
-        wxGtkObject<GtkListStore> store(gtk_list_store_new (1, G_TYPE_STRING));
+        wxGtkObject<wxGTKCompletionStore> store(NewStore());
 
         for ( const auto& string : strings )
         {
@@ -545,7 +895,7 @@ private:
 
         if ( m_completer->Start(prefix) )
         {
-            wxGtkObject<GtkListStore> store(gtk_list_store_new (1, G_TYPE_STRING));
+            wxGtkObject<wxGTKCompletionStore> store(NewStore());
 
             for (;;)
             {
@@ -577,6 +927,58 @@ private:
 extern "C"
 {
 
+#ifdef __WXGTK4__
+
+static void
+wx_gtk_completion_setup(GtkListItemFactory* WXUNUSED(factory),
+                        GtkListItem* item,
+                        wxTextAutoCompleteData* WXUNUSED(data))
+{
+    GtkWidget* const label = gtk_label_new(nullptr);
+    gtk_label_set_xalign(GTK_LABEL(label), 0.0);
+    gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_END);
+    gtk_list_item_set_child(item, label);
+}
+
+static void
+wx_gtk_completion_bind(GtkListItemFactory* WXUNUSED(factory),
+                       GtkListItem* item,
+                       wxTextAutoCompleteData* WXUNUSED(data))
+{
+    GtkStringObject* const obj = GTK_STRING_OBJECT(gtk_list_item_get_item(item));
+    gtk_label_set_text(GTK_LABEL(gtk_list_item_get_child(item)),
+                       gtk_string_object_get_string(obj));
+}
+
+static void
+wx_gtk_completion_activated(GtkListView* WXUNUSED(view), guint position,
+                            wxTextAutoCompleteData* data)
+{
+    data->GTKActivate(position);
+}
+
+static gboolean
+wx_gtk_completion_key(GtkEventControllerKey* WXUNUSED(controller),
+                      guint keyval,
+                      guint WXUNUSED(keycode),
+                      GdkModifierType WXUNUSED(state),
+                      wxTextAutoCompleteData* data)
+{
+    return data->GTKHandleKey(keyval) ? TRUE : FALSE;
+}
+
+static void
+wx_gtk_completion_changed(GtkEditable* WXUNUSED(editable),
+                          wxTextAutoCompleteData* data)
+{
+    data->GTKUpdateCompletionPopup();
+}
+
+#endif // __WXGTK4__
+
+
+#ifndef __WXGTK4__
+
 static void
 wx_gtk_entry_parent_grab_notify (GtkWidget *widget,
                                  gboolean was_grabbed,
@@ -599,6 +1001,8 @@ wx_gtk_entry_parent_grab_notify (GtkWidget *widget,
 
     data->GTKOnPopupShown(shown);
 }
+
+#endif // !__WXGTK4__
 
 } // extern "C"
 
@@ -706,6 +1110,13 @@ int wxTextEntry::GTKGetEntryTextLength(GtkEntry* entry)
 
 void wxTextEntry::GTKConnectClipboardSignals(GtkWidget* entry)
 {
+#ifdef __WXGTK4__
+    // These signals belong to the GtkText inside a GtkEntry now, not to the
+    // entry itself. A GtkTextView, which is what a multiline wxTextCtrl uses,
+    // still has them and is returned unchanged.
+    entry = wx_gtk_entry_get_text_widget(entry);
+#endif
+
     g_signal_connect(entry, "copy-clipboard",
                      G_CALLBACK (wx_gtk_copy_clipboard_callback),
                      GetEditableWindow());
@@ -729,7 +1140,42 @@ void wxTextEntry::Cut()
 
 void wxTextEntry::Paste()
 {
+#ifdef __WXGTK4__
+    // GTK4's paste is asynchronous: the "paste-clipboard" signal, the
+    // "clipboard.paste" action and gtk_text_buffer_paste_clipboard() all
+    // merely start a GdkClipboard read, and the text does not arrive until
+    // some later main loop iteration. wx's contract -- and GTK3's behaviour
+    // for a clipboard owned by this process -- is that Paste() has taken
+    // effect by the time it returns, so do the read here, through wxClipboard,
+    // which waits for it, and insert the text ourselves.
+    //
+    // Doing so also means the "paste-clipboard" signal is not emitted, so the
+    // event it would have generated has to be sent from here.
+    wxWindow* const win = GetEditableWindow();
+
+    wxClipboardTextEvent event(wxEVT_TEXT_PASTE, win->GetId());
+    event.SetEventObject(win);
+    if ( win->HandleWindowEvent(event) )
+    {
+        // As in DoHandleClipboardCallback(): a handler which dealt with the
+        // event itself replaces the default action rather than adding to it.
+        return;
+    }
+
+#if wxUSE_CLIPBOARD
+    if ( !wxTheClipboard->Open() )
+        return;
+
+    wxTextDataObject data;
+    const bool got = wxTheClipboard->GetData(data);
+    wxTheClipboard->Close();
+
+    if ( got )
+        WriteText(data.GetText());
+#endif // wxUSE_CLIPBOARD
+#else // !__WXGTK4__
     gtk_editable_paste_clipboard(GetEditable());
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 // ----------------------------------------------------------------------------
@@ -767,7 +1213,27 @@ void wxTextEntry::SetInsertionPoint(long pos)
 
 long wxTextEntry::GetInsertionPoint() const
 {
-    return gtk_editable_get_position(GetEditable());
+    GtkEditable* const editable = GetEditable();
+
+#ifdef __WXGTK4__
+    // GtkEntry does not report its caret. Its GtkEditable implementation
+    // answers out of the selection instead, and does so inconsistently:
+    // gtk_editable_get_position() returns the selection's *end* and the
+    // "cursor-position" property its *start*, whichever end the caret is
+    // really at. The GtkText delegate underneath is the only thing that
+    // knows, and it answers exactly as GTK3's GtkEntry did.
+    //
+    // This matters because SetSelection() below deliberately passes the
+    // range backwards, so that the caret lands at the start of the
+    // selection as wx (and MSW) require rather than at its end. Asking the
+    // GtkEntry undoes that: it reports the end again no matter what.
+    //
+    // See build/tools/gtk4-invariants.c, which pins both halves of this.
+    if ( GtkEditable* const delegate = gtk_editable_get_delegate(editable) )
+        return gtk_editable_get_position(delegate);
+#endif // __WXGTK4__
+
+    return gtk_editable_get_position(editable);
 }
 
 long wxTextEntry::GetLastPosition() const
@@ -962,6 +1428,13 @@ void wxTextEntry::GTKEntryOnKeypress(GtkWidget* widget) const
     // this extra handler.
     if ( !m_coalesceData )
     {
+#ifdef __WXGTK4__
+        // There is no signal to connect to: "event-after" was removed with the
+        // rest of the GdkEvent-based signals. GTKEntryOnKeypressEnd() is called
+        // from the key controller once the press has been processed, which is
+        // the same point in time, so the coalescing data carries no handler.
+        const gulong handler = 0;
+#else
         // We can't use g_signal_connect_after("key-press-event") because the
         // emission of this signal is stopped by GtkEntry own key-press-event
         // handler, so we have to use the generic "event-after" instead to be
@@ -974,6 +1447,7 @@ void wxTextEntry::GTKEntryOnKeypress(GtkWidget* widget) const
                                     G_CALLBACK(wx_gtk_text_after_key_press),
                                     const_cast<wxTextEntry*>(this)
                                 );
+#endif // __WXGTK4__/!__WXGTK4__
 
         m_coalesceData = new wxTextCoalesceData(widget, handler);
     }
@@ -981,11 +1455,36 @@ void wxTextEntry::GTKEntryOnKeypress(GtkWidget* widget) const
     m_coalesceData->StartHandlingKeyPress();
 }
 
-int wxTextEntry::GTKEntryIMFilterKeypress(GdkEventKey* event) const
+void wxTextEntry::GTKEntryOnKeypressEnd()
+{
+    // Under GTK+ 3 the "event-after" handler this replaces stays blocked until
+    // StartHandlingKeyPress() unblocks it, so it only ever ran for a press wx
+    // had begun handling. Here the call is unconditional, so the same
+    // condition has to be checked explicitly: a key press in a control which
+    // never started one must not end one.
+    wxTextCoalesceData* const data = GTKGetCoalesceData();
+    if ( !data || !data->IsHandlingKeyPress() )
+        return;
+
+    if ( data->EndHandlingKeyPressAndCheckIfPending() )
+    {
+        GTKOnTextChanged();
+    }
+}
+
+int wxTextEntry::GTKEntryIMFilterKeypress(wxGTKNativeKeyEvent* event) const
 {
     GTKEntryOnKeypress(GTK_WIDGET(GetEntry()));
 
     int result = false;
+#ifdef __WXGTK4__
+    // gtk_entry_im_context_filter_keypress() was removed and GTK4 exposes no
+    // way to hand an event to an entry's own input method context: the entry
+    // owns it privately. Reporting "not filtered" means wx goes on to handle
+    // the key itself, which is the safe answer -- the cost is that composing
+    // via an input method inside a wxTextEntry is not routed through wx.
+    wxUnusedVar(event);
+#else
 #if GTK_CHECK_VERSION(2, 22, 0)
     if (wx_is_at_least_gtk2(22))
     {
@@ -994,6 +1493,7 @@ int wxTextEntry::GTKEntryIMFilterKeypress(GdkEventKey* event) const
 #else // GTK+ < 2.22
     wxUnusedVar(event);
 #endif // GTK+ 2.22+
+#endif // __WXGTK4__/!__WXGTK4__
 
     return result;
 }
@@ -1032,7 +1532,17 @@ void wxTextEntry::GTKConnectChangedSignal()
 
 void wxTextEntry::GTKConnectInsertTextSignal(GtkEntry* entry)
 {
-    g_signal_connect(entry, "insert_text",
+#ifdef __WXGTK4__
+    // GtkEntry implements GtkEditable by delegating to an internal GtkText in
+    // GTK4. Native input is inserted into this delegate and its insert-text
+    // signal isn't forwarded by GtkEntry, so connect to the actual editable.
+    GtkEditable* const editable = gtk_editable_get_delegate(GTK_EDITABLE(entry));
+    wxCHECK_RET(editable, "GtkEntry has no GtkEditable delegate");
+#else
+    GtkEditable* const editable = GTK_EDITABLE(entry);
+#endif // __WXGTK4__/!__WXGTK4__
+
+    g_signal_connect(editable, "insert_text",
                      G_CALLBACK(wx_gtk_insert_text_callback), this);
 }
 
@@ -1171,5 +1681,101 @@ bool wxTextEntry::ClickDefaultButtonIfPossible()
 
     return false;
 }
+
+#ifdef __WXGTK4__
+
+/* static */
+bool wxTextEntry::GTKEntryWantsKey(bool editable, int keyval, int modifiers)
+{
+    // Only keys carrying a modifier can collide with a menu accelerator, and
+    // claiming the unmodified ones would take ordinary typing away from the
+    // menu bar's mnemonics.
+    const int mods = modifiers & (GDK_CONTROL_MASK | GDK_SHIFT_MASK |
+                                  GDK_ALT_MASK);
+    if ( !mods )
+        return false;
+
+    const bool ctrl = (mods & GDK_CONTROL_MASK) != 0;
+    const bool shift = (mods & GDK_SHIFT_MASK) != 0;
+
+    // Selection and navigation, which a read-only control still does.
+    if ( ctrl )
+    {
+        switch ( keyval )
+        {
+            case GDK_KEY_a:
+            case GDK_KEY_A:
+            case GDK_KEY_c:
+            case GDK_KEY_C:
+            case GDK_KEY_Insert:
+            case GDK_KEY_KP_Insert:
+            case GDK_KEY_Left:
+            case GDK_KEY_KP_Left:
+            case GDK_KEY_Right:
+            case GDK_KEY_KP_Right:
+            case GDK_KEY_Home:
+            case GDK_KEY_KP_Home:
+            case GDK_KEY_End:
+            case GDK_KEY_KP_End:
+                return true;
+        }
+    }
+
+    if ( shift )
+    {
+        switch ( keyval )
+        {
+            case GDK_KEY_Left:
+            case GDK_KEY_KP_Left:
+            case GDK_KEY_Right:
+            case GDK_KEY_KP_Right:
+            case GDK_KEY_Home:
+            case GDK_KEY_KP_Home:
+            case GDK_KEY_End:
+            case GDK_KEY_KP_End:
+                return true;
+        }
+    }
+
+    // The rest change the text, so a control which cannot be edited does not
+    // want them and the menu should keep them.
+    if ( !editable )
+        return false;
+
+    if ( ctrl )
+    {
+        switch ( keyval )
+        {
+            case GDK_KEY_v:
+            case GDK_KEY_V:
+            case GDK_KEY_x:
+            case GDK_KEY_X:
+            case GDK_KEY_z:
+            case GDK_KEY_Z:
+            case GDK_KEY_y:
+            case GDK_KEY_Y:
+            case GDK_KEY_BackSpace:
+            case GDK_KEY_Delete:
+            case GDK_KEY_KP_Delete:
+                return true;
+        }
+    }
+
+    if ( shift )
+    {
+        switch ( keyval )
+        {
+            case GDK_KEY_Insert:
+            case GDK_KEY_KP_Insert:
+            case GDK_KEY_Delete:
+            case GDK_KEY_KP_Delete:
+                return true;
+        }
+    }
+
+    return false;
+}
+
+#endif // __WXGTK4__
 
 #endif // wxUSE_TEXTCTRL || wxUSE_COMBOBOX

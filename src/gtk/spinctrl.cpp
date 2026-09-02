@@ -21,8 +21,10 @@
 #endif
 
 #include "wx/private/spinctrl.h"
+#include "wx/textentry.h"
 
 #include "wx/gtk/private.h"
+#include "wx/gtk/private/gtk3-compat.h"
 
 //-----------------------------------------------------------------------------
 // data
@@ -91,7 +93,7 @@ wx_gtk_spin_output(GtkSpinButton* spin, wxSpinCtrlGTKBase* win)
         return FALSE;
 
     if ( text != win->GetTextValue() )
-        gtk_entry_set_text(GTK_ENTRY(spin), text.utf8_str());
+        gtk_editable_set_text(GTK_EDITABLE(spin), text.utf8_str());
 
     return TRUE;
 }
@@ -214,7 +216,7 @@ bool wxSpinCtrlGTKBase::Create(wxWindow *parent, wxWindowID id,
     else
         align = 0.0;
 
-    gtk_entry_set_alignment(GTK_ENTRY(m_widget), align);
+    gtk_editable_set_alignment(GTK_EDITABLE(m_widget), align);
 
     GtkSetEntryWidth();
 
@@ -262,7 +264,7 @@ double wxSpinCtrlGTKBase::GTKGetValue() const
     int handled = 0;
     g_signal_emit(m_widget, sig_id, 0, &value, &handled);
     if (!handled)
-        value = g_strtod(gtk_entry_get_text(GTK_ENTRY(m_widget)), nullptr);
+        value = g_strtod(gtk_editable_get_text(GTK_EDITABLE(m_widget)), nullptr);
     GtkAdjustment* adj =
         gtk_spin_button_get_adjustment(GTK_SPIN_BUTTON(m_widget));
     const double lower = gtk_adjustment_get_lower(adj);
@@ -306,7 +308,7 @@ wxString wxSpinCtrlGTKBase::GetTextValue() const
 {
     wxCHECK_MSG(m_widget, wxEmptyString, "invalid spin button");
 
-    return wxString::FromUTF8Unchecked(gtk_entry_get_text( GTK_ENTRY(m_widget) ));
+    return wxString::FromUTF8Unchecked(gtk_editable_get_text( GTK_EDITABLE(m_widget) ));
 }
 
 bool wxSpinCtrlGTKBase::GetSnapToTicks() const
@@ -335,7 +337,7 @@ void wxSpinCtrlGTKBase::SetValue( const wxString& value )
     GTKSetTextOverride(value);
 
     wxSpinCtrlEventDisabler disable(this);
-    gtk_entry_set_text( GTK_ENTRY(m_widget), value.utf8_str() );
+    gtk_editable_set_text( GTK_EDITABLE(m_widget), value.utf8_str() );
 }
 
 void wxSpinCtrlGTKBase::DoSetValue( double value )
@@ -379,7 +381,40 @@ void wxSpinCtrlGTKBase::DoSetRange(double minVal, double maxVal)
     }
 
     wxSpinCtrlEventDisabler disable(this);
-    gtk_spin_button_set_range( GTK_SPIN_BUTTON(m_widget), minVal, maxVal);
+
+    bool rangeSet = false;
+
+#ifdef __WXGTK4__
+    // wx lets the range be given backwards and the other ports keep it as it
+    // was given, which is what tests/controls/spinctrltest.cpp checks. GTK+ 3
+    // kept it too, but GTK4 routes gtk_spin_button_set_range() through
+    // gtk_adjustment_configure(), which asserts "lower + page_size <= upper",
+    // rejects the call and leaves the previous range in place.
+    //
+    // The two bounds are accepted individually, so set them that way.
+    if ( minVal > maxVal )
+    {
+        GtkAdjustment* const adj =
+            gtk_spin_button_get_adjustment(GTK_SPIN_BUTTON(m_widget));
+
+        const double value = gtk_adjustment_get_value(adj);
+
+        gtk_adjustment_set_lower(adj, minVal);
+        gtk_adjustment_set_upper(adj, maxVal);
+
+        // GTK+ 3 finished by clamping the value with CLAMP(value, lower,
+        // upper), which with the bounds crossed tests the lower one first.
+        // Reproduce that rather than inventing a rule of our own.
+        gtk_adjustment_set_value(adj, value < minVal
+                                        ? minVal
+                                        : (value > maxVal ? maxVal : value));
+
+        rangeSet = true;
+    }
+#endif // __WXGTK4__
+
+    if ( !rangeSet )
+        gtk_spin_button_set_range( GTK_SPIN_BUTTON(m_widget), minVal, maxVal);
 
     InvalidateBestSize();
 
@@ -445,6 +480,7 @@ void wxSpinCtrlGTKBase::OnChar( wxKeyEvent &event )
     event.Skip();
 }
 
+#ifndef __WXGTK4__
 GdkWindow *wxSpinCtrlGTKBase::GTKGetWindow(wxArrayGdkWindows& windows) const
 {
 #ifdef __WXGTK3__
@@ -458,6 +494,7 @@ GdkWindow *wxSpinCtrlGTKBase::GTKGetWindow(wxArrayGdkWindows& windows) const
 
     return nullptr;
 }
+#endif // !__WXGTK4__
 
 wxSize wxSpinCtrlGTKBase::DoGetSizeFromTextSize(int xlen, int ylen) const
 {
@@ -469,12 +506,12 @@ wxSize wxSpinCtrlGTKBase::DoGetSizeFromTextSize(int xlen, int ylen) const
     const double widthDigit = GetTextExtent("0123456789").GetWidth() / 10.0;
     const int numDigits = wxRound(xlen / widthDigit);
 
-    const gint widthChars = gtk_entry_get_width_chars(GTK_ENTRY(m_widget));
-    gtk_entry_set_width_chars(GTK_ENTRY(m_widget), numDigits);
+    const gint widthChars = gtk_editable_get_width_chars(GTK_EDITABLE(m_widget));
+    gtk_editable_set_width_chars(GTK_EDITABLE(m_widget), numDigits);
 
     wxSize tsize = GTKGetPreferredSize(m_widget);
 
-    gtk_entry_set_width_chars(GTK_ENTRY(m_widget), widthChars);
+    gtk_editable_set_width_chars(GTK_EDITABLE(m_widget), widthChars);
 
     // Check if the user requested a non-standard height.
     if ( ylen > 0 )
@@ -535,9 +572,9 @@ void wxSpinCtrl::GtkSetEntryWidth()
     const int minVal = static_cast<int>(DoGetMin());
     const int maxVal = static_cast<int>(DoGetMax());
 
-    gtk_entry_set_width_chars
+    gtk_editable_set_width_chars
     (
-        GTK_ENTRY(m_widget),
+        GTK_EDITABLE(m_widget),
         wxSpinCtrlImpl::GetMaxValueLength(minVal, maxVal, GetBase())
     );
 }
@@ -639,7 +676,7 @@ void wxSpinCtrlDouble::GtkSetEntryWidth()
     const int lenMin = wxString::Format("%.*f", digits, GetMin()).length();
     const int lenMax = wxString::Format("%.*f", digits, GetMax()).length();
 
-    gtk_entry_set_width_chars(GTK_ENTRY(m_widget), wxMax(lenMin, lenMax));
+    gtk_editable_set_width_chars(GTK_EDITABLE(m_widget), wxMax(lenMin, lenMax));
 }
 
 void wxSpinCtrlDouble::SetIncrement(double inc)
@@ -696,5 +733,20 @@ void wxSpinCtrlDouble::GTKValueChanged()
     event.SetString(GetTextValue());
     HandleWindowEvent( event );
 }
+
+#ifdef __WXGTK4__
+
+bool
+wxSpinCtrlGTKBase::GTKShouldPreProcessKey(int keyval, int modifiers) const
+{
+    // The spin button is the editable here, so ask it rather than assume: an
+    // entry the user cannot type into should leave the menu its accelerators.
+    const bool editable = m_widget &&
+        gtk_editable_get_editable(GTK_EDITABLE(m_widget));
+
+    return wxTextEntry::GTKEntryWantsKey(editable, keyval, modifiers);
+}
+
+#endif // __WXGTK4__
 
 #endif // wxUSE_SPINCTRL

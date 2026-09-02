@@ -73,6 +73,14 @@ public:
     virtual void GTKValueChanged() = 0;
     void GTKTextChanged();
 
+#ifdef __WXGTK4__
+    // A spin control's entry binds the editing keys as any other does, so a
+    // menu accelerator sharing one must not fire while it has the focus.
+    // See #221.
+    virtual bool GTKShouldPreProcessKey(int keyval,
+                                        int modifiers) const override;
+#endif // __WXGTK4__
+
 protected:
     wxSpinCtrlGTKBase();
     ~wxSpinCtrlGTKBase();
@@ -95,7 +103,9 @@ protected:
     virtual void GtkSetEntryWidth() = 0;
 
     virtual wxSize DoGetSizeFromTextSize(int xlen, int ylen = -1) const override;
+#ifndef __WXGTK4__
     virtual GdkWindow *GTKGetWindow(wxArrayGdkWindows& windows) const override;
+#endif // !__WXGTK4__
 
     // Widgets that use the style->base colour for the BG colour should
     // override this and return true.

@@ -11,6 +11,7 @@
 #if wxDEBUG_LEVEL
 
 #include "wx/gtk/private.h"
+#include "wx/gtk/private/gtk3-compat.h"
 #include "wx/gtk/assertdlg_gtk.h"
 #include "wx/gtk/private/mnemonics.h"
 #include "wx/translation.h"
@@ -42,7 +43,11 @@ GtkWidget *gtk_assert_dialog_add_button_to (GtkBox *box, const gchar *label,
 {
     /* create the button */
     GtkWidget *button = gtk_button_new_with_mnemonic (label);
+#ifndef __WXGTK4__
+    // Being the default is a property of the window under GTK4, not of the
+    // widget, so there is nothing to allow here any more.
     gtk_widget_set_can_default(button, true);
+#endif
 
     /* add a stock icon inside it */
 #ifdef __WXGTK4__
@@ -57,7 +62,7 @@ GtkWidget *gtk_assert_dialog_add_button_to (GtkBox *box, const gchar *label,
     /* add to the given (container) widget */
     if (box)
 #ifdef __WXGTK4__
-        gtk_box_pack_end (box, button);
+        gtk_box_append (box, button);
 #else
         gtk_box_pack_end (box, button, FALSE, TRUE, 8);
 #endif
@@ -65,7 +70,9 @@ GtkWidget *gtk_assert_dialog_add_button_to (GtkBox *box, const gchar *label,
     return button;
 }
 
-// This function is called only for GTK+ < 3.10
+// This function is called only for GTK+ < 3.10; GTK4 builds the dialog in
+// gtk_assert_dialog_init() and use gtk_dialog_add_button() directly.
+#ifndef __WXGTK4__
 static
 GtkWidget *gtk_assert_dialog_add_button (GtkAssertDialog *dlg, const gchar *label,
                                          const gchar *stock, gint response_id)
@@ -78,8 +85,110 @@ GtkWidget *gtk_assert_dialog_add_button (GtkAssertDialog *dlg, const gchar *labe
 
     return button;
 }
+#endif // !__WXGTK4__
 
 #if wxUSE_STACKWALKER
+
+#ifdef __WXGTK4__
+
+/* One row of the backtrace. GtkColumnView has no columns of its own kind: the
+   model holds objects and each column's factory picks a field out of one, so
+   the four GtkListStore columns become four fields here. */
+#define WX_TYPE_ASSERT_FRAME (wx_assert_frame_get_type())
+G_DECLARE_FINAL_TYPE(WxAssertFrame, wx_assert_frame, WX, ASSERT_FRAME, GObject)
+
+struct _WxAssertFrame
+{
+    GObject parent;
+    guint   level;
+    gchar  *function;
+    gchar  *sourcefile;
+    gchar  *linenum;
+};
+
+G_DEFINE_TYPE(WxAssertFrame, wx_assert_frame, G_TYPE_OBJECT)
+
+static void wx_assert_frame_finalize(GObject *obj)
+{
+    WxAssertFrame *self = WX_ASSERT_FRAME(obj);
+    g_free(self->function);
+    g_free(self->sourcefile);
+    g_free(self->linenum);
+    G_OBJECT_CLASS(wx_assert_frame_parent_class)->finalize(obj);
+}
+
+static void wx_assert_frame_class_init(WxAssertFrameClass *klass)
+{ G_OBJECT_CLASS(klass)->finalize = wx_assert_frame_finalize; }
+
+static void wx_assert_frame_init(WxAssertFrame *self) { (void)self; }
+
+static WxAssertFrame *
+wx_assert_frame_new(guint level, const gchar *function,
+                    const gchar *sourcefile, const gchar *linenum)
+{
+    WxAssertFrame *self = WX_ASSERT_FRAME(g_object_new(WX_TYPE_ASSERT_FRAME, nullptr));
+    self->level      = level;
+    self->function   = g_strdup(function   ? function   : "");
+    self->sourcefile = g_strdup(sourcefile ? sourcefile : "");
+    self->linenum    = g_strdup(linenum    ? linenum    : "");
+    return self;
+}
+
+extern "C" {
+
+static void wx_assert_column_setup(GtkSignalListItemFactory *, GtkListItem *item, gpointer)
+{
+    GtkWidget *label = gtk_label_new(nullptr);
+    gtk_label_set_xalign(GTK_LABEL(label), 0.0);
+    gtk_list_item_set_child(item, label);
+}
+
+static void wx_assert_column_bind(GtkSignalListItemFactory *, GtkListItem *item,
+                                  gpointer colidx)
+{
+    WxAssertFrame *frame = WX_ASSERT_FRAME(gtk_list_item_get_item(item));
+    GtkWidget *label = gtk_list_item_get_child(item);
+    if (!frame || !label)
+        return;
+
+    switch (GPOINTER_TO_INT(colidx))
+    {
+        case STACKFRAME_LEVEL_COLIDX:
+        {
+            gchar *text = g_strdup_printf("%u", frame->level);
+            gtk_label_set_text(GTK_LABEL(label), text);
+            g_free(text);
+            break;
+        }
+        case FUNCTION_PROTOTYPE_COLIDX:
+            gtk_label_set_text(GTK_LABEL(label), frame->function);
+            break;
+        case SOURCE_FILE_COLIDX:
+            gtk_label_set_text(GTK_LABEL(label), frame->sourcefile);
+            break;
+        case LINE_NUMBER_COLIDX:
+            gtk_label_set_text(GTK_LABEL(label), frame->linenum);
+            break;
+    }
+}
+
+} /* extern "C" */
+
+static
+void gtk_assert_dialog_append_text_column (GtkWidget *columnview, const gchar *name, int index)
+{
+    GtkListItemFactory *factory = gtk_signal_list_item_factory_new();
+    g_signal_connect(factory, "setup", G_CALLBACK(wx_assert_column_setup), nullptr);
+    g_signal_connect(factory, "bind",  G_CALLBACK(wx_assert_column_bind),
+                     GINT_TO_POINTER(index));
+
+    GtkColumnViewColumn *column = gtk_column_view_column_new(name, factory);
+    gtk_column_view_column_set_resizable(column, TRUE);
+    gtk_column_view_append_column(GTK_COLUMN_VIEW(columnview), column);
+    g_object_unref(column);
+}
+
+#else // !__WXGTK4__
 
 // This function is called only for GTK+ < 3.10
 static
@@ -96,6 +205,29 @@ void gtk_assert_dialog_append_text_column (GtkWidget *treeview, const gchar *nam
     gtk_tree_view_column_set_reorderable (column, TRUE);
 }
 
+#endif // __WXGTK4__/!__WXGTK4__
+
+#ifdef __WXGTK4__
+static
+GtkWidget *gtk_assert_dialog_create_backtrace_list_model (GtkAssertDialog *dlg)
+{
+    /* The store outlives this function through dlg->frames; the selection
+       model and the view take their own references to what they are given. */
+    dlg->frames = g_list_store_new(WX_TYPE_ASSERT_FRAME);
+
+    GtkSelectionModel *selection = GTK_SELECTION_MODEL(
+        gtk_no_selection_new(G_LIST_MODEL(g_object_ref(dlg->frames))));
+
+    GtkWidget *columnview = gtk_column_view_new(selection);
+
+    gtk_assert_dialog_append_text_column(columnview, "#", STACKFRAME_LEVEL_COLIDX);
+    gtk_assert_dialog_append_text_column(columnview, "Function Prototype", FUNCTION_PROTOTYPE_COLIDX);
+    gtk_assert_dialog_append_text_column(columnview, "Source file", SOURCE_FILE_COLIDX);
+    gtk_assert_dialog_append_text_column(columnview, "Line #", LINE_NUMBER_COLIDX);
+
+    return columnview;
+}
+#else
 // This function is called only for GTK+ < 3.10
 static
 GtkWidget *gtk_assert_dialog_create_backtrace_list_model ()
@@ -113,11 +245,9 @@ GtkWidget *gtk_assert_dialog_create_backtrace_list_model ()
     /* create the tree view */
     treeview = gtk_tree_view_new_with_model (GTK_TREE_MODEL(store));
     g_object_unref (store);
-#ifndef __WXGTK4__
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     gtk_tree_view_set_rules_hint (GTK_TREE_VIEW (treeview), TRUE);
     wxGCC_WARNING_RESTORE()
-#endif
 
     /* append columns */
     gtk_assert_dialog_append_text_column(treeview, "#", STACKFRAME_LEVEL_COLIDX);
@@ -127,10 +257,27 @@ GtkWidget *gtk_assert_dialog_create_backtrace_list_model ()
 
     return treeview;
 }
+#endif // __WXGTK4__/!__WXGTK4__
 
 static
 void gtk_assert_dialog_process_backtrace (GtkAssertDialog *dlg)
 {
+#ifdef __WXGTK4__
+    /* set busy cursor: cursors belong to widgets rather than to windows now,
+       and are named rather than picked from a fixed enumeration */
+    GtkWidget* const widget = GTK_WIDGET(dlg);
+    GdkDisplay* const display = gtk_widget_get_display(widget);
+    GdkCursor* const cur = gdk_cursor_new_from_name("wait", nullptr);
+    gtk_widget_set_cursor (widget, cur);
+    gdk_display_flush (display);
+
+    (*dlg->callback)(dlg->userdata);
+
+    /* toggle busy cursor */
+    gtk_widget_set_cursor (widget, nullptr);
+    if (cur)
+        g_object_unref(cur);
+#else // !__WXGTK4__
     /* set busy cursor */
     GdkWindow *parent = gtk_widget_get_window(GTK_WIDGET(dlg));
     GdkDisplay* display = gdk_window_get_display(parent);
@@ -147,6 +294,7 @@ void gtk_assert_dialog_process_backtrace (GtkAssertDialog *dlg)
 #else
     gdk_cursor_unref (cur);
 #endif
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 extern "C" {
@@ -204,13 +352,16 @@ static void gtk_assert_dialog_save_backtrace_callback(GtkWidget*, GtkAssertDialo
         }
     }
 
+#ifdef __WXGTK4__
+    gtk_window_destroy (GTK_WINDOW(dialog));
+#else
     gtk_widget_destroy (dialog);
+#endif
 }
 
 static void gtk_assert_dialog_copy_callback(GtkWidget*, GtkAssertDialog* dlg)
 {
     char *msg, *backtrace;
-    GtkClipboard *clipboard;
     GString *str;
 
     msg = gtk_assert_dialog_get_message (dlg);
@@ -220,6 +371,16 @@ static void gtk_assert_dialog_copy_callback(GtkWidget*, GtkAssertDialog* dlg)
     str = g_string_new("");
     g_string_printf (str, "ASSERT INFO:\n%s\n\nBACKTRACE:\n%s\n\n", msg, backtrace);
 
+#ifdef __WXGTK4__
+    /* GtkClipboard and the selection atoms it was addressed by are gone: a
+       GdkClipboard is obtained from the widget which wants to use it */
+    GtkWidget* const widget = GTK_WIDGET(dlg);
+
+    gdk_clipboard_set_text (gtk_widget_get_clipboard(widget), str->str);
+    gdk_clipboard_set_text (gtk_widget_get_primary_clipboard(widget), str->str);
+#else // !__WXGTK4__
+    GtkClipboard *clipboard;
+
     /* copy everything in default clipboard */
     clipboard = gtk_clipboard_get (GDK_SELECTION_CLIPBOARD);
     gtk_clipboard_set_text (clipboard, str->str, str->len);
@@ -227,6 +388,7 @@ static void gtk_assert_dialog_copy_callback(GtkWidget*, GtkAssertDialog* dlg)
     /* copy everything in primary clipboard too */
     clipboard = gtk_clipboard_get (GDK_SELECTION_PRIMARY);
     gtk_clipboard_set_text (clipboard, str->str, str->len);
+#endif // __WXGTK4__/!__WXGTK4__
 
     g_free (msg);
     g_free (backtrace);
@@ -236,14 +398,79 @@ static void gtk_assert_dialog_copy_callback(GtkWidget*, GtkAssertDialog* dlg)
 
 #endif // wxUSE_STACKWALKER
 
+#ifdef __WXGTK4__
+
+// Everything GtkDialog used to do for this dialog: carry a result out of a
+// button press and stop the loop waiting for it.
+static void gtk_assert_dialog_respond(GtkAssertDialog* dlg, int response)
+{
+    dlg->response = response;
+
+    if ( dlg->loop && g_main_loop_is_running(dlg->loop) )
+        g_main_loop_quit(dlg->loop);
+}
+
+extern "C" {
+
+static void gtk_assert_dialog_stop_callback(GtkWidget*, GtkAssertDialog* dlg)
+{
+    gtk_assert_dialog_respond(dlg, GTK_ASSERT_DIALOG_STOP);
+}
+
+// Closing the window answers "continue".
+//
+// gtk_dialog_run() returned GTK_RESPONSE_DELETE_EVENT here, which the caller
+// in utilsgtk.cpp does not expect and reports with wxFAIL_MSG -- an assertion
+// raised from inside the assertion dialog. Continuing is what the user asking
+// for the dialog to go away means, and it is the only answer that cannot make
+// things worse.
+static gboolean gtk_assert_dialog_close_callback(GtkWindow*, GtkAssertDialog* dlg)
+{
+    gtk_assert_dialog_respond(dlg, GTK_ASSERT_DIALOG_CONTINUE);
+
+    return TRUE;        // keep the window, gtk_assert_dialog_run() owns it
+}
+
+} // extern "C"
+
+int gtk_assert_dialog_run(GtkAssertDialog* dlg)
+{
+    dlg->response = GTK_ASSERT_DIALOG_CONTINUE;
+
+    gtk_window_set_modal(GTK_WINDOW(dlg), TRUE);
+    gtk_window_present(GTK_WINDOW(dlg));
+
+    dlg->loop = g_main_loop_new(nullptr, FALSE);
+    g_main_loop_run(dlg->loop);
+    g_main_loop_unref(dlg->loop);
+    dlg->loop = nullptr;
+
+    gtk_widget_set_visible(GTK_WIDGET(dlg), FALSE);
+
+    return dlg->response;
+}
+
+#endif // __WXGTK4__
+
 extern "C" {
 static void gtk_assert_dialog_continue_callback(GtkWidget*, GtkAssertDialog* dlg)
 {
-    gint response =
-        gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON(dlg->shownexttime)) ?
-            GTK_ASSERT_DIALOG_CONTINUE : GTK_ASSERT_DIALOG_CONTINUE_SUPPRESSING;
+    // GtkCheckButton is not a GtkToggleButton under GTK4, so the cast is
+    // invalid there rather than merely deprecated.
+#ifdef __WXGTK4__
+    const gboolean active = gtk_check_button_get_active(GTK_CHECK_BUTTON(dlg->shownexttime));
+#else
+    const gboolean active = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(dlg->shownexttime));
+#endif
 
+    gint response = active ? GTK_ASSERT_DIALOG_CONTINUE
+                           : GTK_ASSERT_DIALOG_CONTINUE_SUPPRESSING;
+
+#ifdef __WXGTK4__
+    gtk_assert_dialog_respond(dlg, response);
+#else
     gtk_dialog_response (GTK_DIALOG(dlg), response);
+#endif
 }
 } // extern "C"
 
@@ -252,7 +479,7 @@ static void gtk_assert_dialog_continue_callback(GtkWidget*, GtkAssertDialog* dlg
  ---------------------------------------------------------------------------- */
 
 extern "C" {
-#if GTK_CHECK_VERSION(3,10,0)
+#if GTK_CHECK_VERSION(3,10,0) && !defined(__WXGTK4__)
 static void gtk_assert_dialog_class_init(gpointer g_class, void*);
 #endif // GTK+ >= 3.10
 static void gtk_assert_dialog_init(GTypeInstance* instance, void*);
@@ -269,7 +496,7 @@ GType gtk_assert_dialog_get_type()
             sizeof (GtkAssertDialogClass),
             nullptr,           /* base_init */
             nullptr,           /* base_finalize */
-#if GTK_CHECK_VERSION(3,10,0)
+#if GTK_CHECK_VERSION(3,10,0) && !defined(__WXGTK4__)
             gtk_assert_dialog_class_init,  /* class init */
 #else
             nullptr,
@@ -281,7 +508,13 @@ GType gtk_assert_dialog_get_type()
             gtk_assert_dialog_init,
             nullptr
         };
+#ifdef __WXGTK4__
+        // A GtkWindow rather than the deprecated GtkDialog: see the note on
+        // _GtkAssertDialog's parent_instance.
+        assert_dialog_type = g_type_register_static (GTK_TYPE_WINDOW, "GtkAssertDialog", &assert_dialog_info, (GTypeFlags)0);
+#else
         assert_dialog_type = g_type_register_static (GTK_TYPE_DIALOG, "GtkAssertDialog", &assert_dialog_info, (GTypeFlags)0);
+#endif
     }
 
     return assert_dialog_type;
@@ -289,7 +522,7 @@ GType gtk_assert_dialog_get_type()
 
 extern "C" {
 // For GTK+ >= 3.10, Composite Widget Templates are used to define composite widgets.
-#if GTK_CHECK_VERSION(3,10,0)
+#if GTK_CHECK_VERSION(3,10,0) && !defined(__WXGTK4__)
 static void gtk_assert_dialog_class_init(gpointer g_class, void*)
 {
     if (gtk_check_version(3,10,0) == nullptr)
@@ -677,7 +910,135 @@ static void gtk_assert_dialog_init(GTypeInstance* instance, void*)
 {
     // For GTK+ >= 3.10 create and initialize the dialog from the already assigned template
     // or create the dialog "manually" otherwise.
-#if GTK_CHECK_VERSION(3,10,0)
+#ifdef __WXGTK4__
+    // The GtkBuilder template used below is written in GTK3's dialect of the
+    // format -- GtkButtonBox, <packing>, type_hint, draw_indicator, the
+    // action_area internal child -- none of which GTK4 understands. Rather
+    // than maintain a second copy of it in a second dialect, build the dialog
+    // in code: it is a handful of boxes and this way there is only one
+    // description of it to keep correct.
+    {
+        GtkAssertDialog* dlg = GTK_ASSERT_DIALOG(instance);
+
+        gtk_window_set_title(GTK_WINDOW(dlg), "wxWidgets Debug Alert");
+
+        // What gtk_dialog_get_content_area() used to hand out. A GtkWindow has
+        // one child, so this box is it and everything else goes inside.
+        GtkWidget* const content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+        dlg->contentArea = content;
+        gtk_window_set_child(GTK_WINDOW(dlg), content);
+
+        dlg->loop = nullptr;
+        dlg->response = GTK_ASSERT_DIALOG_CONTINUE;
+
+        GtkWidget* const vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+        gtk_widget_set_margin_start(vbox, 8);
+        gtk_widget_set_margin_end(vbox, 8);
+        gtk_widget_set_margin_top(vbox, 8);
+        gtk_widget_set_margin_bottom(vbox, 8);
+        gtk_widget_set_vexpand(vbox, TRUE);
+        gtk_box_append(GTK_BOX(content), vbox);
+
+        /* the icon and message side by side */
+        GtkWidget* const hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+        gtk_box_append(GTK_BOX(vbox), hbox);
+
+        GtkWidget* const image = gtk_image_new_from_icon_name("dialog-error");
+        gtk_image_set_pixel_size(GTK_IMAGE(image), 48);
+        gtk_box_append(GTK_BOX(hbox), image);
+
+        GtkWidget* const vbox2 = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+        gtk_widget_set_hexpand(vbox2, TRUE);
+        gtk_box_append(GTK_BOX(hbox), vbox2);
+
+        gtk_box_append(GTK_BOX(vbox2), gtk_label_new("An assertion failed!"));
+
+        dlg->message = gtk_label_new(nullptr);
+        gtk_label_set_selectable(GTK_LABEL(dlg->message), TRUE);
+        gtk_label_set_wrap(GTK_LABEL(dlg->message), TRUE);
+        gtk_label_set_justify(GTK_LABEL(dlg->message), GTK_JUSTIFY_LEFT);
+        gtk_widget_set_size_request(dlg->message, 450, -1);
+        gtk_widget_set_vexpand(dlg->message, TRUE);
+        gtk_box_append(GTK_BOX(vbox2), dlg->message);
+
+#if wxUSE_STACKWALKER
+        /* the backtrace, inside an expander */
+        dlg->expander = gtk_expander_new_with_mnemonic("Back_trace:");
+        gtk_widget_set_vexpand(dlg->expander, TRUE);
+        gtk_box_append(GTK_BOX(vbox), dlg->expander);
+        g_signal_connect(dlg->expander, "activate",
+                         G_CALLBACK(gtk_assert_dialog_expander_callback), dlg);
+
+        GtkWidget* const expVBox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+        gtk_expander_set_child(GTK_EXPANDER(dlg->expander), expVBox);
+
+        GtkWidget* const sw = gtk_scrolled_window_new();
+        gtk_scrolled_window_set_has_frame(GTK_SCROLLED_WINDOW(sw), TRUE);
+        gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw),
+                                       GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+        gtk_widget_set_size_request(sw, -1, 180);
+        gtk_widget_set_vexpand(sw, TRUE);
+        gtk_box_append(GTK_BOX(expVBox), sw);
+
+        dlg->treeview = gtk_assert_dialog_create_backtrace_list_model(dlg);
+        gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sw), dlg->treeview);
+
+        /* GtkButtonBox is gone; a box with the children aligned to its end
+           does the same job */
+        GtkWidget* const btnBox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        gtk_widget_set_halign(btnBox, GTK_ALIGN_END);
+        gtk_box_append(GTK_BOX(expVBox), btnBox);
+
+        GtkWidget* button =
+            gtk_assert_dialog_add_button_to(GTK_BOX(btnBox), "Save to _file",
+                                            "document-save");
+        g_signal_connect(button, "clicked",
+                         G_CALLBACK(gtk_assert_dialog_save_backtrace_callback), dlg);
+
+        button = gtk_assert_dialog_add_button_to(GTK_BOX(btnBox), "Copy to clip_board",
+                                                 "edit-copy");
+        g_signal_connect(button, "clicked",
+                         G_CALLBACK(gtk_assert_dialog_copy_callback), dlg);
+#endif // wxUSE_STACKWALKER
+
+        dlg->shownexttime =
+            gtk_check_button_new_with_mnemonic("Show this _dialog the next time");
+        gtk_check_button_set_active(GTK_CHECK_BUTTON(dlg->shownexttime), TRUE);
+        gtk_box_append(GTK_BOX(vbox), dlg->shownexttime);
+
+        // The action area, which GtkDialog used to provide along with
+        // gtk_dialog_add_button() and gtk_dialog_set_default_response().
+        GtkWidget* const actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+        gtk_widget_set_halign(actions, GTK_ALIGN_END);
+        gtk_widget_set_margin_top(actions, 8);
+        gtk_box_append(GTK_BOX(vbox), actions);
+
+        GtkWidget* const stopbtn = gtk_button_new_with_mnemonic("_Stop");
+        gtk_box_append(GTK_BOX(actions), stopbtn);
+        g_signal_connect(stopbtn, "clicked",
+                         G_CALLBACK(gtk_assert_dialog_stop_callback), dlg);
+
+        GtkWidget* const continuebtn = gtk_button_new_with_mnemonic("_Continue");
+        gtk_box_append(GTK_BOX(actions), continuebtn);
+        g_signal_connect(continuebtn, "clicked",
+                         G_CALLBACK(gtk_assert_dialog_continue_callback), dlg);
+
+        // What set_default_response() did: Enter answers Continue.
+        gtk_widget_set_receives_default(continuebtn, TRUE);
+        gtk_window_set_default_widget(GTK_WINDOW(dlg), continuebtn);
+
+        /* the resizable property of this window is modified by the expander:
+           when it's collapsed, the window must be non-resizable! */
+        gtk_window_set_resizable(GTK_WINDOW(dlg), FALSE);
+
+        g_signal_connect(dlg, "close-request",
+                         G_CALLBACK(gtk_assert_dialog_close_callback), dlg);
+
+        dlg->callback = nullptr;
+        dlg->userdata = nullptr;
+    }
+#else // !__WXGTK4__
+#if GTK_CHECK_VERSION(3,10,0) && !defined(__WXGTK4__)
     if (gtk_check_version(3,10,0) == nullptr)
     {
         GtkAssertDialog* dlg = GTK_ASSERT_DIALOG(instance);
@@ -804,6 +1165,7 @@ static void gtk_assert_dialog_init(GTypeInstance* instance, void*)
         wxGCC_WARNING_RESTORE()
         gtk_widget_show_all (GTK_WIDGET(dlg));
     }
+#endif // __WXGTK4__/!__WXGTK4__
 }
 }
 
@@ -824,14 +1186,44 @@ gchar *gtk_assert_dialog_get_message (GtkAssertDialog *dlg)
 
 gchar *gtk_assert_dialog_get_backtrace (GtkAssertDialog *dlg)
 {
+#ifndef __WXGTK4__
     gchar *function, *sourcefile, *linenum;
     guint count;
 
     GtkTreeModel *model;
     GtkTreeIter iter;
     GString *string;
+#endif
 
     g_return_val_if_fail (GTK_IS_ASSERT_DIALOG (dlg), nullptr);
+
+#ifdef __WXGTK4__
+    {
+        GListModel *const frames = G_LIST_MODEL(dlg->frames);
+        const guint n = g_list_model_get_n_items(frames);
+        if (n == 0)
+            return nullptr;
+
+        GString *const out = g_string_new("");
+        for (guint i = 0; i < n; i++)
+        {
+            WxAssertFrame *const f =
+                WX_ASSERT_FRAME(g_list_model_get_item(frames, i));
+
+            g_string_append_printf(out, "[%u] %s", f->level, f->function);
+            if (f->sourcefile[0] != '\0')
+                g_string_append_printf(out, " %s", f->sourcefile);
+            if (f->linenum[0] != '\0')
+                g_string_append_printf(out, ":%s", f->linenum);
+            g_string_append(out, "\n");
+
+            g_object_unref(f);
+        }
+
+        /* returned string must be g_free()d */
+        return g_string_free(out, FALSE);
+    }
+#else
     model = gtk_tree_view_get_model (GTK_TREE_VIEW(dlg->treeview));
 
     /* iterate over the list */
@@ -865,6 +1257,7 @@ gchar *gtk_assert_dialog_get_backtrace (GtkAssertDialog *dlg)
 
     /* returned string must g_free()d */
     return g_string_free (string, FALSE);
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 #endif // wxUSE_STACKWALKER
@@ -899,12 +1292,33 @@ void gtk_assert_dialog_append_stack_frame(GtkAssertDialog *dlg,
                                           const gchar *sourcefile,
                                           guint line_number)
 {
+#ifndef __WXGTK4__
     GtkTreeModel *model;
     GtkTreeIter iter;
     GString *linenum;
     gint count;
+#endif
 
     g_return_if_fail (GTK_IS_ASSERT_DIALOG (dlg));
+
+#ifdef __WXGTK4__
+    {
+        GString *const num = g_string_new("");
+        if ( line_number != 0 )
+            g_string_printf(num, "%u", line_number);
+
+        /* numbered from 1, as before */
+        const guint level =
+            g_list_model_get_n_items(G_LIST_MODEL(dlg->frames)) + 1;
+
+        WxAssertFrame *const frame =
+            wx_assert_frame_new(level, function, sourcefile, num->str);
+        g_list_store_append(dlg->frames, frame);
+        g_object_unref(frame);
+
+        g_string_free(num, TRUE);
+    }
+#else
     model = gtk_tree_view_get_model (GTK_TREE_VIEW(dlg->treeview));
 
     /* how many items are in the list up to now ? */
@@ -924,6 +1338,7 @@ void gtk_assert_dialog_append_stack_frame(GtkAssertDialog *dlg,
                         -1);
 
     g_string_free (linenum, TRUE);
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 #endif // wxUSE_STACKWALKER

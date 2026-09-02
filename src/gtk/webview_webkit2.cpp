@@ -39,9 +39,32 @@
 #include "wx/gtk/private/variant.h"
 #include "wx/private/jsscriptwrapper.h"
 #include "wx/scopedptr.h"
-#include <webkit2/webkit2.h>
-#include <JavaScriptCore/JSValueRef.h>
-#include <JavaScriptCore/JSStringRef.h>
+#ifdef __WXGTK4__
+    #include <webkit/webkit.h>
+#else
+    #include <webkit2/webkit2.h>
+    #include <JavaScriptCore/JSValueRef.h>
+    #include <JavaScriptCore/JSStringRef.h>
+#endif
+
+#ifdef __WXGTK4__
+// Mechanical renames between the GTK3 and GTK4 WebKitGTK APIs. The functions
+// only got a longer name, "web extension" having been renamed to "web process
+// extension" to distinguish it from the (unrelated) WebExtensions API.
+#define webkit_web_context_set_web_extensions_directory \
+        webkit_web_context_set_web_process_extensions_directory
+#define webkit_web_context_set_web_extensions_initialization_user_data \
+        webkit_web_context_set_web_process_extensions_initialization_user_data
+#define wxWEBKIT_INITIALIZE_WEB_EXTENSIONS "initialize-web-process-extensions"
+// The entry point the extension exports was renamed with everything else, and
+// this is the name looked up to recognise our own module in a directory.
+#define wxWEBKIT_EXTENSION_ENTRY_POINT \
+        "webkit_web_process_extension_initialize_with_user_data"
+#else
+#define wxWEBKIT_INITIALIZE_WEB_EXTENSIONS "initialize-web-extensions"
+#define wxWEBKIT_EXTENSION_ENTRY_POINT \
+        "webkit_web_extension_initialize_with_user_data"
+#endif
 
 #if WEBKIT_CHECK_VERSION(2, 10, 0)
 #define wxHAVE_WEBKIT_WEBSITE_DATA_MANAGER
@@ -63,7 +86,41 @@ bool wx_check_webkit_version(int major, int minor, int micro)
 }
 
 // Helper function to get string from Webkit JS result
-bool wxGetStringFromJSResult(WebKitJavascriptResult* js_result, wxString* output)
+#ifdef __WXGTK4__
+
+bool wxGetStringFromJSResult(wxWebKitJSValue* value, wxString* output)
+{
+    // Objects are serialized as JSON, everything else uses the usual JS string
+    // conversion, matching what the JSValueRef-based version below does.
+    wxGtkString str
+                 (
+                  jsc_value_is_object(value)
+                      ? jsc_value_to_json(value, 0)
+                      : jsc_value_to_string(value)
+                 );
+
+    // The conversion itself can throw, e.g. for objects with cyclic references
+    // or a toString() which throws, so check for a pending exception.
+    JSCContext* const context = jsc_value_get_context(value);
+    if ( JSCException* const exception = jsc_context_get_exception(context) )
+    {
+        if ( output )
+            *output = wxString::FromUTF8(jsc_exception_get_message(exception));
+
+        jsc_context_clear_exception(context);
+
+        return false;
+    }
+
+    if ( output != nullptr )
+        *output = wxString::FromUTF8(str);
+
+    return true;
+}
+
+#else // !__WXGTK4__
+
+bool wxGetStringFromJSResult(wxWebKitJSValue* js_result, wxString* output)
 {
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
 
@@ -96,6 +153,8 @@ bool wxGetStringFromJSResult(WebKitJavascriptResult* js_result, wxString* output
 
     return true;
 }
+
+#endif // __WXGTK4__/!__WXGTK4__
 
 //-----------------------------------------------------------------------------
 // wxWebViewWindowFeaturesWebKit
@@ -218,9 +277,18 @@ wxgtk_webview_webkit_navigation(WebKitWebView *,
     WebKitURIRequest* request = webkit_navigation_action_get_request(action);
     const gchar* uri = webkit_uri_request_get_uri(request);
 
+#ifdef __WXGTK4__
+    // webkit_navigation_policy_decision_get_frame_name() was removed together
+    // with the rest of the deprecated API in the GTK4 version: the target
+    // frame name is simply not exposed any more, so leave it empty, which is
+    // also what this returned for the (much more common) main frame case.
+    wxUnusedVar(navigation_decision);
+    wxString target;
+#else
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     wxString target = webkit_navigation_policy_decision_get_frame_name(navigation_decision);
     wxGCC_WARNING_RESTORE(deprecated-declarations)
+#endif
 
     webKitCtrl->m_busy = true;
 
@@ -397,7 +465,7 @@ wxgtk_webview_webkit_leave_fullscreen(WebKitWebView *WXUNUSED(web_view),
 
 static void
 wxgtk_webview_webkit_script_message_received(WebKitUserContentManager *WXUNUSED(content_manager),
-                                             WebKitJavascriptResult *js_result,
+                                             wxWebKitJSValue *js_result,
                                              wxWebViewWebKit *webKitCtrl)
 {
     wxWebViewEvent event(wxEVT_WEBVIEW_SCRIPT_MESSAGE_RECEIVED,
@@ -532,7 +600,11 @@ wxgtk_webview_webkit_uri_scheme_request_cb(WebKitURISchemeRequest *request,
 static gboolean
 wxgtk_webview_webkit_context_menu(WebKitWebView *,
                                   WebKitContextMenu *,
+                                  // The GdkEvent argument was dropped from
+                                  // this signal by the GTK4 WebKitGTK API.
+#ifndef __WXGTK4__
                                   GdkEvent *,
+#endif
                                   WebKitHitTestResult *,
                                   wxWebViewWebKit *webKitCtrl)
 {
@@ -590,7 +662,7 @@ static bool CheckDirectoryForWebExt(const wxString& dirname)
         wxDynamicLibrary dl;
         if ( dl.Load(wxFileName(dirname, file).GetFullPath(),
                      wxDL_VERBATIM | wxDL_LAZY) &&
-                dl.HasSymbol("webkit_web_extension_initialize_with_user_data") )
+                dl.HasSymbol(wxWEBKIT_EXTENSION_ENTRY_POINT) )
         {
             // Looks like our extension.
             return true;
@@ -602,14 +674,33 @@ static bool CheckDirectoryForWebExt(const wxString& dirname)
     return false;
 }
 
-static bool TrySetWebExtensionsDirectory(WebKitWebContext *context, const wxString& dir)
-{
-    if (dir.empty() || !CheckDirectoryForWebExt(dir))
-        return false;
+#ifdef __WXGTK4__
 
-    webkit_web_context_set_web_extensions_directory(context, dir.utf8_str());
-    return true;
+// The directory the private D-Bus socket is created in.
+//
+// Its own, rather than the temporary directory at large: the sandbox has to
+// be told about it, and granting the web process all of /tmp to reach one
+// socket is more than this needs.
+static wxString GetWebExtensionSocketDir()
+{
+    static const wxString s_dir = []
+    {
+        wxString base = wxString::FromUTF8(g_get_user_runtime_dir());
+        if ( base.empty() )
+            base = wxString::FromUTF8(g_get_tmp_dir());
+
+        const wxString dir =
+            wxString::Format("%s/wxwebview-%lu", base, wxGetProcessId());
+
+        wxFileName::Mkdir(dir, 0700, wxPATH_MKDIR_FULL);
+
+        return dir;
+    }();
+
+    return s_dir;
 }
+
+#endif // __WXGTK4__
 
 static wxString GetStandardWebExtensionsDir()
 {
@@ -619,6 +710,36 @@ static wxString GetStandardWebExtensionsDir()
     return dir;
 }
 
+// Where our extension actually is, or empty if it was not found.
+//
+// The standard location first, then locations relative to the executable, so
+// that the tests and the sample can run before wxWebView is installed.
+static wxString FindWebExtensionsDir()
+{
+    if ( CheckDirectoryForWebExt(GetStandardWebExtensionsDir()) )
+        return GetStandardWebExtensionsDir();
+
+    const wxString exepath =
+        wxFileName(wxStandardPaths::Get().GetExecutablePath()).GetPath();
+    if ( !exepath.empty() )
+    {
+        wxString const directories[] =
+        {
+            exepath + "/..",
+            exepath + "/../..",
+            exepath,
+        };
+
+        for ( size_t n = 0; n < WXSIZEOF(directories); ++n )
+        {
+            if ( CheckDirectoryForWebExt(directories[n]) )
+                return directories[n];
+        }
+    }
+
+    return wxString();
+}
+
 static void
 wxgtk_initialize_web_extensions(WebKitWebContext *context,
                                 GDBusServer *dbusServer)
@@ -626,29 +747,10 @@ wxgtk_initialize_web_extensions(WebKitWebContext *context,
     const char *address = g_dbus_server_get_client_address(dbusServer);
     wxGtkVariant user_data(g_variant_new("(s)", address));
 
-    // Try to setup extension loading from the location it is supposed to be
-    // normally installed in.
-    if ( !TrySetWebExtensionsDirectory(context, GetStandardWebExtensionsDir()) )
-    {
-        // These relative locations are used as fallbacks to allow running
-        // the tests and sample using wxWebView before installing it.
-        wxString exepath = wxFileName(wxStandardPaths::Get().GetExecutablePath()).GetPath();
-        if ( !exepath.empty() )
-        {
-            wxString const directories[] =
-            {
-                exepath + "/..",
-                exepath + "/../..",
-                exepath,
-            };
-
-            for ( size_t n = 0; n < WXSIZEOF(directories); ++n )
-            {
-                if ( TrySetWebExtensionsDirectory(context, directories[n]) )
-                    break;
-            }
-        }
-    }
+    const wxString dir = FindWebExtensionsDir();
+    if ( !dir.empty() )
+        webkit_web_context_set_web_extensions_directory(context,
+                                                        dir.utf8_str());
 
     webkit_web_context_set_web_extensions_initialization_user_data(context,
                                                                    user_data.Release());
@@ -723,6 +825,11 @@ public:
 #ifdef wxHAVE_WEBKIT_WEBSITE_DATA_MANAGER
         g_clear_object(&m_websiteDataManager);
 #endif
+#ifdef __WXGTK4__
+        // Held by us in every case: created here by the two branches that
+        // make their own, and referenced by the one that shares the default.
+        g_clear_object(&m_networkSession);
+#endif
     }
 
 #ifdef wxHAVE_WEBKIT_WEBSITE_DATA_MANAGER
@@ -767,9 +874,23 @@ public:
     }
 #endif
 
+#ifdef __WXGTK4__
+    // Under GTK4 the website data and the proxy settings belong to the network
+    // session rather than to the web context, and the session has to be passed
+    // to the web view explicitly when creating it.
+    WebKitNetworkSession* GetNetworkSession() const
+    {
+        GetOrCreateContext();
+        return m_networkSession;
+    }
+#endif
+
 private:
     wxString m_dataPath;
     mutable WebKitWebContext* m_webContext = nullptr;
+#ifdef __WXGTK4__
+    mutable WebKitNetworkSession* m_networkSession = nullptr;
+#endif
 #ifdef wxHAVE_WEBKIT_WEBSITE_DATA_MANAGER
     mutable WebKitWebsiteDataManager* m_websiteDataManager = nullptr;
 #endif
@@ -777,11 +898,96 @@ private:
     bool m_persistentStorage = true;
 #endif
 
+#ifdef __WXGTK4__
+    // The web process runs sandboxed and can open only what it was told
+    // about. It has to load our extension module and connect back to a
+    // private D-Bus socket, and neither is in a place the sandbox grants.
+    //
+    // This has to happen here, when the context is made: WebKit refuses to
+    // change the paths once it has spawned a process, and by the time
+    // ::initialize-web-process-extensions is emitted it has -- the emission
+    // is part of starting one. That is fatal rather than ignored, so calling
+    // it late aborts the application.
+    static void AllowSandboxPaths(WebKitWebContext* context)
+    {
+        // The default context is shared, so more than one configuration can
+        // reach this for the same one. The second call would be the fatal
+        // one, since a process has been spawned by then.
+        static bool s_done = false;
+        if ( s_done )
+            return;
+        s_done = true;
+
+        const wxString extDir = FindWebExtensionsDir();
+        if ( !extDir.empty() )
+        {
+            // Read-only: the web process only loads the module from here.
+            webkit_web_context_add_path_to_sandbox(context, extDir.utf8_str(),
+                                                   TRUE);
+        }
+
+        // Not read-only: connecting to a socket is not a read.
+        webkit_web_context_add_path_to_sandbox(
+            context, GetWebExtensionSocketDir().utf8_str(), FALSE);
+    }
+#endif // __WXGTK4__
+
     WebKitWebContext* GetOrCreateContext() const
     {
         if (m_webContext)
             return m_webContext;
 
+#ifdef __WXGTK4__
+        // The web context is no longer what owns the storage under GTK4: a
+        // WebKitNetworkSession does, and it's created directly from the data
+        // and cache directories instead of via a WebKitWebsiteDataManager.
+        if (!m_persistentStorage)
+        {
+            m_networkSession = webkit_network_session_new_ephemeral();
+            m_webContext = webkit_web_context_new();
+        }
+        else if (!m_dataPath.empty())
+        {
+            wxFileName configCachePath = wxFileName::DirName(m_dataPath);
+            configCachePath.AppendDir("cache");
+            const wxString cachePath = configCachePath.GetPath();
+
+            wxFileName configDataPath = wxFileName::DirName(m_dataPath);
+            configDataPath.AppendDir("data");
+            const wxString dataPath = configDataPath.GetPath();
+
+            m_networkSession = webkit_network_session_new(dataPath.utf8_str(),
+                                                          cachePath.utf8_str());
+            m_webContext = webkit_web_context_new();
+        }
+        else
+        {
+            // Nothing to customize, so share the default session and context
+            // between all the views, as the GTK3 version shared the default
+            // context in this case.
+
+            // transfer none, both of them, so take a reference: the
+            // destructor releases these unconditionally, and without this the
+            // first configuration destroyed takes the process-wide defaults
+            // with it and every later view gets a dangling pointer.
+            m_networkSession =
+                WEBKIT_NETWORK_SESSION(g_object_ref(
+                    webkit_network_session_get_default()));
+            m_webContext =
+                WEBKIT_WEB_CONTEXT(g_object_ref(
+                    webkit_web_context_get_default()));
+        }
+
+        // transfer none as well: the session owns this one.
+        m_websiteDataManager =
+            WEBKIT_WEBSITE_DATA_MANAGER(g_object_ref(
+                webkit_network_session_get_website_data_manager(
+                    m_networkSession)));
+
+        AllowSandboxPaths(m_webContext);
+
+        return m_webContext;
+#else // !__WXGTK4__
 #ifdef wxHAVE_WEBKIT_EPHEMERAL_CONTEXT
         if (!m_persistentStorage)
         {
@@ -825,6 +1031,7 @@ private:
         }
 
         return m_webContext;
+#endif // __WXGTK4__/!__WXGTK4__
     }
 
 };
@@ -885,7 +1092,16 @@ wxWebViewWebKit::wxWebViewWebKit():
 wxWebViewWebKit::wxWebViewWebKit(WebKitWebView* parentWebView, wxWebViewWebKit* parentWebViewCtrl):
     m_config(parentWebViewCtrl->m_config)
 {
+#ifdef __WXGTK4__
+    // The _new_with_related_view() and _new_with_context() constructors were
+    // dropped from the GTK4 API in favour of the corresponding construct-only
+    // properties, which is all they ever were shorthand for.
+    m_web_view = WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW,
+                                              "related-view", parentWebView,
+                                              nullptr));
+#else
     m_web_view = (WebKitWebView*) webkit_web_view_new_with_related_view(parentWebView);
+#endif
     m_dbusServer = nullptr;
     m_extension = nullptr;
 
@@ -933,12 +1149,23 @@ bool wxWebViewWebKit::Create(wxWindow *parent,
 
     SetupWebExtensionServer();
     g_signal_connect(m_config.GetNativeConfiguration(),
-                     "initialize-web-extensions",
+                     wxWEBKIT_INITIALIZE_WEB_EXTENSIONS,
                      G_CALLBACK(wxgtk_initialize_web_extensions),
                      m_dbusServer);
 
     if (!isChildWebView)
-#ifdef wxHAVE_WEBKIT_WEBSITE_DATA_MANAGER
+#ifdef __WXGTK4__
+        // The network session carrying the data path and proxy settings has
+        // to be given to the view here: unlike under GTK3, it isn't reachable
+        // from the web context any more.
+        m_web_view = WEBKIT_WEB_VIEW(g_object_new(
+            WEBKIT_TYPE_WEB_VIEW,
+            "web-context", WEBKIT_WEB_CONTEXT(m_config.GetNativeConfiguration()),
+            "network-session",
+                static_cast<wxWebViewConfigurationImplWebKit*>(m_config.GetImpl())
+                    ->GetNetworkSession(),
+            nullptr));
+#elif defined(wxHAVE_WEBKIT_WEBSITE_DATA_MANAGER)
         m_web_view = WEBKIT_WEB_VIEW(webkit_web_view_new_with_context(WEBKIT_WEB_CONTEXT(m_config.GetNativeConfiguration())));
 #else
         m_web_view = WEBKIT_WEB_VIEW(webkit_web_view_new());
@@ -1016,17 +1243,25 @@ bool wxWebViewWebKit::Enable( bool enable )
     if (!wxControl::Enable(enable))
         return false;
 
+    // m_widget is the scrolled window created by GTKCreateScrolledWindowWith().
+#ifdef __WXGTK4__
+    gtk_widget_set_sensitive(
+        gtk_scrolled_window_get_child(GTK_SCROLLED_WINDOW(m_widget)), enable);
+#else
     gtk_widget_set_sensitive(gtk_bin_get_child(GTK_BIN(m_widget)), enable);
+#endif
 
     return true;
 }
 
+#ifndef __WXGTK4__
 GdkWindow*
 wxWebViewWebKit::GTKGetWindow(wxArrayGdkWindows& WXUNUSED(windows)) const
 {
     GdkWindow* window = gtk_widget_get_parent_window(m_widget);
     return window;
 }
+#endif // !__WXGTK4__
 
 void wxWebViewWebKit::ZoomIn()
 {
@@ -1096,11 +1331,20 @@ bool wxWebViewWebKit::SetProxy(const wxString& proxy)
 #if WEBKIT_CHECK_VERSION(2, 16, 0)
     if (wx_check_webkit_version(2, 16, 0))
     {
+#ifdef __WXGTK4__
+        // The proxy settings moved from the website data manager to the
+        // network session, which is also what owns them conceptually.
+        const auto session =
+            static_cast<wxWebViewConfigurationImplWebKit*>(m_config.GetImpl())
+                ->GetNetworkSession();
+        wxCHECK_MSG( session, false, "no network session?" );
+#else
         const auto context = static_cast<WebKitWebContext*>(m_config.GetNativeConfiguration());
         wxCHECK_MSG( context, false, "no context?" );
 
         const auto data_manager = webkit_web_context_get_website_data_manager(context);
         wxCHECK_MSG( data_manager, false, "no data manager?" );
+#endif
 
         const auto proxy_settings = webkit_network_proxy_settings_new(
             proxy.utf8_str(),
@@ -1108,11 +1352,19 @@ bool wxWebViewWebKit::SetProxy(const wxString& proxy)
         );
         wxCHECK_MSG( proxy_settings, false, "failed to create proxy settings" );
 
+#ifdef __WXGTK4__
+        webkit_network_session_set_proxy_settings(
+            session,
+            WEBKIT_NETWORK_PROXY_MODE_CUSTOM,
+            proxy_settings
+        );
+#else
         webkit_website_data_manager_set_network_proxy_settings(
             data_manager,
             WEBKIT_NETWORK_PROXY_MODE_CUSTOM,
             proxy_settings
         );
+#endif
 
         webkit_network_proxy_settings_free(proxy_settings);
 
@@ -1658,17 +1910,73 @@ bool wxWebViewWebKit::IsEditable() const
 #endif
 }
 
+namespace
+{
+
+// Data shared between wxCallWebExtension() and its completion callback.
+struct wxWebExtensionCall
+{
+    GVariant* result = nullptr;
+    bool done = false;
+};
+
+extern "C" {
+
+static void
+wxgtk_web_extension_call_done(GObject* proxy, GAsyncResult* res, gpointer data)
+{
+    wxWebExtensionCall* const call = static_cast<wxWebExtensionCall*>(data);
+
+    call->result = g_dbus_proxy_call_finish(G_DBUS_PROXY(proxy), res, nullptr);
+    call->done = true;
+}
+
+} // extern "C"
+
+// Call a method of the web process extension for the given page and return its
+// reply, or an empty variant if the extension didn't answer.
+//
+// The call is made asynchronously and the main context iterated until the
+// reply arrives, rather than using g_dbus_proxy_call_sync(): the web process
+// can be waiting for an answer from this one, and it cannot service our
+// request before it gets that answer.  g_dbus_proxy_call_sync() iterates a
+// private context holding only the D-Bus socket, so this process would not
+// answer, and both sides would wait for each other until the call times out.
+//
+// Note that this means the calls using this function yield, i.e. they can run
+// event handlers before returning, as any other nested event loop does.
+wxGtkVariant
+wxCallWebExtension(GDBusProxy* extension, guint64 pageId, const char* method)
+{
+    wxWebExtensionCall call;
+
+    g_dbus_proxy_call(extension,
+                      method,
+                      g_variant_new("(t)", pageId),
+                      G_DBUS_CALL_FLAGS_NONE, -1,
+                      nullptr,
+                      wxgtk_web_extension_call_done,
+                      &call);
+
+    // This is the context g_dbus_proxy_call() will invoke the callback in.
+    GMainContext* const context = g_main_context_get_thread_default();
+
+    while ( !call.done )
+        g_main_context_iteration(context, TRUE);
+
+    return wxGtkVariant(call.result);
+}
+
+} // anonymous namespace
+
 void wxWebViewWebKit::DeleteSelection()
 {
     GDBusProxy *extension = GetExtensionProxy();
     if (extension)
     {
         guint64 page_id = webkit_web_view_get_page_id(m_web_view);
-        wxGtkVariant retval(g_dbus_proxy_call_sync(extension,
-                                                  "DeleteSelection",
-                                                  g_variant_new("(t)", page_id),
-                                                  G_DBUS_CALL_FLAGS_NONE, -1,
-                                                  nullptr, nullptr));
+        wxGtkVariant retval = wxCallWebExtension(extension, page_id,
+                                                 "DeleteSelection");
     }
 }
 
@@ -1678,11 +1986,8 @@ bool wxWebViewWebKit::HasSelection() const
     if (extension)
     {
         guint64 page_id = webkit_web_view_get_page_id(m_web_view);
-        wxGtkVariant retval(g_dbus_proxy_call_sync(extension,
-                                                  "HasSelection",
-                                                  g_variant_new("(t)", page_id),
-                                                  G_DBUS_CALL_FLAGS_NONE, -1,
-                                                  nullptr, nullptr));
+        wxGtkVariant retval = wxCallWebExtension(extension, page_id,
+                                                 "HasSelection");
         if (retval)
         {
             gboolean has_selection = FALSE;
@@ -1706,11 +2011,8 @@ wxString wxWebViewWebKit::GetSelectedText() const
     if (extension)
     {
         guint64 page_id = webkit_web_view_get_page_id(m_web_view);
-        wxGtkVariant retval(g_dbus_proxy_call_sync(extension,
-                                                  "GetSelectedText",
-                                                  g_variant_new("(t)", page_id),
-                                                  G_DBUS_CALL_FLAGS_NONE, -1,
-                                                  nullptr, nullptr));
+        wxGtkVariant retval = wxCallWebExtension(extension, page_id,
+                                                 "GetSelectedText");
         if (retval)
         {
             char *text;
@@ -1727,11 +2029,8 @@ wxString wxWebViewWebKit::GetSelectedSource() const
     if (extension)
     {
         guint64 page_id = webkit_web_view_get_page_id(m_web_view);
-        wxGtkVariant retval(g_dbus_proxy_call_sync(extension,
-                                                  "GetSelectedSource",
-                                                  g_variant_new("(t)", page_id),
-                                                  G_DBUS_CALL_FLAGS_NONE, -1,
-                                                  nullptr, nullptr));
+        wxGtkVariant retval = wxCallWebExtension(extension, page_id,
+                                                 "GetSelectedSource");
         if (retval)
         {
             char *source;
@@ -1748,11 +2047,8 @@ void wxWebViewWebKit::ClearSelection()
     if (extension)
     {
         guint64 page_id = webkit_web_view_get_page_id(m_web_view);
-        wxGtkVariant retval(g_dbus_proxy_call_sync(extension,
-                                                  "ClearSelection",
-                                                  g_variant_new("(t)", page_id),
-                                                  G_DBUS_CALL_FLAGS_NONE, -1,
-                                                  nullptr, nullptr));
+        wxGtkVariant retval = wxCallWebExtension(extension, page_id,
+                                                 "ClearSelection");
     }
 }
 
@@ -1762,11 +2058,8 @@ wxString wxWebViewWebKit::GetPageText() const
     if (extension)
     {
         guint64 page_id = webkit_web_view_get_page_id(m_web_view);
-        wxGtkVariant retval(g_dbus_proxy_call_sync(extension,
-                                                  "GetPageText",
-                                                  g_variant_new("(t)", page_id),
-                                                  G_DBUS_CALL_FLAGS_NONE, -1,
-                                                  nullptr, nullptr));
+        wxGtkVariant retval = wxCallWebExtension(extension, page_id,
+                                                 "GetPageText");
         if (retval)
         {
             char *text;
@@ -1799,9 +2092,21 @@ static void wxgtk_run_javascript_cb(GObject *,
 
 void wxWebViewWebKit::ProcessJavaScriptResult(GAsyncResult *res, wxWebKitRunScriptParams* params) const
 {
+    wxGtkError error;
+
+#ifdef __WXGTK4__
+    wxWebKitJavascriptResult js_result
+                             (
+                                webkit_web_view_evaluate_javascript_finish
+                                (
+                                    m_web_view,
+                                    res,
+                                    error.Out()
+                                )
+                             );
+#else
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
 
-    wxGtkError error;
     wxWebKitJavascriptResult js_result
                              (
                                 webkit_web_view_run_javascript_finish
@@ -1813,6 +2118,7 @@ void wxWebViewWebKit::ProcessJavaScriptResult(GAsyncResult *res, wxWebKitRunScri
                              );
 
     wxGCC_WARNING_RESTORE(deprecated-declarations)
+#endif
 
     if ( js_result )
     {
@@ -1839,6 +2145,16 @@ void wxWebViewWebKit::RunScriptAsync(const wxString& javascript, void* clientDat
     params->webKitCtrl = this;
     params->clientData = clientData;
 
+#ifdef __WXGTK4__
+    webkit_web_view_evaluate_javascript(m_web_view,
+                                        wrapJS.GetWrappedCode().utf8_str(),
+                                        -1,      // script is null-terminated
+                                        nullptr, // default script world
+                                        nullptr, // no source URI
+                                        nullptr,
+                                        wxgtk_run_javascript_cb,
+                                        params);
+#else
     wxGCC_WARNING_SUPPRESS(deprecated-declarations)
     webkit_web_view_run_javascript(m_web_view,
                                    wrapJS.GetWrappedCode().utf8_str(),
@@ -1846,6 +2162,7 @@ void wxWebViewWebKit::RunScriptAsync(const wxString& javascript, void* clientDat
                                    wxgtk_run_javascript_cb,
                                    params);
     wxGCC_WARNING_RESTORE(deprecated-declarations)
+#endif
 }
 
 bool wxWebViewWebKit::AddScriptMessageHandler(const wxString& name)
@@ -1856,7 +2173,13 @@ bool wxWebViewWebKit::AddScriptMessageHandler(const wxString& name)
     WebKitUserContentManager *ucm = webkit_web_view_get_user_content_manager(m_web_view);
     g_signal_connect(ucm, wxString::Format("script-message-received::%s", name).utf8_str(),
                      G_CALLBACK(wxgtk_webview_webkit_script_message_received), this);
+    // The GTK4 API added an explicit script world name, null meaning the
+    // default world, which is the only one the GTK3 version could use.
+#ifdef __WXGTK4__
+    bool res = webkit_user_content_manager_register_script_message_handler(ucm, name.utf8_str(), nullptr);
+#else
     bool res = webkit_user_content_manager_register_script_message_handler(ucm, name.utf8_str());
+#endif
     if (res)
     {
         // Make webkit message handler available under common name
@@ -1872,7 +2195,11 @@ bool wxWebViewWebKit::AddScriptMessageHandler(const wxString& name)
 bool wxWebViewWebKit::RemoveScriptMessageHandler(const wxString& name)
 {
     WebKitUserContentManager *ucm = webkit_web_view_get_user_content_manager(m_web_view);
+#ifdef __WXGTK4__
+    webkit_user_content_manager_unregister_script_message_handler(ucm, name.utf8_str(), nullptr);
+#else
     webkit_user_content_manager_unregister_script_message_handler(ucm, name.utf8_str());
+#endif
     return true;
 }
 
@@ -1950,19 +2277,25 @@ bool wxWebViewWebKit::ClearBrowsingData(int types, wxDateTime since)
             {
                 wkTypes |= WEBKIT_WEBSITE_DATA_LOCAL_STORAGE |
                            WEBKIT_WEBSITE_DATA_SESSION_STORAGE |
-                           WEBKIT_WEBSITE_DATA_INDEXEDDB_DATABASES |
-                           WEBKIT_WEBSITE_DATA_WEBSQL_DATABASES;
+                           WEBKIT_WEBSITE_DATA_INDEXEDDB_DATABASES;
+#ifndef __WXGTK4__
+                // WebSQL was removed from WebKit, and its data type with it.
+                wkTypes |= WEBKIT_WEBSITE_DATA_WEBSQL_DATABASES;
+#endif
             }
 
             if (types & wxWEBVIEW_BROWSING_DATA_OTHER)
             {
                 // All the elements of WebKitWebsiteDataTypes not already
                 // appearing above.
-                wkTypes |= WEBKIT_WEBSITE_DATA_PLUGIN_DATA |
-                           WEBKIT_WEBSITE_DATA_HSTS_CACHE |
+                wkTypes |= WEBKIT_WEBSITE_DATA_HSTS_CACHE |
                            WEBKIT_WEBSITE_DATA_DEVICE_ID_HASH_SALT |
                            WEBKIT_WEBSITE_DATA_ITP |
                            WEBKIT_WEBSITE_DATA_SERVICE_WORKER_REGISTRATIONS;
+#ifndef __WXGTK4__
+                // NPAPI plugins are gone from WebKit, and so is their data.
+                wkTypes |= WEBKIT_WEBSITE_DATA_PLUGIN_DATA;
+#endif
             }
         }
 
@@ -2119,7 +2452,16 @@ wxWebViewWebKit::GetClassDefaultAttributes(wxWindowVariant WXUNUSED(variant))
 
 void wxWebViewWebKit::SetupWebExtensionServer()
 {
+#ifdef __WXGTK4__
+    // Our own directory, which the sandbox was told about when the context
+    // was created; the temporary directory at large is not reachable from
+    // the web process.
+    const wxString socketDir = GetWebExtensionSocketDir();
+    wxGtkString address(g_strdup_printf("unix:tmpdir=%s",
+                                        (const char*)socketDir.utf8_str()));
+#else
     wxGtkString address(g_strdup_printf("unix:tmpdir=%s", g_get_tmp_dir()));
+#endif
     wxGtkString guid(g_dbus_generate_guid());
     wxGtkObject<GDBusAuthObserver> observer(g_dbus_auth_observer_new());
     wxGtkError error;

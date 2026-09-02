@@ -8,16 +8,96 @@
 
 #include "wx/defs.h"
 #include "wx/gtk/private/webview_webkit2_extension.h"
+
+#ifdef __WXGTK4__
+
+#include <webkit/webkit-web-process-extension.h>
+
+// The WebKitDOM bindings used below were removed wholesale from the GTK4
+// version of the API without a direct replacement: the supported way to
+// inspect or modify a page from a web process extension is now to run
+// JavaScript in it via the JSC API, which is what we do here.
+//
+// "Web extension" was also renamed to "web process extension" throughout, to
+// avoid confusion with the (unrelated) browser WebExtensions API.
+typedef WebKitWebProcessExtension wxWebKitWebExtension;
+
+#define webkit_web_extension_get_page webkit_web_process_extension_get_page
+
+#else // !__WXGTK4__
+
 #include <webkit2/webkit-web-extension.h>
 #define WEBKIT_DOM_USE_UNSTABLE_API
 #include <webkitdom/WebKitDOMDOMSelection.h>
 #include <webkitdom/WebKitDOMDOMWindowUnstable.h>
+
+typedef WebKitWebExtension wxWebKitWebExtension;
 
 // We can't easily avoid deprecation warnings about many WebKit functions, e.g.
 // webkit_dom_document_get_default_view() and just about everything related to
 // the selection, so for now just disable the warnings as we can't do anything
 // about them anyhow.
 wxGCC_WARNING_SUPPRESS(deprecated-declarations)
+
+#endif // __WXGTK4__/!__WXGTK4__
+
+#ifdef __WXGTK4__
+
+// Evaluate the given script in the main frame of the page and return its
+// result, or null if it threw. The caller must unref a non-null return value.
+static JSCValue* wxEvalInPage(WebKitWebPage* web_page, const char* script)
+{
+    // webkit_web_page_get_main_frame() is marked as deprecated, but it is
+    // still the only way to get a WebKitFrame, and hence a JSCContext, out of
+    // a page: nothing in the GTK4 API replaces it yet.
+    wxGCC_WARNING_SUPPRESS(deprecated-declarations)
+    WebKitFrame* frame = webkit_web_page_get_main_frame(web_page);
+    wxGCC_WARNING_RESTORE(deprecated-declarations)
+
+    JSCContext* context = webkit_frame_get_js_context(frame);
+
+    JSCValue* result = jsc_context_evaluate(context, script, -1);
+
+    if ( JSCException* exception = jsc_context_get_exception(context) )
+    {
+        g_warning("Failed to run script in the web page: %s",
+                  jsc_exception_get_message(exception));
+        jsc_context_clear_exception(context);
+
+        g_clear_object(&result);
+    }
+
+    // The value keeps the context alive on its own.
+    g_object_unref(context);
+
+    return result;
+}
+
+// Evaluate the script just for its side effects, discarding its result.
+static void wxRunInPage(WebKitWebPage* web_page, const char* script)
+{
+    if ( JSCValue* result = wxEvalInPage(web_page, script) )
+        g_object_unref(result);
+}
+
+// Evaluate the script and return its result as a newly allocated string, which
+// is null if the script failed or didn't return anything.
+static gchar* wxEvalStringInPage(WebKitWebPage* web_page, const char* script)
+{
+    JSCValue* result = wxEvalInPage(web_page, script);
+    if ( !result )
+        return nullptr;
+
+    gchar* str = nullptr;
+    if ( !jsc_value_is_null(result) && !jsc_value_is_undefined(result) )
+        str = jsc_value_to_string(result);
+
+    g_object_unref(result);
+
+    return str;
+}
+
+#endif // __WXGTK4__
 
 static const char introspection_xml[] =
   "<node>"
@@ -70,7 +150,7 @@ static wxWebViewWebKitExtension *gs_extension = nullptr;
 class wxWebViewWebKitExtension
 {
 public:
-    wxWebViewWebKitExtension(WebKitWebExtension *webkit_extension, const char* server_address);
+    wxWebViewWebKitExtension(wxWebKitWebExtension *webkit_extension, const char* server_address);
     void ClearSelection(GVariant *parameters, GDBusMethodInvocation *invocation);
     void DeleteSelection(GVariant *parameters, GDBusMethodInvocation *invocation);
     void GetPageSource(GVariant *parameters, GDBusMethodInvocation *invocation);
@@ -85,12 +165,12 @@ private:
     void ReturnDBusStringValue(GDBusMethodInvocation *invocation, gchar *value);
 
     GDBusConnection *m_dbusConnection;
-    WebKitWebExtension *m_webkitExtension;
+    wxWebKitWebExtension *m_webkitExtension;
 };
 
-wxWebViewWebKitExtension::wxWebViewWebKitExtension(WebKitWebExtension *extension, const char* server_address)
+wxWebViewWebKitExtension::wxWebViewWebKitExtension(wxWebKitWebExtension *extension, const char* server_address)
 {
-    m_webkitExtension = (WebKitWebExtension*)g_object_ref(extension);
+    m_webkitExtension = (wxWebKitWebExtension*)g_object_ref(extension);
 
     GDBusAuthObserver *observer = g_dbus_auth_observer_new();
     g_signal_connect(observer, "authorize-authenticated-peer",
@@ -130,6 +210,21 @@ void wxWebViewWebKitExtension::GetSelectedSource(GVariant *parameters,
         return;
     }
 
+#ifdef __WXGTK4__
+    // Same as the DOM version below: clone the selected range into a detached
+    // element so that its innerHTML gives us the selection's markup.
+    gchar *text = wxEvalStringInPage(web_page,
+        "(function() {"
+        "  var sel = window.getSelection();"
+        "  if (!sel || sel.rangeCount === 0) return null;"
+        "  var div = document.createElement('div');"
+        "  div.appendChild(sel.getRangeAt(0).cloneContents());"
+        "  return div.innerHTML;"
+        "})()");
+
+    ReturnDBusStringValue(invocation, text);
+    g_free(text);
+#else
     WebKitDOMDocument *doc = webkit_web_page_get_dom_document(web_page);
     WebKitDOMDOMWindow *win = webkit_dom_document_get_default_view(doc);
     WebKitDOMDOMSelection *sel = webkit_dom_dom_window_get_selection(win);
@@ -160,6 +255,7 @@ void wxWebViewWebKitExtension::GetSelectedSource(GVariant *parameters,
     g_object_unref(range);
 
     ReturnDBusStringValue(invocation, text);
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 void wxWebViewWebKitExtension::GetPageSource(GVariant *parameters,
@@ -171,6 +267,13 @@ void wxWebViewWebKitExtension::GetPageSource(GVariant *parameters,
         return;
     }
 
+#ifdef __WXGTK4__
+    gchar *source = wxEvalStringInPage(web_page,
+                                       "document.documentElement.outerHTML");
+    g_dbus_method_invocation_return_value(invocation,
+                                          g_variant_new("(s)", source ? source : ""));
+    g_free(source);
+#else
     WebKitDOMDocument *doc = webkit_web_page_get_dom_document(web_page);
     WebKitDOMElement *body = webkit_dom_document_get_document_element(doc);
 #if WEBKIT_CHECK_VERSION(2, 8, 0)
@@ -181,6 +284,7 @@ void wxWebViewWebKitExtension::GetPageSource(GVariant *parameters,
 #endif
     g_dbus_method_invocation_return_value(invocation,
                                           g_variant_new("(s)", source ? source : ""));
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 void wxWebViewWebKitExtension::GetPageText(GVariant *parameters,
@@ -192,11 +296,18 @@ void wxWebViewWebKitExtension::GetPageText(GVariant *parameters,
         return;
     }
 
+#ifdef __WXGTK4__
+    gchar *text = wxEvalStringInPage(web_page, "document.body.innerText");
+    g_dbus_method_invocation_return_value(invocation,
+                                          g_variant_new("(s)", text ? text : ""));
+    g_free(text);
+#else
     WebKitDOMDocument *doc = webkit_web_page_get_dom_document(web_page);
     WebKitDOMHTMLElement *body = webkit_dom_document_get_body(doc);
     gchar *text = webkit_dom_html_element_get_inner_text(body);
     g_dbus_method_invocation_return_value(invocation,
                                           g_variant_new("(s)", text));
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 void wxWebViewWebKitExtension::GetSelectedText(GVariant *parameters,
@@ -208,6 +319,17 @@ void wxWebViewWebKitExtension::GetSelectedText(GVariant *parameters,
         return;
     }
 
+#ifdef __WXGTK4__
+    gchar *text = wxEvalStringInPage(web_page,
+        "(function() {"
+        "  var sel = window.getSelection();"
+        "  if (!sel || sel.rangeCount === 0) return null;"
+        "  return sel.getRangeAt(0).toString();"
+        "})()");
+
+    ReturnDBusStringValue(invocation, text);
+    g_free(text);
+#else
     WebKitDOMDocument *doc = webkit_web_page_get_dom_document(web_page);
     WebKitDOMDOMWindow *win = webkit_dom_document_get_default_view(doc);
     WebKitDOMDOMSelection *sel = webkit_dom_dom_window_get_selection(win);
@@ -227,6 +349,7 @@ void wxWebViewWebKitExtension::GetSelectedText(GVariant *parameters,
     g_object_unref(range);
 
     ReturnDBusStringValue(invocation, text);
+#endif // __WXGTK4__/!__WXGTK4__
 }
 
 void wxWebViewWebKitExtension::ClearSelection(GVariant *parameters,
@@ -238,6 +361,13 @@ void wxWebViewWebKitExtension::ClearSelection(GVariant *parameters,
         return;
     }
 
+#ifdef __WXGTK4__
+    wxRunInPage(web_page,
+        "(function() {"
+        "  var sel = window.getSelection();"
+        "  if (sel) sel.removeAllRanges();"
+        "})()");
+#else
     WebKitDOMDocument *doc = webkit_web_page_get_dom_document(web_page);
     WebKitDOMDOMWindow *win = webkit_dom_document_get_default_view(doc);
     WebKitDOMDOMSelection *sel = webkit_dom_dom_window_get_selection(win);
@@ -246,6 +376,7 @@ void wxWebViewWebKitExtension::ClearSelection(GVariant *parameters,
     {
         webkit_dom_dom_selection_remove_all_ranges(sel);
     }
+#endif // __WXGTK4__/!__WXGTK4__
 
     g_dbus_method_invocation_return_value(invocation, nullptr);
 }
@@ -259,11 +390,22 @@ void wxWebViewWebKitExtension::HasSelection(GVariant *parameters,
         return;
     }
 
+    gboolean has_selection = FALSE;
+#ifdef __WXGTK4__
+    if ( JSCValue* result = wxEvalInPage(web_page,
+        "(function() {"
+        "  var sel = window.getSelection();"
+        "  return !!sel && !sel.isCollapsed;"
+        "})()") )
+    {
+        has_selection = jsc_value_to_boolean(result);
+        g_object_unref(result);
+    }
+#else
     WebKitDOMDocument *doc = webkit_web_page_get_dom_document(web_page);
     WebKitDOMDOMWindow *win = webkit_dom_document_get_default_view(doc);
     WebKitDOMDOMSelection *sel = webkit_dom_dom_window_get_selection(win);
     g_object_unref(win);
-    gboolean has_selection = FALSE;
     if (WEBKIT_DOM_IS_DOM_SELECTION(sel))
     {
         if (!webkit_dom_dom_selection_get_is_collapsed(sel))
@@ -271,6 +413,7 @@ void wxWebViewWebKitExtension::HasSelection(GVariant *parameters,
             has_selection = TRUE;
         }
     }
+#endif // __WXGTK4__/!__WXGTK4__
     g_dbus_method_invocation_return_value(invocation,
                                           g_variant_new("(b)", has_selection));
 }
@@ -284,6 +427,13 @@ void wxWebViewWebKitExtension::DeleteSelection(GVariant *parameters,
         return;
     }
 
+#ifdef __WXGTK4__
+    wxRunInPage(web_page,
+        "(function() {"
+        "  var sel = window.getSelection();"
+        "  if (sel) sel.deleteFromDocument();"
+        "})()");
+#else
     WebKitDOMDocument *doc = webkit_web_page_get_dom_document(web_page);
     WebKitDOMDOMWindow *win = webkit_dom_document_get_default_view(doc);
     WebKitDOMDOMSelection *sel = webkit_dom_dom_window_get_selection(win);
@@ -292,6 +442,7 @@ void wxWebViewWebKitExtension::DeleteSelection(GVariant *parameters,
     {
         webkit_dom_dom_selection_delete_from_document(sel);
     }
+#endif // __WXGTK4__/!__WXGTK4__
 
     g_dbus_method_invocation_return_value(invocation, nullptr);
 }
@@ -436,8 +587,14 @@ wxgtk_webview_dbus_connection_created_cb(GObject*,
 }
 
 WXEXPORT void
-webkit_web_extension_initialize_with_user_data (WebKitWebExtension *webkit_extension,
+#ifdef __WXGTK4__
+webkit_web_process_extension_initialize_with_user_data
+                                               (wxWebKitWebExtension *webkit_extension,
                                                 GVariant           *user_data)
+#else
+webkit_web_extension_initialize_with_user_data (wxWebKitWebExtension *webkit_extension,
+                                                GVariant           *user_data)
+#endif
 {
     const char *server_address;
 

@@ -536,12 +536,14 @@ bool wxWebViewWebKit::Enable( bool enable )
     return true;
 }
 
+#ifndef __WXGTK4__
 GdkWindow*
 wxWebViewWebKit::GTKGetWindow(wxArrayGdkWindows& WXUNUSED(windows)) const
 {
     GdkWindow* window = gtk_widget_get_parent_window(m_widget);
     return window;
 }
+#endif // !__WXGTK4__
 
 void wxWebViewWebKit::ZoomIn()
 {

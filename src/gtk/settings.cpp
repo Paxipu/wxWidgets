@@ -986,7 +986,11 @@ wxGtkStyleContext& wxGtkStyleContext::AddMenuItem()
 
 wxGtkStyleContext& wxGtkStyleContext::AddTextview(const char* child1, const char* child2)
 {
+#ifdef __WXGTK4__
     Add(WX_TYPE_STYLE_NODE, "textview", "view", nullptr);
+#else
+    Add(GTK_TYPE_TEXT_VIEW, "textview", "view", nullptr);
+#endif
     if (child1 && gtk_check_version(3,20,0) == nullptr)
     {
         Add(child1);
